@@ -275,6 +275,58 @@ export const ForkopShellMethods = {
     callBaseMethod<Forkop.XrayCheckResult>(
       Forkop.AvailableMethods.GET_XRAY_STATUS,
     ),
+  getXrayStats: async () =>
+    callBaseMethod<Forkop.GetXrayStats>(
+      Forkop.AvailableMethods.GET_XRAY_STATS,
+      [],
+      '/usr/bin/forkop',
+      { timeout: 4000 },
+    ),
+  getXrayConnections: async () =>
+    callBaseMethod<unknown>(
+      Forkop.AvailableMethods.GET_XRAY_CONNECTIONS,
+      [],
+      '/usr/bin/forkop',
+      { timeout: 12000 },
+    ),
+  getXrayNodes: async () =>
+    callBaseMethod<{
+      success?: boolean;
+      nodes?: Record<
+        string,
+        Array<{
+          tag?: string;
+          name?: string;
+          protocol?: string;
+          kind?: string;
+          delay?: number;
+        }>
+      >;
+      selected?: Record<string, string>;
+    }>(Forkop.AvailableMethods.GET_XRAY_NODES, [], '/usr/bin/forkop', {
+      timeout: 4000,
+    }),
+  setXrayGroupProxy: async (section: string, tag: string) =>
+    callBaseMethod<{ success?: boolean; error?: string }>(
+      Forkop.AvailableMethods.SET_XRAY_GROUP_PROXY,
+      [section, tag],
+      '/usr/bin/forkop',
+      { timeout: 20000 },
+    ),
+  closeXrayConnection: async (id: string) =>
+    callBaseMethod<{ success?: boolean }>(
+      Forkop.AvailableMethods.XRAY_CLOSE_CONNECTION,
+      [id],
+      '/usr/bin/forkop',
+      { timeout: 4000 },
+    ),
+  closeAllXrayConnections: async () =>
+    callBaseMethod<{ success?: boolean }>(
+      Forkop.AvailableMethods.XRAY_CLOSE_ALL_CONNECTIONS,
+      [],
+      '/usr/bin/forkop',
+      { timeout: 4000 },
+    ),
   getClashApiProxies: async () =>
     callBaseMethod<ClashAPI.Proxies>(Forkop.AvailableMethods.CLASH_API, [
       Forkop.AvailableClashAPIMethods.GET_PROXIES,

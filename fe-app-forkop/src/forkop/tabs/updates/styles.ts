@@ -174,6 +174,26 @@ export const styles = `
     align-items: center;
 }
 
+.fkp_updates-page__component__prerelease {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.fkp_updates-page__component__prerelease input {
+    margin: 0;
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    accent-color: currentColor;
+}
+
 .fkp_updates-page__component__versions-row select,
 .fkp_singbox-version-select,
 .fkp_xray-version-select {

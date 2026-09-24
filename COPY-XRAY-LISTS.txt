@@ -1,0 +1,60 @@
+prefer_ipv4, HTTPS/SVCB reject и конвертация списков (плоскость routing_engine=xray)
+
+Лог без строк «nftables runtime model is ready» / «Preparing Xray» —
+на роутере СТАРЫЕ файлы. Проверка и копирование двух файлов:
+
+  cp forkop/files/usr/lib/nft/apply.uc         /usr/lib/forkop/nft/apply.uc
+  cp forkop/files/usr/lib/service/lifecycle.uc  /usr/lib/forkop/service/lifecycle.uc
+  cp forkop/files/usr/lib/service/state.uc      /usr/lib/forkop/service/state.uc
+  cp forkop/files/usr/lib/xray/runtime.uc       /usr/lib/forkop/xray/runtime.uc
+  grep -F 'XRAY_START_VERIFY_TIMEOUT' /usr/lib/forkop/service/lifecycle.uc
+  grep -F 'Routing plane is not stable' /usr/lib/forkop/service/state.uc
+  grep -F 'plane_listen_ready' /usr/lib/forkop/xray/runtime.uc
+  /etc/init.d/forkop restart
+
+После «Routing plane is Xray; sing-box sidecar is not required»:
+  [debug] Xray process is up; waiting for DNS 127.0.0.42:53 and TPROXY :1602
+  (до 60 с, пока Xray поднимет порты после большого dat)
+
+Если снова abort — в syslog будет причина:
+  [warn] Routing plane is not stable: DNS 127.0.0.42:53 not listening
+  или TPROXY :1602 / xray process / nftables
+
+После этого в syslog сразу после FakeIP TPROXY :1605:
+  [info] nftables runtime model is ready
+  [info] nftables runtime applied
+  [debug] Wrote dnsmasq nftset …
+  [debug] Preparing Xray
+  [info] Routing plane is Xray; sing-box sidecar is not required
+
+Полный список файлов плоскости Xray:
+
+  cp forkop/files/usr/lib/xray/geodata.uc       /usr/lib/forkop/xray/geodata.uc
+  cp forkop/files/usr/lib/xray/generator.uc     /usr/lib/forkop/xray/generator.uc
+  cp forkop/files/usr/lib/xray/constants.uc     /usr/lib/forkop/xray/constants.uc
+  cp forkop/files/usr/lib/xray/runtime.uc       /usr/lib/forkop/xray/runtime.uc
+  cp forkop/files/usr/lib/core/engine.uc        /usr/lib/forkop/core/engine.uc
+  cp forkop/files/usr/lib/config/validator.uc   /usr/lib/forkop/config/validator.uc
+  cp forkop/files/usr/lib/service/lifecycle.uc  /usr/lib/forkop/service/lifecycle.uc
+  cp forkop/files/usr/lib/service/state.uc      /usr/lib/forkop/service/state.uc
+  cp forkop/files/usr/lib/service/ui.uc         /usr/lib/forkop/service/ui.uc
+  cp forkop/files/usr/lib/nft/apply.uc          /usr/lib/forkop/nft/apply.uc
+  cp forkop/files/usr/lib/diagnostics/runtime.uc /usr/lib/forkop/diagnostics/runtime.uc
+  cp forkop/files/usr/lib/components/updates.uc /usr/lib/forkop/components/updates.uc
+  cp forkop/files/usr/lib/dns/apply.uc          /usr/lib/forkop/dns/apply.uc
+  chmod 0644 /usr/lib/forkop/xray/geodata.uc /usr/lib/forkop/dns/apply.uc
+
+  uci set forkop.settings.routing_engine='xray'
+  uci commit forkop
+  /etc/init.d/forkop restart
+
+Проверка /etc/xray/config.json:
+  - dns.queryStrategy = UseIP при prefer_ipv4 (оба пула FakeDNS)
+  - outbounds[].streamSettings.sockopt.domainStrategy = UseIPv4v6
+    (sidecar sing-box без этого поля — AsIs)
+  - outbounds dns-out.settings.blockTypes = [64, 65]
+  - dns.servers[0].skipFallback = true, disableFallbackIfMatch = true
+  - domain: ["ext:allow-domains.dat:russia-inside", …]
+
+Проверка dnsmasq:
+  - /tmp/dnsmasq.d/forkop-filter-rr.conf содержит filter-rr=HTTPS и filter-rr=SVCB

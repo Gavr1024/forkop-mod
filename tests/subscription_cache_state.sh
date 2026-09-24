@@ -97,6 +97,10 @@ grep -q 'mode == "outbound-metadata-path"' "$CACHE_UC" ||
   fail "subscription/cache.uc must expose outbound metadata path mode"
 grep -q 'mode == "run-deferred-bootstrap"' "$CACHE_UC" ||
   fail "subscription/cache.uc must expose deferred bootstrap owner mode"
+grep -Fq 'xray_socks_proxy_url' "$CACHE_UC" ||
+  fail "subscription downloads must use Xray section SOCKS when Xray is the routing plane"
+grep -Fq 'curl_proxy_spec' "$CACHE_UC" ||
+  fail "subscription curl must pass socks5h:// as-is, not prefix http://"
 grep -q 'mode == "stop-deferred-bootstrap-worker"' "$CACHE_UC" ||
   fail "subscription/cache.uc must expose deferred worker stop owner mode"
 assert_eq "proxy-subscription-2" \

@@ -250,7 +250,8 @@ var SERVER_OUTBOUND_TYPES = /* @__PURE__ */ new Set([
   "socks",
   "http",
   "hysteria2",
-  "hysteria"
+  "hysteria",
+  "hy2"
 ]);
 function invalid(message) {
   return { valid: false, message };
@@ -261,14 +262,118 @@ function isPlainObject(value) {
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
+function asTrimmedString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
 function validateServerPort(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value >= 1 && value <= 65535;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const port = Number.parseInt(value.trim(), 10);
+    return port >= 1 && port <= 65535;
+  }
+  return false;
 }
 function validateOutbounds(value) {
   return Array.isArray(value) && value.length > 0 && value.every((item) => nonEmptyString(item));
 }
+function nestedSettings(value) {
+  return isPlainObject(value.settings) ? value.settings : {};
+}
+function outboundType(parsed) {
+  return asTrimmedString(parsed.type || parsed.protocol).toLowerCase();
+}
+function outboundTag(parsed) {
+  return asTrimmedString(parsed.tag);
+}
+function outboundServer(parsed) {
+  const settings = nestedSettings(parsed);
+  return asTrimmedString(
+    parsed.server || parsed.address || settings.address || settings.server
+  );
+}
+function outboundPort(parsed) {
+  const settings = nestedSettings(parsed);
+  if (parsed.server_port !== void 0) {
+    return parsed.server_port;
+  }
+  if (parsed.port !== void 0) {
+    return parsed.port;
+  }
+  if (settings.port !== void 0) {
+    return settings.port;
+  }
+  return settings.server_port;
+}
+function unwrapOutbound(parsed) {
+  if (!isPlainObject(parsed)) {
+    return parsed;
+  }
+  if (outboundType(parsed) || outboundTag(parsed)) {
+    return parsed;
+  }
+  const outbounds = parsed.outbounds;
+  if (Array.isArray(outbounds) && outbounds.length > 0 && isPlainObject(outbounds[0])) {
+    return outbounds[0];
+  }
+  return parsed;
+}
+function validateParsedOutbound(parsed, usedTags) {
+  const type = outboundType(parsed);
+  if (!type) {
+    return invalid(_("JSON outbound must contain a non-empty type field"));
+  }
+  const tag = outboundTag(parsed);
+  if (!tag) {
+    return invalid(_("JSON outbound must contain a non-empty tag field"));
+  }
+  if (usedTags.some((usedTag) => `${usedTag || ""}`.trim() === tag)) {
+    return invalid(_("Duplicate JSON outbound tag"));
+  }
+  if ((type === "selector" || type === "urltest") && !validateOutbounds(parsed.outbounds)) {
+    return invalid(
+      _(
+        "Selector and URLTest outbounds must contain a non-empty outbounds array"
+      )
+    );
+  }
+  if (SERVER_OUTBOUND_TYPES.has(type)) {
+    if (!outboundServer(parsed)) {
+      return invalid(
+        _("Server outbound must contain a non-empty server field")
+      );
+    }
+    if (!validateServerPort(outboundPort(parsed))) {
+      return invalid(
+        _("Server outbound must contain a numeric server_port from 1 to 65535")
+      );
+    }
+  } else if (parsed.server_port !== void 0 && !validateServerPort(parsed.server_port)) {
+    return invalid(_("server_port must be a number from 1 to 65535"));
+  }
+  if (parsed.outbounds !== void 0 && Array.isArray(parsed.outbounds) && parsed.outbounds.every((item) => typeof item === "string") && !validateOutbounds(parsed.outbounds)) {
+    return invalid(_("outbounds must be a non-empty array of strings"));
+  }
+  if (parsed.detour !== void 0 && !nonEmptyString(parsed.detour)) {
+    return invalid(_("detour must be a non-empty string"));
+  }
+  return { valid: true, message: _("Valid") };
+}
 function validateOutboundJson(value, usedTags = []) {
-  const normalized = `${value || ""}`.trim();
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return invalid(_("JSON outbound cannot be empty"));
+    }
+    if (value.length === 1) {
+      return validateOutboundJson(value[0], usedTags);
+    }
+    return invalid(_("JSON outbound must be a JSON object"));
+  }
+  if (isPlainObject(value)) {
+    return validateParsedOutbound(unwrapOutbound(value), usedTags);
+  }
+  const normalized = `${value ?? ""}`.trim();
   if (!normalized.length) {
     return invalid(_("JSON outbound cannot be empty"));
   }
@@ -278,48 +383,11 @@ function validateOutboundJson(value, usedTags = []) {
   } catch {
     return { valid: false, message: _("Invalid JSON format") };
   }
+  parsed = unwrapOutbound(parsed);
   if (!isPlainObject(parsed)) {
     return invalid(_("JSON outbound must be a JSON object"));
   }
-  if (!nonEmptyString(parsed.type)) {
-    return invalid(_("JSON outbound must contain a non-empty type field"));
-  }
-  if (!nonEmptyString(parsed.tag)) {
-    return invalid(_("JSON outbound must contain a non-empty tag field"));
-  }
-  const tag = parsed.tag.trim();
-  if (usedTags.some((usedTag) => `${usedTag || ""}`.trim() === tag)) {
-    return invalid(_("Duplicate JSON outbound tag"));
-  }
-  const type = parsed.type.trim().toLowerCase();
-  if ((type === "selector" || type === "urltest") && !validateOutbounds(parsed.outbounds)) {
-    return invalid(
-      _(
-        "Selector and URLTest outbounds must contain a non-empty outbounds array"
-      )
-    );
-  }
-  if (SERVER_OUTBOUND_TYPES.has(type)) {
-    if (!nonEmptyString(parsed.server)) {
-      return invalid(
-        _("Server outbound must contain a non-empty server field")
-      );
-    }
-    if (!validateServerPort(parsed.server_port)) {
-      return invalid(
-        _("Server outbound must contain a numeric server_port from 1 to 65535")
-      );
-    }
-  } else if (parsed.server_port !== void 0 && !validateServerPort(parsed.server_port)) {
-    return invalid(_("server_port must be a number from 1 to 65535"));
-  }
-  if (parsed.outbounds !== void 0 && !validateOutbounds(parsed.outbounds)) {
-    return invalid(_("outbounds must be a non-empty array of strings"));
-  }
-  if (parsed.detour !== void 0 && !nonEmptyString(parsed.detour)) {
-    return invalid(_("detour must be a non-empty string"));
-  }
-  return { valid: true, message: _("Valid") };
+  return validateParsedOutbound(parsed, usedTags);
 }
 
 // src/validators/validateShadowsocksUrl.ts
@@ -417,8 +485,16 @@ function parseQueryString(query) {
       if (!rawKey) {
         return acc;
       }
-      const key = decodeURIComponent(rawKey);
-      const value = decodeURIComponent(rawValue);
+      let key = rawKey;
+      let value = rawValue;
+      try {
+        key = decodeURIComponent(rawKey);
+      } catch {
+      }
+      try {
+        value = decodeURIComponent(rawValue);
+      } catch {
+      }
       return { ...acc, [key]: value };
     },
     {}
@@ -811,7 +887,19 @@ function validateHysteria2Url(url) {
 
 // src/validators/validateProxyUrl.ts
 function validateProxyUrl(url) {
-  const trimmedUrl = url.trim();
+  if (url == null || url === "") {
+    return { valid: true, message: "Valid" };
+  }
+  if (Array.isArray(url)) {
+    for (const item of url) {
+      const result = validateProxyUrl(item);
+      if (!result.valid) {
+        return result;
+      }
+    }
+    return { valid: true, message: "Valid" };
+  }
+  const trimmedUrl = `${url}`.trim();
   if (trimmedUrl.startsWith("ss://")) {
     return validateShadowsocksUrl(trimmedUrl);
   }
@@ -2463,6 +2551,12 @@ var Forkop;
     AvailableMethods2["GET_ZAPRET2_STATUS"] = "get_zapret2_status";
     AvailableMethods2["GET_BYEDPI_STATUS"] = "get_byedpi_status";
     AvailableMethods2["GET_XRAY_STATUS"] = "get_xray_status";
+    AvailableMethods2["GET_XRAY_STATS"] = "get_xray_stats";
+    AvailableMethods2["GET_XRAY_CONNECTIONS"] = "get_xray_connections";
+    AvailableMethods2["GET_XRAY_NODES"] = "get_xray_nodes";
+    AvailableMethods2["SET_XRAY_GROUP_PROXY"] = "set_xray_group_proxy";
+    AvailableMethods2["XRAY_CLOSE_CONNECTION"] = "xray_close_connection";
+    AvailableMethods2["XRAY_CLOSE_ALL_CONNECTIONS"] = "xray_close_all_connections";
     AvailableMethods2["CLASH_API"] = "clash_api";
     AvailableMethods2["ENABLE"] = "enable";
     AvailableMethods2["DISABLE"] = "disable";
@@ -2706,6 +2800,39 @@ var ForkopShellMethods = {
   ),
   getXrayStatus: async () => callBaseMethod(
     Forkop.AvailableMethods.GET_XRAY_STATUS
+  ),
+  getXrayStats: async () => callBaseMethod(
+    Forkop.AvailableMethods.GET_XRAY_STATS,
+    [],
+    "/usr/bin/forkop",
+    { timeout: 4e3 }
+  ),
+  getXrayConnections: async () => callBaseMethod(
+    Forkop.AvailableMethods.GET_XRAY_CONNECTIONS,
+    [],
+    "/usr/bin/forkop",
+    { timeout: 12e3 }
+  ),
+  getXrayNodes: async () => callBaseMethod(Forkop.AvailableMethods.GET_XRAY_NODES, [], "/usr/bin/forkop", {
+    timeout: 4e3
+  }),
+  setXrayGroupProxy: async (section, tag) => callBaseMethod(
+    Forkop.AvailableMethods.SET_XRAY_GROUP_PROXY,
+    [section, tag],
+    "/usr/bin/forkop",
+    { timeout: 2e4 }
+  ),
+  closeXrayConnection: async (id) => callBaseMethod(
+    Forkop.AvailableMethods.XRAY_CLOSE_CONNECTION,
+    [id],
+    "/usr/bin/forkop",
+    { timeout: 4e3 }
+  ),
+  closeAllXrayConnections: async () => callBaseMethod(
+    Forkop.AvailableMethods.XRAY_CLOSE_ALL_CONNECTIONS,
+    [],
+    "/usr/bin/forkop",
+    { timeout: 4e3 }
   ),
   getClashApiProxies: async () => callBaseMethod(Forkop.AvailableMethods.CLASH_API, [
     Forkop.AvailableClashAPIMethods.GET_PROXIES
@@ -3821,10 +3948,13 @@ function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGro
         code,
         displayName,
         latency: item?.value.history?.[0]?.delay || 0,
-        type: priorityConfig ? "Priority" : dashboardClashType(
-          item?.value.type,
-          outboundMetadata?.protocols?.[code]
-        ) || "URLTest",
+        type: priorityConfig ? "Priority" : protocolWithTransport(
+          dashboardClashType(
+            item?.value.type,
+            outboundMetadata?.protocols?.[code]
+          ) || "URLTest",
+          item?.value.transport || transportFromShareLink(link)
+        ),
         selected: selector?.value?.now === code,
         link,
         canCopyLink,
@@ -3984,22 +4114,127 @@ function getCachedProxyLinks(dashboardCache) {
     )
   );
 }
+function normalizeTransport(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || raw === "none") {
+    return "";
+  }
+  if (raw === "raw") {
+    return "tcp";
+  }
+  if (raw === "hysteria" || raw === "hysteria2" || raw === "hy2") {
+    return "quic";
+  }
+  return raw;
+}
+function protocolWithTransport(protocol, transport) {
+  const name = String(protocol || "").trim();
+  const net = normalizeTransport(transport);
+  if (!name || !net) {
+    return name;
+  }
+  const lower = name.toLowerCase();
+  if (lower === "priority" || lower === "urltest" || lower === "selector" || lower === "direct") {
+    return name;
+  }
+  if (lower.includes(net)) {
+    return name;
+  }
+  return `${name} · ${net}`;
+}
+function transportFromShareLink(link) {
+  const value = String(link || "");
+  const scheme = value.split(":")[0].toLowerCase();
+  const query = (value.split("?")[1] || "").split("#")[0];
+  const params = new URLSearchParams(query);
+  const explicit = params.get("type") || params.get("net") || params.get("network") || "";
+  if (explicit) {
+    return explicit;
+  }
+  if (scheme === "hysteria2" || scheme === "hy2" || scheme === "hysteria") {
+    return "quic";
+  }
+  if (scheme === "vless" || scheme === "vmess" || scheme === "trojan" || scheme === "ss" || scheme === "shadowsocks") {
+    return "tcp";
+  }
+  return "";
+}
+function clashProtocolType(protocol, kind) {
+  const value = String(protocol || kind || "").trim().toLowerCase();
+  if (value === "hysteria" || value === "hysteria2" || value === "hy2") {
+    return "Hysteria2";
+  }
+  if (value === "iface" || value === "freedom" || value === "interface") {
+    return "Direct";
+  }
+  if (!value) {
+    return "VLESS";
+  }
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+function mergeXrayNodesIntoClashProxies(proxies, configSections, xrayPayload) {
+  const nodes = xrayPayload?.nodes || {};
+  const selected = xrayPayload?.selected || {};
+  const next = { ...proxies };
+  configSections.filter(
+    (section) => section.enabled !== "0" && isConnectionAction(section.action) && getSectionProxyCore(section) === "xray"
+  ).forEach((section) => {
+    const sectionName = section[".name"];
+    const sectionNodes = Array.isArray(nodes[sectionName]) ? nodes[sectionName] : [];
+    const tags = sectionNodes.map((node) => String(node.tag || "").trim()).filter(Boolean);
+    if (!tags.length) {
+      return;
+    }
+    const selectorTag = getOutboundTagBySection(sectionName);
+    const now = selected[sectionName] && tags.includes(selected[sectionName]) ? selected[sectionName] : tags[0];
+    tags.forEach((tag) => {
+      const node = sectionNodes.find(
+        (item) => String(item.tag || "").trim() === tag
+      ) || {};
+      const delay = Number(node.delay || 0);
+      next[tag] = {
+        type: clashProtocolType(node.protocol, node.kind),
+        name: String(node.name || tag),
+        udp: true,
+        transport: normalizeTransport(node.network),
+        history: delay > 0 ? [{ time: (/* @__PURE__ */ new Date()).toISOString(), delay }] : next[tag]?.history || [],
+        now: void 0,
+        all: void 0
+      };
+    });
+    next[selectorTag] = {
+      type: "Selector",
+      name: selectorTag,
+      udp: true,
+      history: [],
+      now,
+      all: tags
+    };
+  });
+  return next;
+}
 async function getDashboardSections(options = {}) {
   const includeSubscriptionCopyState = options.includeSubscriptionCopyState ?? true;
   const configSections = hydrateConfigSections(await getConfigSections());
-  const clashProxies = await getClashApiProxies(configSections);
-  if (!clashProxies.success || !clashProxies.data?.proxies) {
+  const [clashProxies, xrayNodes] = await Promise.all([
+    getClashApiProxies(configSections),
+    ForkopShellMethods.getXrayNodes?.() ?? Promise.resolve({ success: true, data: { nodes: {}, selected: {} } })
+  ]);
+  const mergedProxies = mergeXrayNodesIntoClashProxies(
+    clashProxies.success ? clashProxies.data?.proxies || {} : {},
+    configSections,
+    xrayNodes.success ? xrayNodes.data : void 0
+  );
+  if (!clashProxies.success && !Object.keys(mergedProxies).length) {
     return {
       success: false,
       data: []
     };
   }
-  const proxies = Object.entries(clashProxies.data.proxies).map(
-    ([key, value]) => ({
-      code: key,
-      value
-    })
-  );
+  const proxies = Object.entries(mergedProxies).map(([key, value]) => ({
+    code: key,
+    value
+  }));
   const data = await Promise.all(
     configSections.filter(
       (section) => section.enabled !== "0" && isConnectionAction(section.action)
@@ -4044,8 +4279,8 @@ async function getDashboardSections(options = {}) {
         });
       }
       if (sectionAction === "vpn") {
-        const outboundTag = getOutboundTagBySection(sectionName);
-        const outbound = proxies.find((proxy) => proxy.code === outboundTag);
+        const outboundTag2 = getOutboundTagBySection(sectionName);
+        const outbound = proxies.find((proxy) => proxy.code === outboundTag2);
         return withProxyCore(section, {
           withTagSelect: false,
           code: outbound?.code || sectionName,
@@ -4067,8 +4302,8 @@ async function getDashboardSections(options = {}) {
         });
       }
       if (sectionAction === "outbound") {
-        const outboundTag = getOutboundTagBySection(sectionName);
-        const outbound = proxies.find((proxy) => proxy.code === outboundTag);
+        const outboundTag2 = getOutboundTagBySection(sectionName);
+        const outbound = proxies.find((proxy) => proxy.code === outboundTag2);
         return withProxyCore(section, {
           withTagSelect: false,
           code: outbound?.code || sectionName,
@@ -4369,6 +4604,7 @@ var initialDiagnosticStore = {
     byedpi_installed: 0,
     xray_version: "loading",
     xray_installed: 0,
+    routing_engine: "sing-box",
     server_inbounds_enabled_count: -1,
     openwrt_version: "loading",
     device_model: "loading"
@@ -4931,7 +5167,9 @@ function applyServiceState(uiState) {
     zapret2_installed: uiState.capabilities.zapret2_installed,
     byedpi_installed: uiState.capabilities.byedpi_installed,
     xray_installed: uiState.capabilities.xray_installed,
-    server_inbounds_enabled_count: uiState.capabilities.server_inbounds_enabled_count
+    routing_engine: uiState.capabilities.routing_engine || "sing-box",
+    server_inbounds_enabled_count: uiState.capabilities.server_inbounds_enabled_count,
+    need_singbox_sidecar: uiState.capabilities.need_singbox_sidecar ? 1 : 0
   };
   nextSystemInfo.sing_box_extended = uiState.capabilities.sing_box_extended;
   nextSystemInfo.sing_box_tiny = uiState.capabilities.sing_box_tiny;
@@ -5153,7 +5391,7 @@ var LOG_WATCHER_INTERVAL_MS = 1e4;
 var LOG_WATCHER_START_DELAY_MS = 5e3;
 function componentDisplayName(component) {
   const names = {
-    forkop: "Forkop",
+    forkop: "Forkop-Mod",
     sing_box: "sing-box",
     zapret: "Zapret",
     zapret2: "Zapret2",
@@ -5559,9 +5797,12 @@ function getServiceAvailability({
 
 // src/forkop/tabs/dashboard/initController.ts
 var SECTIONS_REFRESH_INTERVAL_MS = 1e4;
+var XRAY_STATS_POLL_INTERVAL_MS = 2e3;
 var LATENCY_TEST_BUTTON_CLASS = "dashboard-sections-grid-item-test-latency";
 var LATENCY_TEST_BUTTON_LABEL_CLASS = "dashboard-sections-grid-item-test-latency__label";
 var sectionsRefreshTimer = null;
+var xrayStatsTimer = null;
+var lastXrayTrafficSample = null;
 var sectionsRefreshPromise = null;
 var sectionsRefreshQueued = false;
 var actionStateUnsubscribe = null;
@@ -5865,6 +6106,26 @@ function stopActionStateWatcher() {
   actionStateUnsubscribe();
   actionStateUnsubscribe = null;
 }
+function getDashboardRoutingEngine() {
+  const value = `${store.get().diagnosticsSystemInfo.routing_engine || ""}`.toLowerCase();
+  return value === "xray" || value === "xray-core" ? "xray" : "sing-box";
+}
+function isSingBoxSidecarNeeded() {
+  return Number(store.get().diagnosticsSystemInfo.need_singbox_sidecar || 0) !== 0;
+}
+function formatEngineStatus(running, role) {
+  const state = running ? _("\u2714 Running") : _("\u2718 Stopped");
+  return role ? `${state} (${role})` : state;
+}
+function formatSingBoxServiceStatus(running) {
+  if (getDashboardRoutingEngine() === "xray" && !isSingBoxSidecarNeeded()) {
+    return _("Not used");
+  }
+  if (getDashboardRoutingEngine() === "xray") {
+    return formatEngineStatus(running, _("sidecar"));
+  }
+  return formatEngineStatus(running);
+}
 async function connectToClashSockets(dataUpdatesId) {
   const mountId = dashboardMountId;
   const clashApiSecret = await getClashApiSecret2();
@@ -5878,6 +6139,9 @@ async function connectToClashSockets(dataUpdatesId) {
         return;
       }
       const parsedMsg = JSON.parse(msg);
+      if (getDashboardRoutingEngine() === "xray") {
+        return;
+      }
       store.set({
         bandwidthWidget: {
           loading: false,
@@ -5911,6 +6175,9 @@ async function connectToClashSockets(dataUpdatesId) {
         return;
       }
       const parsedMsg = JSON.parse(msg);
+      if (getDashboardRoutingEngine() === "xray") {
+        return;
+      }
       store.set({
         trafficTotalWidget: {
           loading: false,
@@ -5972,8 +6239,56 @@ function stopDashboardDataUpdates() {
     clearInterval(sectionsRefreshTimer);
     sectionsRefreshTimer = null;
   }
+  if (xrayStatsTimer) {
+    clearInterval(xrayStatsTimer);
+    xrayStatsTimer = null;
+  }
+  lastXrayTrafficSample = null;
   sectionsRefreshQueued = false;
   socket.resetAll();
+}
+async function pollXrayPlaneStats(dataUpdatesId) {
+  if (dataUpdatesId !== dashboardDataUpdatesId || getDashboardRoutingEngine() !== "xray" || getDashboardServiceAvailability() === "stopped") {
+    return;
+  }
+  const response = await ForkopShellMethods.getXrayStats();
+  if (dataUpdatesId !== dashboardDataUpdatesId || !response.success || !response.data) {
+    return;
+  }
+  const uplink = Number(response.data.uplink) || 0;
+  const downlink = Number(response.data.downlink) || 0;
+  const now = Date.now();
+  let up = 0;
+  let down = 0;
+  if (lastXrayTrafficSample) {
+    const dt = Math.max((now - lastXrayTrafficSample.at) / 1e3, 0.5);
+    up = Math.max(0, (uplink - lastXrayTrafficSample.uplink) / dt);
+    down = Math.max(0, (downlink - lastXrayTrafficSample.downlink) / dt);
+  }
+  lastXrayTrafficSample = { uplink, downlink, at: now };
+  store.set({
+    bandwidthWidget: {
+      loading: false,
+      failed: false,
+      data: { up, down }
+    },
+    trafficTotalWidget: {
+      loading: false,
+      failed: false,
+      data: {
+        uploadTotal: uplink,
+        downloadTotal: downlink
+      }
+    },
+    systemInfoWidget: {
+      loading: false,
+      failed: false,
+      data: {
+        connections: Number(response.data.connections) || 0,
+        memory: Number(response.data.memory) || 0
+      }
+    }
+  });
 }
 function startDashboardDataUpdates() {
   if (dashboardDataUpdatesStarted || !dashboardMounted || getDashboardServiceAvailability() === "stopped") {
@@ -5983,6 +6298,10 @@ function startDashboardDataUpdates() {
   const dataUpdatesId = ++dashboardDataUpdatesId;
   void fetchDashboardSections({ force: true });
   void connectToClashSockets(dataUpdatesId);
+  void pollXrayPlaneStats(dataUpdatesId);
+  xrayStatsTimer = setInterval(() => {
+    void pollXrayPlaneStats(dataUpdatesId);
+  }, XRAY_STATS_POLL_INTERVAL_MS);
   sectionsRefreshTimer = setInterval(() => {
     void fetchDashboardSections();
   }, SECTIONS_REFRESH_INTERVAL_MS);
@@ -6010,7 +6329,11 @@ async function handleChooseOutbound(sectionName, selector, tag) {
   }
   setSelectorSwitching(sectionName, tag);
   try {
-    await ForkopShellMethods.setClashApiGroupProxy(selector, tag);
+    if (section.proxyCore === "xray") {
+      await ForkopShellMethods.setXrayGroupProxy(sectionName, tag);
+    } else {
+      await ForkopShellMethods.setClashApiGroupProxy(selector, tag);
+    }
     await fetchDashboardSections({ force: true });
   } finally {
     setSelectorSwitching(sectionName);
@@ -6818,6 +7141,14 @@ function getDashboardCoresSummaryItems() {
   }
   return [
     {
+      key: _("Routing engine"),
+      value: getDashboardRoutingEngine() === "xray" ? "Xray" : "sing-box"
+    },
+    {
+      key: _("Sidecar"),
+      value: getDashboardRoutingEngine() === "xray" ? "sing-box" : "Xray"
+    },
+    {
       key: _("Cores"),
       value: `sing-box ${singboxOutbounds} \xB7 Xray ${xrayOutbounds}`
     }
@@ -6835,7 +7166,7 @@ function getXrayServiceRow(data) {
   }
   return {
     key: "Xray",
-    value: data.xray ? _("\u2714 Running") : _("\u2718 Stopped"),
+    value: getDashboardRoutingEngine() === "xray" ? formatEngineStatus(Boolean(data.xray)) : formatEngineStatus(Boolean(data.xray), _("sidecar")),
     attributes: {
       class: data.xray ? "fkp_dashboard-page__widgets-section__item__row--success" : "fkp_dashboard-page__widgets-section__item__row--error"
     }
@@ -6871,9 +7202,11 @@ async function renderServicesInfoWidget() {
       },
       {
         key: "Sing-box",
-        value: servicesInfoWidget.data.singbox ? _("\u2714 Running") : _("\u2718 Stopped"),
+        value: formatSingBoxServiceStatus(
+          Boolean(servicesInfoWidget.data.singbox)
+        ),
         attributes: {
-          class: servicesInfoWidget.data.singbox ? "fkp_dashboard-page__widgets-section__item__row--success" : "fkp_dashboard-page__widgets-section__item__row--error"
+          class: getDashboardRoutingEngine() === "xray" && !isSingBoxSidecarNeeded() ? "" : servicesInfoWidget.data.singbox ? "fkp_dashboard-page__widgets-section__item__row--success" : "fkp_dashboard-page__widgets-section__item__row--error"
         }
       },
       getXrayServiceRow(servicesInfoWidget.data)
@@ -7883,8 +8216,11 @@ async function runSingBoxCheck() {
     throw new Error("Sing-box checks failed");
   }
   const data = singBoxChecks.data;
-  const allGood = Boolean(data.sing_box_installed) && Boolean(data.sing_box_version_ok) && Boolean(data.sing_box_service_exist) && Boolean(data.sing_box_autostart_disabled) && Boolean(data.sing_box_process_running) && Boolean(data.sing_box_ports_listening);
-  const atLeastOneGood = Boolean(data.sing_box_installed) || Boolean(data.sing_box_version_ok) || Boolean(data.sing_box_service_exist) || Boolean(data.sing_box_autostart_disabled) || Boolean(data.sing_box_process_running) || Boolean(data.sing_box_ports_listening);
+  const sidecarRequired = data.sing_box_required !== 0;
+  const processOk = sidecarRequired ? Boolean(data.sing_box_process_running) : true;
+  const portsOk = sidecarRequired ? Boolean(data.sing_box_ports_listening) : true;
+  const allGood = Boolean(data.sing_box_installed) && Boolean(data.sing_box_version_ok) && Boolean(data.sing_box_service_exist) && Boolean(data.sing_box_autostart_disabled) && processOk && portsOk;
+  const atLeastOneGood = Boolean(data.sing_box_installed) || Boolean(data.sing_box_version_ok) || Boolean(data.sing_box_service_exist) || Boolean(data.sing_box_autostart_disabled) || Boolean(data.sing_box_process_running) || Boolean(data.sing_box_ports_listening) || !sidecarRequired;
   const { state, description } = getMeta({ atLeastOneGood, allGood });
   updateCheckStore({
     order,
@@ -7914,18 +8250,18 @@ async function runSingBoxCheck() {
         value: ""
       },
       {
-        state: data.sing_box_process_running ? "success" : "error",
-        key: _("Sing-box process running"),
+        state: sidecarRequired ? data.sing_box_process_running ? "success" : "error" : "success",
+        key: sidecarRequired ? _("Sing-box process running") : _("Sing-box sidecar not used"),
         value: ""
       },
       {
-        state: data.sing_box_ports_listening ? "success" : "error",
-        key: _("Sing-box listening ports"),
+        state: sidecarRequired ? data.sing_box_ports_listening ? "success" : "error" : "success",
+        key: sidecarRequired ? _("Sing-box listening ports") : _("Sing-box ports not required"),
         value: ""
       }
     ]
   });
-  if (!atLeastOneGood || !data.sing_box_process_running) {
+  if (!atLeastOneGood || sidecarRequired && !data.sing_box_process_running) {
     throw new Error("Sing-box checks failed");
   }
 }
@@ -8196,8 +8532,13 @@ async function runFakeIPCheck() {
     items: []
   });
   const routerFakeIPResponse = await ForkopShellMethods.checkFakeIP();
-  const checkFakeIPResponse = await RemoteFakeIPMethods.getFakeIpCheck();
-  const checkIPResponse = await RemoteFakeIPMethods.getIpCheck();
+  const xrayFakeDNS = routerFakeIPResponse.success && `${routerFakeIPResponse.data.engine || ""}`.toLowerCase() === "xray";
+  const checkFakeIPResponse = xrayFakeDNS ? {
+    success: true,
+    data: { fakeip: true, IP: routerFakeIPResponse.data.IP },
+    message: ""
+  } : await RemoteFakeIPMethods.getFakeIpCheck();
+  const checkIPResponse = xrayFakeDNS ? { success: false, data: { IP: "" }, message: "" } : await RemoteFakeIPMethods.getIpCheck();
   const browserFakeIPCheckUnavailable = !checkFakeIPResponse.success;
   const browserFakeIPCheckMessage = checkFakeIPResponse.success ? "" : checkFakeIPResponse.message;
   const checks = {
@@ -8206,8 +8547,8 @@ async function runFakeIPCheck() {
     canComparePublicIP: checkFakeIPResponse.success && checkIPResponse.success,
     differentIP: checkFakeIPResponse.success && checkIPResponse.success && checkFakeIPResponse.data.IP !== checkIPResponse.data.IP
   };
-  const fakeIPWorks = checks.singBoxFakeIP && checks.browserFakeIP;
-  const { state, description } = fakeIPWorks ? checks.differentIP ? { state: "success", description: _("Checks passed") } : {
+  const fakeIPWorks = xrayFakeDNS ? checks.singBoxFakeIP : checks.singBoxFakeIP && checks.browserFakeIP;
+  const { state, description } = fakeIPWorks ? xrayFakeDNS ? { state: "success", description: _("Checks passed") } : checks.differentIP ? { state: "success", description: _("Checks passed") } : {
     state: "warning",
     description: _("FakeIP works; public IP comparison is inconclusive")
   } : browserFakeIPCheckUnavailable && checks.singBoxFakeIP ? {
@@ -8226,21 +8567,24 @@ async function runFakeIPCheck() {
     items: [
       {
         state: checks.singBoxFakeIP ? "success" : "error",
-        key: checks.singBoxFakeIP ? _("Sing-box FakeIP DNS works") : _("Sing-box FakeIP DNS does not work"),
+        key: checks.singBoxFakeIP ? xrayFakeDNS ? _("Xray FakeDNS works") : _("Sing-box FakeIP DNS works") : xrayFakeDNS ? _("Xray FakeDNS does not work") : _("Sing-box FakeIP DNS does not work"),
         value: routerFakeIPResponse.success ? routerFakeIPResponse.data.IP : ""
       },
       {
-        state: browserFakeIPCheckUnavailable ? "warning" : checks.browserFakeIP ? "success" : "error",
-        key: browserFakeIPCheckUnavailable ? _("Browser FakeIP check could not be completed") : checks.browserFakeIP ? _("Browser is using FakeIP correctly") : _("Browser is not using FakeIP"),
+        state: xrayFakeDNS ? "success" : browserFakeIPCheckUnavailable ? "warning" : checks.browserFakeIP ? "success" : "error",
+        key: xrayFakeDNS ? _("Browser FakeIP check skipped for Xray") : browserFakeIPCheckUnavailable ? _("Browser FakeIP check could not be completed") : checks.browserFakeIP ? _("Browser is using FakeIP correctly") : _("Browser is not using FakeIP"),
         value: browserFakeIPCheckMessage
       },
-      ...insertIf(checks.browserFakeIP, [
-        {
-          state: checks.differentIP ? "success" : "warning",
-          key: !checks.canComparePublicIP ? _("Could not compare FakeIP and control public IPs") : checks.differentIP ? _("FakeIP and control checks use different public IPs") : _("FakeIP and control checks use the same public IP"),
-          value: ""
-        }
-      ])
+      ...insertIf(
+        !xrayFakeDNS && checks.browserFakeIP,
+        [
+          {
+            state: checks.differentIP ? "success" : "warning",
+            key: !checks.canComparePublicIP ? _("Could not compare FakeIP and control public IPs") : checks.differentIP ? _("FakeIP and control checks use different public IPs") : _("FakeIP and control checks use the same public IP"),
+            value: ""
+          }
+        ]
+      )
     ]
   });
 }
@@ -8617,6 +8961,7 @@ var UNKNOWN_SYSTEM_INFO = {
   byedpi_installed: 0,
   xray_version: _("unknown"),
   xray_installed: 0,
+  routing_engine: "sing-box",
   server_inbounds_enabled_count: -1,
   openwrt_version: _("unknown"),
   device_model: _("unknown")
@@ -8660,6 +9005,7 @@ async function ensureSystemInfo({
           loaded: true,
           providerInfoLoaded: true,
           server_inbounds_enabled_count: currentSystemInfo.server_inbounds_enabled_count,
+          need_singbox_sidecar: currentSystemInfo.need_singbox_sidecar,
           ...systemInfo.data
         });
         store.set({
@@ -8681,7 +9027,8 @@ async function ensureSystemInfo({
         zapret2_installed: latestSystemInfo.zapret2_installed,
         byedpi_installed: latestSystemInfo.byedpi_installed,
         xray_installed: latestSystemInfo.xray_installed,
-        server_inbounds_enabled_count: latestSystemInfo.server_inbounds_enabled_count
+        server_inbounds_enabled_count: latestSystemInfo.server_inbounds_enabled_count,
+        need_singbox_sidecar: latestSystemInfo.need_singbox_sidecar
       };
       store.set({
         diagnosticsSystemInfo: nextSystemInfo
@@ -10672,7 +11019,7 @@ function renderDiagnosticSystemInfoWidget() {
   const container = document.getElementById("fkp_diagnostic-page-system-info");
   const items = [
     {
-      key: "Forkop",
+      key: "Forkop-Mod",
       value: normalizeCompiledVersion(diagnosticsSystemInfo.forkop_version)
     },
     {
@@ -11324,6 +11671,10 @@ var serviceAvailability = "loading";
 var activeConnections = /* @__PURE__ */ new Map();
 var closedConnections = /* @__PURE__ */ new Map();
 var closingConnectionIds = /* @__PURE__ */ new Set();
+function isXrayRoutingEngine() {
+  const value = `${store.get().diagnosticsSystemInfo.routing_engine || ""}`.toLowerCase();
+  return value === "xray" || value === "xray-core";
+}
 function normalizeString(value) {
   return value == null ? "" : String(value).trim();
 }
@@ -11578,9 +11929,9 @@ function getCore(connection) {
     return tag === getOutboundTagBySection(sectionName) || tag.startsWith(`${sectionName}-`);
   });
   if (section) {
-    return routeSectionCores[getOutboundTagBySection(section.sectionName)] || "sing-box";
+    return routeSectionCores[getOutboundTagBySection(section.sectionName)] || (isXrayRoutingEngine() ? "xray" : "sing-box");
   }
-  return "sing-box";
+  return isXrayRoutingEngine() ? "xray" : "sing-box";
 }
 function getNetwork(connection) {
   return normalizeString(connection.metadata?.network).toLowerCase() || "-";
@@ -12282,7 +12633,7 @@ async function closeConnection(connectionId) {
   closingConnectionIds.add(connectionId);
   renderConnections();
   try {
-    const response = await ForkopShellMethods.closeClashApiConnection(connectionId);
+    const response = isXrayRoutingEngine() ? await ForkopShellMethods.closeXrayConnection(connectionId) : await ForkopShellMethods.closeClashApiConnection(connectionId);
     if (!response.success) {
       showToast(_("Failed to close connection"), "error");
       return;
@@ -12311,7 +12662,7 @@ async function closeAllConnections() {
   closingAll = true;
   renderControls();
   try {
-    const response = await ForkopShellMethods.closeAllClashApiConnections();
+    const response = isXrayRoutingEngine() ? await ForkopShellMethods.closeAllXrayConnections() : await ForkopShellMethods.closeAllClashApiConnections();
     if (!response.success) {
       showToast(_("Failed to close connections"), "error");
       return;
@@ -12420,7 +12771,7 @@ async function pollConnectionsSnapshot() {
   const mountId = monitoringMountId;
   pollingConnections = true;
   try {
-    const response = await ForkopShellMethods.getClashApiConnections();
+    const response = isXrayRoutingEngine() ? await ForkopShellMethods.getXrayConnections() : await ForkopShellMethods.getClashApiConnections();
     if (!monitoringMounted || mountId !== monitoringMountId || serviceAvailability !== "running") {
       return;
     }
@@ -12485,12 +12836,12 @@ function startConnectionsUpdates() {
   if (serviceAvailability !== "running") {
     return;
   }
-  if (canUseDirectClashApi()) {
-    const updatesId = ++connectionsUpdatesId;
-    void connectToConnectionsSocket(updatesId);
+  if (isXrayRoutingEngine() || !canUseDirectClashApi()) {
+    startConnectionsPolling();
     return;
   }
-  startConnectionsPolling();
+  const updatesId = ++connectionsUpdatesId;
+  void connectToConnectionsSocket(updatesId);
 }
 function stopConnectionsUpdates() {
   connectionsUpdatesId += 1;
@@ -12542,6 +12893,10 @@ function watchServiceState() {
         running: uiState.service.forkop.running
       })
     );
+    if (serviceAvailability === "running" && isXrayRoutingEngine() && !connectionsPollTimer) {
+      stopConnectionsUpdates();
+      startConnectionsPolling();
+    }
   });
 }
 function resetMonitoringState() {
@@ -13388,8 +13743,10 @@ var singBoxAvailableVersions = [...SING_BOX_EXTENDED_FALLBACK_VERSIONS];
 var singBoxVersionsLoading = false;
 var singBoxSelectedVersion = "";
 var xrayAvailableVersions = [...XRAY_FALLBACK_VERSIONS];
+var xrayPrereleaseVersions = [];
 var xrayVersionsLoading = false;
 var xraySelectedVersion = "";
+var xrayIncludePrerelease = false;
 var coreVersionsLoading = false;
 var componentActionStateRefreshPromise = null;
 var followedComponentJobs = /* @__PURE__ */ new Set();
@@ -13489,7 +13846,8 @@ function applyCachedCheckResults(results) {
     }
     if (Array.isArray(result.available_versions) && result.component === "xray") {
       xrayAvailableVersions = result.available_versions.filter(Boolean);
-      if (xraySelectedVersion && !xrayAvailableVersions.includes(xraySelectedVersion)) {
+      xrayPrereleaseVersions = Array.isArray(result.prerelease_versions) ? result.prerelease_versions.filter(Boolean) : [];
+      if (xraySelectedVersion && !visibleXrayVersionTags().includes(xraySelectedVersion)) {
         xraySelectedVersion = "";
       }
     }
@@ -13673,12 +14031,12 @@ function liveSelectedXrayVersion() {
   const select = document.querySelector(
     ".fkp_xray-version-select"
   );
-  const fromSelect = normalizeXrayVersionTag(select?.value || "");
+  const fromSelect = normalizeXrayVersionTag(select?.value || "", true);
   if (fromSelect) {
     xraySelectedVersion = fromSelect;
     return fromSelect;
   }
-  return normalizeXrayVersionTag(xraySelectedVersion);
+  return normalizeXrayVersionTag(xraySelectedVersion, true);
 }
 function currentXrayVersionInstallAction(tag) {
   const normalized = normalizeXrayVersionTag(tag);
@@ -13733,7 +14091,7 @@ function mergeSingBoxVersions(values) {
   });
   return result;
 }
-function normalizeXrayVersionTag(value) {
+function normalizeXrayVersionTag(value, allowPrerelease = false) {
   let tag = `${value || ""}`.trim();
   if (!tag) {
     return "";
@@ -13742,16 +14100,23 @@ function normalizeXrayVersionTag(value) {
     tag = tag.slice(1);
   }
   const lowered = tag.toLowerCase();
-  if (lowered === "version" || lowered.includes("alpha") || lowered.includes("beta") || lowered.includes("rc") || !/^\d+\.\d+\.\d+/.test(tag)) {
+  if (lowered === "version" || !/^\d+\.\d+\.\d+/.test(tag)) {
+    return "";
+  }
+  if (!allowPrerelease && (lowered.includes("alpha") || lowered.includes("beta") || lowered.includes("rc"))) {
     return "";
   }
   return tag;
 }
-function mergeXrayVersions(values) {
+function isXrayPrereleaseTag(tag) {
+  const lowered = tag.toLowerCase();
+  return lowered.includes("alpha") || lowered.includes("beta") || lowered.includes("rc") || xrayPrereleaseVersions.includes(tag);
+}
+function mergeXrayVersions(values, allowPrerelease = false) {
   const seen = /* @__PURE__ */ new Set();
   const result = [];
   values.forEach((value) => {
-    const tag = normalizeXrayVersionTag(value);
+    const tag = normalizeXrayVersionTag(value, allowPrerelease);
     if (!tag || seen.has(tag)) {
       return;
     }
@@ -13759,6 +14124,22 @@ function mergeXrayVersions(values) {
     result.push(tag);
   });
   return result;
+}
+function visibleXrayVersionTags() {
+  const currentVersion = normalizeXrayVersionTag(
+    store.get().diagnosticsSystemInfo.xray_version,
+    true
+  );
+  const ordered = mergeXrayVersions(
+    [...xrayAvailableVersions, ...XRAY_FALLBACK_VERSIONS, currentVersion],
+    true
+  );
+  if (xrayIncludePrerelease) {
+    return ordered;
+  }
+  return ordered.filter(
+    (tag) => tag === currentVersion || !isXrayPrereleaseTag(tag)
+  );
 }
 async function fetchSingBoxVersionsFromGitHub() {
   const response = await fetch(
@@ -13792,6 +14173,44 @@ async function loadSingBoxVersionsFromRouter() {
   }
   return mergeSingBoxVersions(response.data.available_versions);
 }
+function xrayVersionOptionLabel(version, currentVersion) {
+  const marks = [];
+  if (version === currentVersion) {
+    marks.push(_("current"));
+  }
+  if (isXrayPrereleaseTag(version)) {
+    marks.push(_("pre-release"));
+  }
+  return marks.length ? `${version} (${marks.join(", ")})` : version;
+}
+function syncXrayVersionSelect() {
+  const select = document.querySelector(
+    ".fkp_xray-version-select"
+  );
+  if (!select) {
+    return;
+  }
+  const currentVersion = normalizeXrayVersionTag(
+    store.get().diagnosticsSystemInfo.xray_version,
+    true
+  );
+  const options = visibleXrayVersionTags();
+  const selected = xraySelectedVersion && options.includes(xraySelectedVersion) ? xraySelectedVersion : options.includes(currentVersion) ? currentVersion : options[0] || "";
+  xraySelectedVersion = selected;
+  select.replaceChildren(
+    ...options.map(
+      (version) => E(
+        "option",
+        {
+          value: version,
+          selected: version === selected ? "selected" : null
+        },
+        xrayVersionOptionLabel(version, currentVersion)
+      )
+    )
+  );
+  select.value = selected;
+}
 async function fetchXrayVersionsFromGitHub() {
   const response = await fetch(
     "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=30",
@@ -13804,11 +14223,27 @@ async function fetchXrayVersionsFromGitHub() {
   if (!Array.isArray(data)) {
     throw new Error("github xray releases invalid");
   }
-  return mergeXrayVersions(
-    data.filter(
-      (item) => item && typeof item === "object" && item.draft !== true && item.prerelease !== true
-    ).map((item) => item && item.tag_name)
-  );
+  const ordered = [];
+  const prerelease = [];
+  const seen = /* @__PURE__ */ new Set();
+  data.forEach((item) => {
+    if (!item || typeof item !== "object" || item.draft === true) {
+      return;
+    }
+    const tag = normalizeXrayVersionTag(item.tag_name, true);
+    if (!tag || seen.has(tag)) {
+      return;
+    }
+    seen.add(tag);
+    if (item.prerelease === true || /alpha|beta|rc/i.test(tag)) {
+      prerelease.push(tag);
+    }
+    ordered.push(tag);
+  });
+  return {
+    ordered: mergeXrayVersions(ordered, true),
+    prerelease: mergeXrayVersions(prerelease, true)
+  };
 }
 async function loadXrayVersionsFromRouter() {
   const startResponse = await ForkopShellMethods.componentActionStart(
@@ -13816,7 +14251,7 @@ async function loadXrayVersionsFromRouter() {
     "list_versions"
   );
   if (!startResponse.success || !startResponse.data.job_id) {
-    return [];
+    return { ordered: [], prerelease: [] };
   }
   const response = await ForkopShellMethods.waitComponentActionJob(
     startResponse.data.job_id,
@@ -13824,9 +14259,12 @@ async function loadXrayVersionsFromRouter() {
     "list_versions"
   );
   if (!response.success || !Array.isArray(response.data.available_versions)) {
-    return [];
+    return { ordered: [], prerelease: [] };
   }
-  return mergeXrayVersions(response.data.available_versions);
+  return {
+    ordered: mergeXrayVersions(response.data.available_versions, true),
+    prerelease: mergeXrayVersions(response.data.prerelease_versions || [], true)
+  };
 }
 async function loadCoreVersionLists() {
   if (coreVersionsLoading) {
@@ -13850,17 +14288,18 @@ async function loadCoreVersionLists() {
       }),
       fetchXrayVersionsFromGitHub().catch((error) => {
         logger.debug("[UPDATES]", "load xray versions from GitHub failed", error);
-        return [];
+        return { ordered: [], prerelease: [] };
       })
     ]);
     if (githubSingBox.length) {
       singBoxAvailableVersions = githubSingBox;
     }
-    if (githubXray.length) {
-      xrayAvailableVersions = githubXray;
+    if (githubXray.ordered.length || githubXray.prerelease.length) {
+      xrayAvailableVersions = githubXray.ordered;
+      xrayPrereleaseVersions = githubXray.prerelease;
     }
     singBoxVersionsLoading = !githubSingBox.length;
-    xrayVersionsLoading = !githubXray.length;
+    xrayVersionsLoading = !(githubXray.ordered.length || githubXray.prerelease.length);
     renderUpdatesComponents();
     if (!githubSingBox.length) {
       try {
@@ -13872,11 +14311,12 @@ async function loadCoreVersionLists() {
         logger.debug("[UPDATES]", "load sing-box versions from router failed", error);
       }
     }
-    if (!githubXray.length) {
+    if (!githubXray.ordered.length && !githubXray.prerelease.length) {
       try {
         const routerVersions = await loadXrayVersionsFromRouter();
-        if (routerVersions.length) {
-          xrayAvailableVersions = routerVersions;
+        if (routerVersions.ordered.length || routerVersions.prerelease.length) {
+          xrayAvailableVersions = routerVersions.ordered;
+          xrayPrereleaseVersions = routerVersions.prerelease;
         }
       } catch (error) {
         logger.debug("[UPDATES]", "load xray versions from router failed", error);
@@ -13899,8 +14339,12 @@ async function applyCompletedComponentAction({
     if (Array.isArray(result.available_versions)) {
       const versions = result.available_versions.filter(Boolean);
       if (result.component === "xray") {
-        xrayAvailableVersions = mergeXrayVersions(versions);
-        if (xraySelectedVersion && !xrayAvailableVersions.includes(xraySelectedVersion)) {
+        xrayAvailableVersions = mergeXrayVersions(versions, true);
+        xrayPrereleaseVersions = mergeXrayVersions(
+          result.prerelease_versions || [],
+          true
+        );
+        if (xraySelectedVersion && !visibleXrayVersionTags().includes(xraySelectedVersion)) {
           xraySelectedVersion = "";
         }
       } else if (result.component === "sing_box") {
@@ -14292,7 +14736,7 @@ function getComponentCards() {
     {
       component: "forkop",
       column: 0,
-      title: "Forkop",
+      title: "Forkop-Mod",
       version: systemInfoLoading ? _("Loading...") : normalizeCompiledVersion(systemInfo.forkop_version),
       latestVersion: getLatestVersion("forkop"),
       releaseUrl: getGitHubReleaseUrl("forkop"),
@@ -14573,12 +15017,8 @@ function renderComponentCard(card) {
     );
   }
   if (card.component === "xray") {
-    const currentVersion = normalizeXrayVersionTag(card.version);
-    const options = mergeXrayVersions([
-      ...xrayAvailableVersions,
-      ...XRAY_FALLBACK_VERSIONS,
-      currentVersion
-    ]);
+    const currentVersion = normalizeXrayVersionTag(card.version, true);
+    const options = visibleXrayVersionTags();
     const selected = xraySelectedVersion && options.includes(xraySelectedVersion) ? xraySelectedVersion : options.includes(currentVersion) ? currentVersion : options[0] || "";
     const installLoading = updatesActions.xrayInstall.loading;
     actionElements.push(
@@ -14588,6 +15028,25 @@ function renderComponentCard(card) {
           { class: "fkp_updates-page__component__variants-title" },
           _("Install specific version:")
         ),
+        E("label", { class: "fkp_updates-page__component__prerelease" }, [
+          (() => {
+            const checkbox = E("input", {
+              type: "checkbox",
+              id: "fkp-xray-prerelease",
+              click: (event) => event.stopPropagation(),
+              change: (event) => {
+                event.stopPropagation();
+                const target = event.target;
+                xrayIncludePrerelease = Boolean(target.checked);
+                syncXrayVersionSelect();
+              }
+            });
+            checkbox.checked = xrayIncludePrerelease;
+            checkbox.autocomplete = "off";
+            return checkbox;
+          })(),
+          _("Show pre-release versions")
+        ]),
         E("div", { class: "fkp_updates-page__component__versions-row" }, [
           E(
             "select",
@@ -14601,8 +15060,11 @@ function renderComponentCard(card) {
             options.map(
               (version) => E(
                 "option",
-                { value: version },
-                version === currentVersion ? `${version} (${_("current")})` : version
+                {
+                  value: version,
+                  selected: version === selected ? "selected" : null
+                },
+                xrayVersionOptionLabel(version, currentVersion)
               )
             )
           ),
@@ -14930,6 +15392,26 @@ var styles6 = `
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
+}
+
+.fkp_updates-page__component__prerelease {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.fkp_updates-page__component__prerelease input {
+    margin: 0;
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    accent-color: currentColor;
 }
 
 .fkp_updates-page__component__versions-row select,

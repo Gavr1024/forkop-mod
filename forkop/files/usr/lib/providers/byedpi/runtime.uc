@@ -4,6 +4,8 @@ let fs = require("fs");
 let uci_core = require("core.uci");
 let runtime_constants = require("singbox.constants");
 let validator_module = null;
+let engine = require("core.engine");
+let xray_constants = require("xray.constants");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
@@ -404,11 +406,39 @@ function value_contains(value, needle) {
 
 function has_socks_outbound(config, tag, address, port) {
     for (let outbound in array_or_empty(config && config.outbounds)) {
-        if (type(outbound) == "object" &&
-            outbound.type == "socks" &&
-            outbound.tag == tag &&
+        if (type(outbound) != "object")
+            continue;
+        if (as_string(outbound.tag || "") != tag)
+            continue;
+        if (as_string(outbound.type || "") == "socks" &&
             outbound.server == address &&
             int(outbound.server_port || 0) == int(port))
+            return true;
+        if (as_string(outbound.protocol || "") == "socks") {
+            let settings = object_or_empty(outbound.settings);
+            if (as_string(settings.address || "") == address &&
+                int(settings.port || 0) == int(port))
+                return true;
+            for (let server in array_or_empty(settings.servers)) {
+                if (as_string(object_or_empty(server).address || "") == address &&
+                    int(object_or_empty(server).port || 0) == int(port))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+function has_xray_tproxy_rule(config, outbound) {
+    for (let rule in array_or_empty(config && config.routing && config.routing.rules)) {
+        if (type(rule) != "object")
+            continue;
+        if (as_string(rule.outboundTag || "") != outbound)
+            continue;
+        if (value_contains(rule.inboundTag, xray_constants.XRAY_TPROXY_TAG) ||
+            value_contains(rule.inboundTag, xray_constants.XRAY_TPROXY6_TAG) ||
+            value_contains(rule.inboundTag, xray_constants.XRAY_TPROXY_FAKEIP_TAG) ||
+            value_contains(rule.inboundTag, xray_constants.XRAY_TPROXY_FAKEIP6_TAG))
             return true;
     }
     return false;
@@ -426,7 +456,16 @@ function has_route_rule(config, inbound, outbound) {
 }
 
 function runtime_config_status(sections) {
-    let config_path = option(uci_settings(), "config_path", "");
+    let xray_primary = false;
+    try {
+        xray_primary = engine.is_xray_primary();
+    }
+    catch (e) {
+        xray_primary = false;
+    }
+    let config_path = xray_primary
+        ? xray_constants.XRAY_CONFIG
+        : option(uci_settings(), "config_path", "");
     let config = read_json_file(config_path);
     let rules_configured = length(sections) > 0;
     let outbounds_configured = rules_configured;
@@ -434,11 +473,18 @@ function runtime_config_status(sections) {
 
     let index_value = 1;
     for (let section in sections) {
-        let outbound = runtime_tag(section_name(section), "out");
+        let name = section_name(section);
+        let outbound = xray_primary
+            ? xray_constants.outbound_tag(name)
+            : runtime_tag(name, "out");
         let port = rule_port(index_value);
         if (!has_socks_outbound(config, outbound, BYEDPI_LISTEN_ADDRESS, port))
             outbounds_configured = false;
-        if (!has_route_rule(config, SB_TPROXY_INBOUND_TAG, outbound))
+        if (xray_primary) {
+            if (!has_xray_tproxy_rule(config, outbound))
+                routes_configured = false;
+        }
+        else if (!has_route_rule(config, SB_TPROXY_INBOUND_TAG, outbound))
             routes_configured = false;
         index_value++;
     }

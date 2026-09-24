@@ -33,10 +33,6 @@ function decode(value) {
 
     for (let i = 0; i < length(value); i++) {
         let c = substr(value, i, 1);
-        if (c == "+") {
-            result += " ";
-            continue;
-        }
         if (c == "%") {
             let high = i + 1 < length(value) ? hex_digit_value(substr(value, i + 1, 1)) : -1;
             let low = i + 2 < length(value) ? hex_digit_value(substr(value, i + 2, 1)) : -1;

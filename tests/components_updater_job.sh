@@ -92,8 +92,12 @@ grep -Fq 'component_action_async: [ "components/updates.uc", "component-action-a
   fail "service/cli.uc must dispatch component_action_async through components/updates.uc"
 grep -Fq 'component_action_status: [ "components/updates.uc", "component-action-status", 1 ]' "$CLI_UC" ||
   fail "service/cli.uc must dispatch component_action_status through components/updates.uc"
-grep -Fq 'require("core.uci")' "$ACTION_UC" ||
-  fail "components/action.uc must use core.uci for component UCI mutations"
+grep -Fq 'function action_needs_exclusive_lock' "$ACTION_UC" ||
+  fail "list_versions/check_update must not take the exclusive component lock"
+grep -Fq 'action_needs_exclusive_lock(action) && !acquire_component_lock()' "$ACTION_UC" ||
+  fail "only install/remove component actions may acquire the exclusive lock"
+grep -Fq 'curl_proxy_spec' "$ACTION_UC" ||
+  fail "component curl must pass socks5h:// as-is, not prefix http://"
 if grep -n -E 'require\("uci"\)\.cursor|uci -q|uci", "-q"|command_exists\("uci"\)' "$ACTION_UC" >/dev/null 2>&1; then
   fail "components/action.uc must not own direct UCI cursor or CLI calls"
 fi

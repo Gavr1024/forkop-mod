@@ -23,7 +23,7 @@ const LOG_WATCHER_START_DELAY_MS = 5000;
 
 function componentDisplayName(component: string) {
   const names: Record<string, string> = {
-    forkop: 'Forkop',
+    forkop: 'Forkop-Mod',
     sing_box: 'sing-box',
     zapret: 'Zapret',
     zapret2: 'Zapret2',

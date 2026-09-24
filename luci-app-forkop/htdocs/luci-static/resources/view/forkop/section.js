@@ -3161,7 +3161,7 @@ function addDashboardServerFilterOptions(section) {
     form.ListValue,
     "dashboard_filter_mode",
     _("Servers on dashboard"),
-    _("Filter the servers that will be displayed on the dashboard."),
+    _("Filter the servers that will be displayed on the dashboard. Works only with sing-box."),
   );
   urlTestFilterModeChoices().forEach((choice) =>
     o.value(choice.value, choice.label),
@@ -7031,12 +7031,11 @@ function createSectionContent(section) {
     "proxy_core",
     _("Proxy core"),
     _(
-      "Which core handles this section. Xray sections are connected through a local SOCKS sidecar so sing-box keeps FakeIP, DNS and nft routing.",
+      "Which core handles this section. Empty follows Settings → Routing engine. The other core is reached through a local SOCKS sidecar. Neither core is bundled; install from Components.",
     ),
   );
   o.value("sing-box", "sing-box");
   o.value("xray", "Xray");
-  o.default = "sing-box";
   o.rmempty = true;
   o.modalonly = true;
   o.depends("action", "connection");
@@ -7246,11 +7245,23 @@ function createSectionContent(section) {
   o.rmempty = true;
   o.modalonly = true;
   o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
+    if (value == null || value === "") {
       return true;
     }
-
-    const validation = main.validateProxyUrl(value);
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        const result = this.validate(_section_id, value[i]);
+        if (result !== true) {
+          return result;
+        }
+      }
+      return true;
+    }
+    const text = `${value}`.trim();
+    if (!text) {
+      return true;
+    }
+    const validation = main.validateProxyUrl(text);
     return validation.valid ? true : validation.message;
   };
   o.onchange = function (_event, section_id) {
@@ -7364,7 +7375,25 @@ function createSectionContent(section) {
   };
   o.validateItemsOnSave = validateOutboundJsonItemsBeforeSave;
   o.validate = function (_section_id, value) {
-    if (!value || value.length === 0) {
+    if (value == null || value === "") {
+      return true;
+    }
+    if (Array.isArray(value)) {
+      const tags = [];
+      for (let i = 0; i < value.length; i++) {
+        const item = value[i];
+        if (item == null || item === "") {
+          continue;
+        }
+        const validation = main.validateOutboundJson(item, tags);
+        if (!validation.valid) {
+          return validation.message;
+        }
+        const parsedTag = outboundJsonDisplayTag(item);
+        if (parsedTag) {
+          tags.push(parsedTag);
+        }
+      }
       return true;
     }
 
@@ -7438,7 +7467,7 @@ function createSectionContent(section) {
     ButtonAddSettingsDynamicList,
     "priority_group",
     _("Priority"),
-    _("Server group for priority failover"),
+    _("Server group for priority failover. Works only with sing-box."),
   );
   o.depends("action", "connection");
   o.rmempty = true;
@@ -7553,7 +7582,7 @@ function createSectionContent(section) {
     form.Flag,
     "mixed_proxy_enabled",
     _("Enable Mixed Proxy"),
-    _("Expose this section as a local HTTP+SOCKS proxy"),
+    _("Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."),
   );
   o.default = "0";
   o.rmempty = false;
@@ -7682,7 +7711,7 @@ function createSectionContent(section) {
     "resolve_real_ip_for_routing",
     _("Resolve real IP for routing"),
     _(
-      "Resolve domain names before routing so sing-box can use real destination IPs.",
+      "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box.",
     ),
   );
   o.default = "0";
@@ -7700,6 +7729,63 @@ function createSectionContent(section) {
     }
 
     return getRuleResolvedAction(section_id) === "byedpi" ? "1" : "0";
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Flag,
+    "xray_finalmask",
+    _("FinalMask"),
+    _(
+      "Split the TLS handshake toward servers in this section. The server does not need the same setting. Works only with Xray.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends("action", "connection");
+  o.depends("action", "proxy");
+  o.depends("action", "outbound");
+  o.depends("action", "vpn");
+  o.modalonly = true;
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "xray_finalmask_length",
+    _("FinalMask length"),
+    _("Byte size of each piece, for example 100-200. Works only with Xray."),
+  );
+  o.default = "100-200";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 100-200");
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "xray_finalmask_interval",
+    _("FinalMask interval"),
+    _("Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."),
+  );
+  o.default = "10-20";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 10-20");
   };
 
   addTextConditionField(section, {

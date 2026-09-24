@@ -10,12 +10,17 @@ const STATE_FILE = getenv("FORKOP_SLOTS_STATE") || SLOTS_DIR + "/state.json";
 const SERVICE_INIT = getenv("FORKOP_SERVICE_INIT") || "/etc/init.d/forkop";
 const BIN_PATH = getenv("FORKOP_BIN") || "/usr/bin/forkop";
 const CRON_MARKER = "# forkop-slot-probe";
+const WORKER_PID_FILE = getenv("FORKOP_SLOT_PROBE_PID") || "/var/run/forkop/slot-probe.pid";
+const RUNTIME_STATE_DIR = getenv("FORKOP_RUNTIME_STATE_DIR") || "/var/run/forkop";
+const START_BUSY_FILE = getenv("FORKOP_START_BUSY") || (RUNTIME_STATE_DIR + "/start.busy");
+const STOP_BUSY_FILE = getenv("FORKOP_STOP_BUSY") || (RUNTIME_STATE_DIR + "/stop.busy");
 const CONTROL_KEYS = [
     "slots_auto_switch",
     "slots_ping_host",
     "slots_ping_host_backup",
     "slots_check_interval",
     "slots_fail_count",
+    "slots_probe_backend",
     "slots_active"
 ];
 
@@ -73,6 +78,10 @@ function command_success(command) {
 
 function command_success_from_args(args) {
     return command_success(command_from_args(args));
+}
+
+function command_status(command) {
+    return int(system(as_string(command)));
 }
 
 function log_message(message, level) {
@@ -303,17 +312,33 @@ function forkop_service_running() {
     return command_success_from_args([ SERVICE_INIT, "running" ]);
 }
 
+function start_is_busy() {
+    return file_size(START_BUSY_FILE) > 0;
+}
+
+function stop_is_busy() {
+    return file_size(STOP_BUSY_FILE) > 0;
+}
+
 function restart_after_apply(mode) {
     mode = trim_string(mode);
     if (mode == "none")
         return true;
-    if (mode == "reload" && forkop_service_running())
-        return command_success_from_args([ SERVICE_INIT, "reload" ]);
-    if (mode == "start")
-        return command_success_from_args([ SERVICE_INIT, "start" ]);
-    if (forkop_service_running())
-        return command_success_from_args([ SERVICE_INIT, "reload" ]);
-    return command_success_from_args([ SERVICE_INIT, "start" ]);
+    if (stop_is_busy()) {
+        log_message("slot restart skipped because Forkop is stopping", "info");
+        return true;
+    }
+    if (start_is_busy()) {
+        log_message("slot change saved; Forkop restart waits until the current start finishes", "info");
+        return true;
+    }
+    let action = "reload";
+    if (mode == "start" || !forkop_service_running())
+        action = "start";
+    log_message("requesting Forkop " + action + " in background after slot change", "info");
+    // Do not block LuCI / slot_apply: Xray reload can take over a minute.
+    // FORKOP_SLOT_RESTART lets a stop already in progress ignore this start.
+    return system("FORKOP_SLOT_RESTART=1 " + command_from_args([ SERVICE_INIT, action ]) + " >/dev/null 2>&1 1000>&- &") == 0;
 }
 
 function apply_slot(name, reason, restart_mode) {
@@ -338,6 +363,7 @@ function apply_slot(name, reason, restart_mode) {
         slots_ping_host_backup: option(snapshot, "slots_ping_host_backup", ""),
         slots_check_interval: option(snapshot, "slots_check_interval", "30"),
         slots_fail_count: option(snapshot, "slots_fail_count", "2"),
+        slots_probe_backend: option(snapshot, "slots_probe_backend", "worker"),
         slots_active: name
     });
 
@@ -356,41 +382,6 @@ function current_active_slot() {
     if (active != "")
         return active;
     return slot_name(as_string(read_state().active));
-}
-
-function prepare_boot_slot() {
-    let settings = settings_section();
-    let enabled = bool_option(settings, "slots_auto_switch", false);
-    sync_cron(enabled);
-    if (!enabled)
-        return true;
-
-    let hosts = collect_hosts(settings);
-    let ping = ping_hosts(hosts);
-    let wanted = ping.ok ? "online" : "offline";
-    let state = read_state();
-    state.last_check = now_seconds();
-    state.last_ok = ping.ok ? true : false;
-    state.hosts = ping.results;
-    state.host = length(hosts) > 0 ? hosts[0] : "";
-    state.backup_host = length(hosts) > 1 ? hosts[1] : "";
-    if (ping.ok) {
-        state.streak_ok = int_option(settings, "slots_fail_count", 2);
-        state.streak_fail = 0;
-    }
-    else {
-        state.streak_fail = int_option(settings, "slots_fail_count", 2);
-        state.streak_ok = 0;
-    }
-    write_state(state);
-
-    if (file_size(slot_path(wanted)) <= 0) {
-        log_message("boot ping wants slot " + wanted + ", but it is empty", "warn");
-        return true;
-    }
-    if (wanted == current_active_slot())
-        return true;
-    return apply_slot(wanted, ping.ok ? "boot: host reachable" : "boot: all hosts unreachable", "none");
 }
 
 function try_fallback_slot() {
@@ -425,6 +416,251 @@ function write_crontab(text) {
     let ok = command_success_from_args([ "crontab", tmp ]);
     try { fs.unlink(tmp); } catch (e) { }
     return ok;
+}
+
+function probe_backend() {
+    let value = trim_string(option(settings_section(), "slots_probe_backend", "worker"));
+    if (value == "cron")
+        return "cron";
+    return "worker";
+}
+
+function worker_pid() {
+    let data = null;
+    try { data = fs.readfile(WORKER_PID_FILE); } catch (e) { data = null; }
+    let pid = trim_string(as_string(data));
+    let newline = index(pid, "\n");
+    if (newline >= 0)
+        pid = trim_string(substr(pid, 0, newline));
+    return pid;
+}
+
+function worker_pid_running(pid) {
+    pid = trim_string(pid);
+    return match(pid, /^[0-9]+$/) != null && command_success_from_args([ "kill", "-0", pid ]);
+}
+
+function stop_worker() {
+    let pid = worker_pid();
+    if (worker_pid_running(pid)) {
+        command_success_from_args([ "kill", pid ]);
+        command_success_from_args([ "kill", "-9", pid ]);
+    }
+    try { fs.unlink(WORKER_PID_FILE); } catch (e) { }
+    return true;
+}
+
+function start_worker() {
+    stop_worker();
+    let settings = settings_section();
+    if (!bool_option(settings, "slots_auto_switch", false))
+        return true;
+    if (probe_backend() != "worker")
+        return true;
+    if (!ensure_dir(RUNTIME_STATE_DIR)) {
+        log_message("failed to create runtime dir for slot worker", "warn");
+        return false;
+    }
+    let lib_dir = getenv("FORKOP_LIB") || "/usr/lib/forkop";
+    let inner = command_from_args([
+        "ucode", "-L", lib_dir, lib_dir + "/config/slots.uc", "probe-worker"
+    ]);
+    log_message("Starting slot probe worker", "info");
+    // setsid and close procd lock fd 1000. A worker that inherits that fd
+    // holds the service lock, so /etc/init.d/forkop stop waits forever.
+    return command_success(
+        "setsid " + inner + " </dev/null >/dev/null 2>&1 1000>&- & echo $! > " + shell_quote(WORKER_PID_FILE)
+    );
+}
+
+function sync_cron(enabled) {
+    let lines = [];
+    for (let line in split(read_crontab(), "\n")) {
+        if (trim_string(line) == "")
+            continue;
+        if (index(line, CRON_MARKER) >= 0)
+            continue;
+        push(lines, line);
+    }
+    if (enabled)
+        push(lines, cron_line());
+    return write_crontab(join("\n", lines) + "\n");
+}
+
+function sync_scheduler() {
+    let enabled = bool_option(settings_section(), "slots_auto_switch", false);
+    let backend = probe_backend();
+    let cron_ok = true;
+    if (!enabled || backend != "cron")
+        cron_ok = sync_cron(false);
+    else
+        cron_ok = sync_cron(true);
+    if (!cron_ok)
+        log_message("failed to update the slot probe cron job", "warn");
+    if (enabled && backend == "worker")
+        start_worker();
+    else
+        stop_worker();
+    return true;
+}
+
+function sync_cron_only() {
+    let enabled = bool_option(settings_section(), "slots_auto_switch", false);
+    let backend = probe_backend();
+    let cron_ok = sync_cron(enabled && backend == "cron");
+    if (!cron_ok)
+        log_message("failed to update the slot probe cron job", "warn");
+    return true;
+}
+
+function prepare_boot_slot() {
+    let settings = settings_section();
+    let enabled = bool_option(settings, "slots_auto_switch", false);
+    if (!enabled)
+        return true;
+
+    let hosts = collect_hosts(settings);
+    let ping = ping_hosts(hosts);
+    let wanted = ping.ok ? "online" : "offline";
+    let state = read_state();
+    state.last_check = now_seconds();
+    state.last_ok = ping.ok ? true : false;
+    state.hosts = ping.results;
+    state.host = length(hosts) > 0 ? hosts[0] : "";
+    state.backup_host = length(hosts) > 1 ? hosts[1] : "";
+    if (ping.ok) {
+        state.streak_ok = int_option(settings, "slots_fail_count", 2);
+        state.streak_fail = 0;
+    }
+    else {
+        state.streak_fail = int_option(settings, "slots_fail_count", 2);
+        state.streak_ok = 0;
+    }
+    write_state(state);
+
+    if (file_size(slot_path(wanted)) <= 0) {
+        log_message("boot ping wants slot " + wanted + ", but it is empty", "warn");
+        return true;
+    }
+    if (wanted == current_active_slot())
+        return true;
+    return apply_slot(wanted, ping.ok ? "boot: host reachable" : "boot: all hosts unreachable", "none");
+}
+
+function self_pid() {
+    let stat = "";
+    try { stat = trim_string(as_string(fs.readfile("/proc/self/stat"))); } catch (e) { stat = ""; }
+    let fields = split(stat, " ");
+    if (length(fields) > 0 && match(fields[0], /^[0-9]+$/) != null)
+        return fields[0];
+    return "";
+}
+
+function probe(force, values) {
+    if (start_is_busy() || stop_is_busy()) {
+        log_message("slot probe skipped because Forkop is still starting or stopping", "info");
+        return true;
+    }
+    let settings = settings_section();
+    if (!bool_option(settings, "slots_auto_switch", false) && !force)
+        return true;
+
+    let hosts = hosts_from_values(values, settings);
+    let need = int_option(settings, "slots_fail_count", 2);
+    let ping = ping_hosts(hosts);
+    let ok = ping.ok ? true : false;
+    let state = read_state();
+    state.last_check = now_seconds();
+    state.host = length(hosts) > 0 ? hosts[0] : "";
+    state.backup_host = length(hosts) > 1 ? hosts[1] : "";
+    state.hosts = ping.results;
+    state.last_ok = ok;
+
+    if (ok) {
+        state.streak_ok = int(state.streak_ok) + 1;
+        state.streak_fail = 0;
+    }
+    else {
+        state.streak_fail = int(state.streak_fail) + 1;
+        state.streak_ok = 0;
+    }
+    write_state(state);
+
+    let wanted = ok ? "online" : "offline";
+    let ready = ok ? int(state.streak_ok) >= need : int(state.streak_fail) >= need;
+    let active = option(settings, "slots_active", as_string(state.active));
+    if (!ready || wanted == active)
+        return true;
+    if (file_size(slot_path(wanted)) <= 0) {
+        log_message("ping wants slot " + wanted + ", but it is empty", "warn");
+        return true;
+    }
+    return apply_slot(wanted, ok ? "at least one host reachable" : "all hosts unreachable", "");
+}
+
+function probe_if_due() {
+    let settings = settings_section();
+    if (!bool_option(settings, "slots_auto_switch", false)) {
+        stop_worker();
+        sync_cron(false);
+        return true;
+    }
+    if (probe_backend() == "cron")
+        sync_cron(true);
+    else
+        sync_cron(false);
+    let interval = int_option(settings, "slots_check_interval", 30);
+    let state = read_state();
+    if (int(state.last_check) > 0 && now_seconds() - int(state.last_check) < interval)
+        return true;
+    return probe(false);
+}
+
+function worker_wait(seconds) {
+    let left = int(seconds);
+    if (left < 1)
+        left = 1;
+    while (left > 0) {
+        if (stop_is_busy() || start_is_busy())
+            return false;
+        let settings = settings_section();
+        if (!bool_option(settings, "slots_auto_switch", false) || probe_backend() != "worker")
+            return false;
+        system("sleep 1");
+        left--;
+    }
+    return true;
+}
+
+function probe_worker() {
+    let pid = self_pid();
+    if (pid != "") {
+        try { fs.writefile(WORKER_PID_FILE, pid + "\n"); } catch (e) { }
+    }
+    log_message("Slot probe worker is running", "info");
+    let first = true;
+    while (1) {
+        let settings = settings_section();
+        if (!bool_option(settings, "slots_auto_switch", false) || probe_backend() != "worker")
+            return 0;
+        let wait_seconds = int_option(settings, "slots_check_interval", 30);
+        if (wait_seconds < 10)
+            wait_seconds = 10;
+        if (!worker_wait(wait_seconds))
+            return 0;
+        if (first) {
+            first = false;
+            continue;
+        }
+        if (stop_is_busy() || start_is_busy())
+            return 0;
+        try {
+            probe_if_due();
+        }
+        catch (e) {
+            log_message("worker: " + e, "warn");
+        }
+    }
 }
 
 function option_line(key, value) {
@@ -503,13 +739,14 @@ function patch_config_file(path, options) {
     return write_text_file(path, upsert_settings_options(text, options));
 }
 
-function switch_options_from_values(enabled, host, backup_host, interval, fail_count) {
+function switch_options_from_values(enabled, host, backup_host, interval, fail_count, scheduler) {
     return {
         slots_auto_switch: enabled ? "1" : "0",
         slots_ping_host: host,
         slots_ping_host_backup: backup_host,
         slots_check_interval: "" + interval,
-        slots_fail_count: "" + fail_count
+        slots_fail_count: "" + fail_count,
+        slots_probe_backend: scheduler == "cron" ? "cron" : "worker"
     };
 }
 
@@ -529,20 +766,6 @@ function sync_switch_settings_to_slots(options) {
     return ok;
 }
 
-function sync_cron(enabled) {
-    let lines = [];
-    for (let line in split(read_crontab(), "\n")) {
-        if (trim_string(line) == "")
-            continue;
-        if (index(line, CRON_MARKER) >= 0)
-            continue;
-        push(lines, line);
-    }
-    if (enabled)
-        push(lines, cron_line());
-    return write_crontab(join("\n", lines) + "\n");
-}
-
 function configure(values) {
     values = object_or_empty(values);
     let host = normalize_host(values.host != null ? values.host : values.slots_ping_host, "1.1.1.1");
@@ -550,6 +773,11 @@ function configure(values) {
     let interval = int(values.interval != null ? values.interval : values.slots_check_interval);
     let fail_count = int(values.fail_count != null ? values.fail_count : values.slots_fail_count);
     let enabled = bool_option(values, "enabled", bool_option(values, "slots_auto_switch", false));
+    let scheduler = trim_string(values.scheduler != null ? values.scheduler : values.slots_probe_backend);
+    if (scheduler == "")
+        scheduler = probe_backend();
+    if (scheduler != "cron")
+        scheduler = "worker";
 
     if (interval < 10)
         interval = 10;
@@ -561,64 +789,18 @@ function configure(values) {
     uci_core.set(CONFIG_NAME + ".settings.slots_ping_host_backup", backup_host);
     uci_core.set(CONFIG_NAME + ".settings.slots_check_interval", "" + interval);
     uci_core.set(CONFIG_NAME + ".settings.slots_fail_count", "" + fail_count);
+    uci_core.set(CONFIG_NAME + ".settings.slots_probe_backend", scheduler);
     uci_core.commit(CONFIG_NAME);
-    let options = switch_options_from_values(enabled, host, backup_host, interval, fail_count);
+    let options = switch_options_from_values(enabled, host, backup_host, interval, fail_count, scheduler);
     if (!sync_switch_settings_to_slots(options))
         log_message("live config saved, but some slot files were not updated", "warn");
-    sync_cron(enabled);
+    try {
+        sync_scheduler();
+    }
+    catch (e) {
+        log_message("scheduler: " + e, "warn");
+    }
     return true;
-}
-
-function probe(force, values) {
-    let settings = settings_section();
-    if (!bool_option(settings, "slots_auto_switch", false) && !force)
-        return true;
-
-    let hosts = hosts_from_values(values, settings);
-    let need = int_option(settings, "slots_fail_count", 2);
-    let ping = ping_hosts(hosts);
-    let ok = ping.ok ? true : false;
-    let state = read_state();
-    state.last_check = now_seconds();
-    state.host = length(hosts) > 0 ? hosts[0] : "";
-    state.backup_host = length(hosts) > 1 ? hosts[1] : "";
-    state.hosts = ping.results;
-    state.last_ok = ok;
-
-    if (ok) {
-        state.streak_ok = int(state.streak_ok) + 1;
-        state.streak_fail = 0;
-    }
-    else {
-        state.streak_fail = int(state.streak_fail) + 1;
-        state.streak_ok = 0;
-    }
-    write_state(state);
-
-    let wanted = ok ? "online" : "offline";
-    let ready = ok ? int(state.streak_ok) >= need : int(state.streak_fail) >= need;
-    let active = option(settings, "slots_active", as_string(state.active));
-    if (!ready || wanted == active)
-        return true;
-    if (file_size(slot_path(wanted)) <= 0) {
-        log_message("ping wants slot " + wanted + ", but it is empty", "warn");
-        return true;
-    }
-    return apply_slot(wanted, ok ? "at least one host reachable" : "all hosts unreachable", "");
-}
-
-function probe_if_due() {
-    let settings = settings_section();
-    if (!bool_option(settings, "slots_auto_switch", false)) {
-        sync_cron(false);
-        return true;
-    }
-    sync_cron(true);
-    let interval = int_option(settings, "slots_check_interval", 30);
-    let state = read_state();
-    if (int(state.last_check) > 0 && now_seconds() - int(state.last_check) < interval)
-        return true;
-    return probe(false);
 }
 
 function status_object() {
@@ -631,6 +813,7 @@ function status_object() {
         hosts: type(state.hosts) == "array" ? state.hosts : [],
         interval: int_option(settings, "slots_check_interval", 30),
         fail_count: int_option(settings, "slots_fail_count", 2),
+        scheduler: probe_backend(),
         active: option(settings, "slots_active", as_string(state.active)),
         last_ok: state.last_ok ? true : false,
         last_check: int(state.last_check || 0),
@@ -657,7 +840,7 @@ function parse_configure_args() {
 }
 
 function sync_cron_from_uci() {
-    return sync_cron(bool_option(settings_section(), "slots_auto_switch", false));
+    return sync_scheduler();
 }
 
 function module_exports() {
@@ -666,11 +849,15 @@ function module_exports() {
         apply_slot,
         probe,
         probe_if_due,
+        probe_worker,
         configure,
         status_object,
         print_status_json,
         sync_cron,
         sync_cron_from_uci,
+        sync_scheduler,
+        start_worker,
+        stop_worker,
         prepare_boot_slot,
         try_fallback_slot
     };
@@ -692,8 +879,14 @@ else if (mode == "probe-if-due")
     exit(probe_if_due() ? 0 : 1);
 else if (mode == "configure")
     exit(configure(parse_configure_args()) ? 0 : 1);
-else if (mode == "sync-cron-from-uci")
-    exit(sync_cron_from_uci() ? 0 : 1);
+else if (mode == "sync-cron-from-uci" || mode == "sync-scheduler")
+    exit(sync_scheduler() ? 0 : 1);
+else if (mode == "sync-cron-only")
+    exit(sync_cron_only() ? 0 : 1);
+else if (mode == "stop-worker")
+    exit(stop_worker() ? 0 : 1);
+else if (mode == "probe-worker")
+    exit(probe_worker());
 else if (mode == "prepare-boot-slot")
     exit(prepare_boot_slot() ? 0 : 1);
 else if (mode == "try-fallback-slot")

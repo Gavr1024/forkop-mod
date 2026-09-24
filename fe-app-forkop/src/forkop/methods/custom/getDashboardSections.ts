@@ -1163,10 +1163,13 @@ function buildProxyGroupOutbounds(
         latency: item?.value.history?.[0]?.delay || 0,
         type: priorityConfig
           ? 'Priority'
-          : dashboardClashType(
-              item?.value.type,
-              outboundMetadata?.protocols?.[code],
-            ) || 'URLTest',
+          : protocolWithTransport(
+              dashboardClashType(
+                item?.value.type,
+                outboundMetadata?.protocols?.[code],
+              ) || 'URLTest',
+              item?.value.transport || transportFromShareLink(link),
+            ),
         selected: selector?.value?.now === code,
         link,
         canCopyLink,
@@ -1415,27 +1418,192 @@ function getCachedProxyLinks(dashboardCache?: DashboardSectionCache) {
   );
 }
 
+function normalizeTransport(value?: string) {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (!raw || raw === 'none') {
+    return '';
+  }
+  if (raw === 'raw') {
+    return 'tcp';
+  }
+  if (raw === 'hysteria' || raw === 'hysteria2' || raw === 'hy2') {
+    return 'quic';
+  }
+  return raw;
+}
+
+function protocolWithTransport(protocol: string, transport?: string) {
+  const name = String(protocol || '').trim();
+  const net = normalizeTransport(transport);
+  if (!name || !net) {
+    return name;
+  }
+  const lower = name.toLowerCase();
+  if (
+    lower === 'priority' ||
+    lower === 'urltest' ||
+    lower === 'selector' ||
+    lower === 'direct'
+  ) {
+    return name;
+  }
+  if (lower.includes(net)) {
+    return name;
+  }
+  return `${name} · ${net}`;
+}
+
+function transportFromShareLink(link?: string) {
+  const value = String(link || '');
+  const scheme = value.split(':')[0].toLowerCase();
+  const query = (value.split('?')[1] || '').split('#')[0];
+  const params = new URLSearchParams(query);
+  const explicit =
+    params.get('type') || params.get('net') || params.get('network') || '';
+  if (explicit) {
+    return explicit;
+  }
+  if (scheme === 'hysteria2' || scheme === 'hy2' || scheme === 'hysteria') {
+    return 'quic';
+  }
+  if (
+    scheme === 'vless' ||
+    scheme === 'vmess' ||
+    scheme === 'trojan' ||
+    scheme === 'ss' ||
+    scheme === 'shadowsocks'
+  ) {
+    return 'tcp';
+  }
+  return '';
+}
+
+function clashProtocolType(protocol?: string, kind?: string) {
+  const value = String(protocol || kind || '')
+    .trim()
+    .toLowerCase();
+  if (value === 'hysteria' || value === 'hysteria2' || value === 'hy2') {
+    return 'Hysteria2';
+  }
+  if (value === 'iface' || value === 'freedom' || value === 'interface') {
+    return 'Direct';
+  }
+  if (!value) {
+    return 'VLESS';
+  }
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function mergeXrayNodesIntoClashProxies(
+  proxies: Record<string, ClashAPI.ProxyBase>,
+  configSections: Forkop.ConfigSection[],
+  xrayPayload?: {
+    nodes?: Record<
+      string,
+      Array<{
+        tag?: string;
+        name?: string;
+        protocol?: string;
+        kind?: string;
+        network?: string;
+        delay?: number;
+      }>
+    >;
+    selected?: Record<string, string>;
+  },
+) {
+  const nodes = xrayPayload?.nodes || {};
+  const selected = xrayPayload?.selected || {};
+  const next = { ...proxies };
+
+  configSections
+    .filter(
+      (section) =>
+        section.enabled !== '0' &&
+        isConnectionAction(section.action) &&
+        getSectionProxyCore(section) === 'xray',
+    )
+    .forEach((section) => {
+      const sectionName = section['.name'];
+      const sectionNodes = Array.isArray(nodes[sectionName])
+        ? nodes[sectionName]
+        : [];
+      const tags = sectionNodes
+        .map((node) => String(node.tag || '').trim())
+        .filter(Boolean);
+      if (!tags.length) {
+        return;
+      }
+
+      const selectorTag = getOutboundTagBySection(sectionName);
+      const now =
+        selected[sectionName] && tags.includes(selected[sectionName])
+          ? selected[sectionName]
+          : tags[0];
+
+      tags.forEach((tag) => {
+        const node =
+          sectionNodes.find(
+            (item) => String(item.tag || '').trim() === tag,
+          ) || {};
+        const delay = Number(node.delay || 0);
+        next[tag] = {
+          type: clashProtocolType(node.protocol, node.kind),
+          name: String(node.name || tag),
+          udp: true,
+          transport: normalizeTransport(node.network),
+          history:
+            delay > 0
+              ? [{ time: new Date().toISOString(), delay }]
+              : next[tag]?.history || [],
+          now: undefined,
+          all: undefined,
+        };
+      });
+
+      next[selectorTag] = {
+        type: 'Selector',
+        name: selectorTag,
+        udp: true,
+        history: [],
+        now,
+        all: tags,
+      };
+    });
+
+  return next;
+}
+
 export async function getDashboardSections(
   options: IGetDashboardSectionsOptions = {},
 ): Promise<IGetDashboardSectionsResponse> {
   const includeSubscriptionCopyState =
     options.includeSubscriptionCopyState ?? true;
   const configSections = hydrateConfigSections(await getConfigSections());
-  const clashProxies = await getClashApiProxies(configSections);
+  const [clashProxies, xrayNodes] = await Promise.all([
+    getClashApiProxies(configSections),
+    ForkopShellMethods.getXrayNodes?.() ??
+      Promise.resolve({ success: true, data: { nodes: {}, selected: {} } }),
+  ]);
+  const mergedProxies = mergeXrayNodesIntoClashProxies(
+    clashProxies.success ? clashProxies.data?.proxies || {} : {},
+    configSections,
+    xrayNodes.success ? xrayNodes.data : undefined,
+  );
 
-  if (!clashProxies.success || !clashProxies.data?.proxies) {
+  if (!clashProxies.success && !Object.keys(mergedProxies).length) {
     return {
       success: false,
       data: [],
     };
   }
 
-  const proxies = Object.entries(clashProxies.data.proxies).map(
-    ([key, value]) => ({
-      code: key,
-      value,
-    }),
-  );
+  const proxies = Object.entries(mergedProxies).map(([key, value]) => ({
+    code: key,
+    value,
+  }));
   const data = await Promise.all(
     configSections
       .filter(

@@ -77,8 +77,10 @@ function applyServiceState(uiState: Forkop.UiState) {
     zapret2_installed: uiState.capabilities.zapret2_installed,
     byedpi_installed: uiState.capabilities.byedpi_installed,
     xray_installed: uiState.capabilities.xray_installed,
+    routing_engine: uiState.capabilities.routing_engine || 'sing-box',
     server_inbounds_enabled_count:
       uiState.capabilities.server_inbounds_enabled_count,
+    need_singbox_sidecar: uiState.capabilities.need_singbox_sidecar ? 1 : 0,
   };
 
   nextSystemInfo.sing_box_extended = uiState.capabilities.sing_box_extended;

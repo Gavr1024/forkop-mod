@@ -12,6 +12,7 @@ export namespace ClashAPI {
     history: ProxyHistoryEntry[];
     now?: string;
     all?: string[];
+    transport?: string;
   }
 
   export interface Proxies {
@@ -71,6 +72,12 @@ export namespace Forkop {
     GET_ZAPRET2_STATUS = 'get_zapret2_status',
     GET_BYEDPI_STATUS = 'get_byedpi_status',
     GET_XRAY_STATUS = 'get_xray_status',
+    GET_XRAY_STATS = 'get_xray_stats',
+    GET_XRAY_CONNECTIONS = 'get_xray_connections',
+    GET_XRAY_NODES = 'get_xray_nodes',
+    SET_XRAY_GROUP_PROXY = 'set_xray_group_proxy',
+    XRAY_CLOSE_CONNECTION = 'xray_close_connection',
+    XRAY_CLOSE_ALL_CONNECTIONS = 'xray_close_all_connections',
     CLASH_API = 'clash_api',
     ENABLE = 'enable',
     DISABLE = 'disable',
@@ -405,6 +412,7 @@ export namespace Forkop {
     sing_box_autostart_disabled: 0 | 1;
     sing_box_process_running: 0 | 1;
     sing_box_ports_listening: 0 | 1;
+    sing_box_required?: 0 | 1;
   }
 
   export interface XrayCheckResult {
@@ -460,6 +468,7 @@ export namespace Forkop {
   export interface FakeIPCheckResult {
     fakeip: boolean;
     IP: string;
+    engine?: 'xray' | 'sing-box' | string;
   }
 
   export interface GetStatus {
@@ -481,6 +490,14 @@ export namespace Forkop {
     status: string;
   }
 
+  export interface GetXrayStats {
+    success?: boolean;
+    uplink: number;
+    downlink: number;
+    connections: number;
+    memory: number;
+  }
+
   export interface GetSystemInfo {
     forkop_version: string;
     forkop_latest_version: string;
@@ -498,6 +515,7 @@ export namespace Forkop {
     byedpi_installed: 0 | 1;
     xray_version: string;
     xray_installed: 0 | 1;
+    routing_engine?: 'sing-box' | 'xray' | string;
     openwrt_version: string;
     device_model: string;
     generated_at?: number;
@@ -518,7 +536,9 @@ export namespace Forkop {
     zapret2_installed: 0 | 1;
     byedpi_installed: 0 | 1;
     xray_installed: 0 | 1;
+    routing_engine?: 'sing-box' | 'xray' | string;
     server_inbounds_enabled_count: number;
+    need_singbox_sidecar?: 0 | 1;
   }
 
   export type ServiceAction = 'start' | 'stop' | 'restart' | 'reload';
@@ -600,6 +620,7 @@ export namespace Forkop {
     latest_version: string;
     release_url?: string;
     available_versions?: string[];
+    prerelease_versions?: string[];
     changed: boolean;
     status?: 'latest' | 'outdated' | 'dev' | '';
     pid?: string | null;

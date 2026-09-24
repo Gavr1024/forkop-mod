@@ -1367,8 +1367,14 @@ function render_global_sing_box_check() {
 
     render_flag_line(value, "sing_box_service_exist", "\u2705 Sing-box service exist", "\u274c Sing-box service exist");
     render_flag_line(value, "sing_box_autostart_disabled", "\u2705 Sing-box autostart disabled", "\u274c Sing-box autostart disabled");
-    render_flag_line(value, "sing_box_process_running", "\u2705 Sing-box process running", "\u274c Sing-box process running");
-    render_flag_line(value, "sing_box_ports_listening", "\u2705 Sing-box listening ports", "\u274c Sing-box listening ports");
+    if (as_string(value.sing_box_required) == "0") {
+        print_line("\u2705 Sing-box sidecar not used");
+        print_line("\u2705 Sing-box ports not required");
+    }
+    else {
+        render_flag_line(value, "sing_box_process_running", "\u2705 Sing-box process running", "\u274c Sing-box process running");
+        render_flag_line(value, "sing_box_ports_listening", "\u2705 Sing-box listening ports", "\u274c Sing-box listening ports");
+    }
 }
 
 function render_global_xray_check() {
@@ -1420,9 +1426,13 @@ function render_global_fakeip_check() {
     let fakeip_address = object_value(value, "IP");
 
     if (flag_is_true(value.fakeip))
-        print_line("\u2705 Sing-box FakeIP DNS works: " + fakeip_address);
+        print_line(as_string(value.engine) == "xray"
+            ? "\u2705 Xray FakeDNS works: " + fakeip_address
+            : "\u2705 Sing-box FakeIP DNS works: " + fakeip_address);
     else
-        print_line("\u274c Sing-box FakeIP DNS does NOT work");
+        print_line(as_string(value.engine) == "xray"
+            ? "\u274c Xray FakeDNS does NOT work"
+            : "\u274c Sing-box FakeIP DNS does NOT work");
 }
 
 function render_global_dns_check(dont_touch_dhcp) {

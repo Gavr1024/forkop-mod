@@ -8,6 +8,7 @@ let connections = require("config.connections");
 let zapret_validator = require("providers.zapret.validator");
 let zapret2_validator = require("providers.zapret2.validator");
 let byedpi_validator = require("providers.byedpi.validator");
+let engine = require("core.engine");
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
 const DEFAULT_PENDING_RELOAD_FILE = getenv("FORKOP_PENDING_RELOAD_FILE") || "/var/run/forkop/reload.pending";
@@ -593,14 +594,98 @@ function sing_box_runtime_ports_ready() {
     );
 }
 
+function xray_process_detected() {
+    return command_success_from_args([ "pidof", "xray" ]) ||
+        command_success_from_args([ "pidof", "Xray" ]);
+}
+
+function listen_table_text() {
+    let table = command_output_from_args([ "netstat", "-ln" ]);
+    if (trim(as_string(table)) != "")
+        return as_string(table);
+
+    // command_output() is not defined in this file; ucode would throw
+    // "left-hand side is not a function" if netstat returned empty.
+    let pipe = fs.popen("ss -lntu 2>/dev/null", "r");
+    if (!pipe)
+        return "";
+    let data = pipe.read("all");
+    pipe.close();
+    return data == null ? "" : as_string(data);
+}
+
+function xray_dns_listening(table) {
+    return index(as_string(table), SB_DNS_INBOUND_ADDRESS + ":53") >= 0;
+}
+
+function xray_tproxy_listening(table) {
+    let suffix = ":" + SB_TPROXY_INBOUND_PORT;
+    table = as_string(table);
+    return index(table, "0.0.0.0" + suffix) >= 0 ||
+        index(table, "127.0.0.1" + suffix) >= 0 ||
+        index(table, suffix + " ") >= 0;
+}
+
+function plane_ports_ready() {
+    if (!engine.is_xray_primary())
+        return sing_box_runtime_ports_ready();
+
+    // Xray owns TPROXY/DNS. Do not wait for IPv6 tproxy (::1:1602) — many
+    // routers have IPv6 disabled and that used to abort an otherwise healthy start.
+    let table = listen_table_text();
+    if (trim(table) == "")
+        return false;
+    return xray_dns_listening(table) && xray_tproxy_listening(table);
+}
+
 function forkop_running(rt_table, nft_table, mark) {
-    return sing_box_service_running() && sing_box_runtime_ports_ready() &&
-        forkop_runtime_network_configured(rt_table, nft_table, mark);
+    if (engine.need_singbox()) {
+        if (!sing_box_service_running())
+            return false;
+    }
+    if (!plane_ports_ready() ||
+        !forkop_runtime_network_configured(rt_table, nft_table, mark))
+        return false;
+    if (engine.is_xray_primary() && !xray_process_detected())
+        return false;
+    return true;
 }
 
 function forkop_stably_running(rt_table, nft_table, mark, min_age) {
-    return sing_box_service_stable(min_age) && sing_box_runtime_ports_ready() &&
-        forkop_runtime_network_configured(rt_table, nft_table, mark);
+    if (engine.need_singbox()) {
+        if (!sing_box_service_stable(min_age))
+            return false;
+    }
+    if (!plane_ports_ready() ||
+        !forkop_runtime_network_configured(rt_table, nft_table, mark))
+        return false;
+    if (engine.is_xray_primary() && !xray_process_detected())
+        return false;
+    return true;
+}
+
+function wait_forkop_stable_reason(rt_table, nft_table, mark, min_age) {
+    let parts = [];
+    if (engine.need_singbox() && !sing_box_service_stable(min_age))
+        push(parts, "sing-box is not stable");
+    if (engine.is_xray_primary() && !xray_process_detected())
+        push(parts, "xray process not running");
+    if (!plane_ports_ready()) {
+        if (engine.is_xray_primary()) {
+            let table = listen_table_text();
+            if (!xray_dns_listening(table))
+                push(parts, "DNS " + SB_DNS_INBOUND_ADDRESS + ":53 not listening");
+            if (!xray_tproxy_listening(table))
+                push(parts, "TPROXY :" + SB_TPROXY_INBOUND_PORT + " not listening");
+        }
+        else
+            push(parts, "sing-box DNS/TPROXY not listening");
+    }
+    if (!forkop_runtime_network_configured(rt_table, nft_table, mark))
+        push(parts, "nftables or TPROXY route missing");
+    if (length(parts) == 0)
+        return "unknown";
+    return join("; ", parts);
 }
 
 function wait_forkop_stable_start(rt_table, nft_table, mark, min_age, timeout) {
@@ -613,7 +698,16 @@ function wait_forkop_stable_start(rt_table, nft_table, mark, min_age, timeout) {
         timeout--;
     }
 
-    return forkop_stably_running(rt_table, nft_table, mark, min_age);
+    if (forkop_stably_running(rt_table, nft_table, mark, min_age))
+        return true;
+
+    command_success_from_args([
+        "logger",
+        "-t",
+        "forkop",
+        "[warn] Routing plane is not stable: " + wait_forkop_stable_reason(rt_table, nft_table, mark, min_age)
+    ]);
+    return false;
 }
 
 function whitespace_fields(value) {
@@ -1269,6 +1363,11 @@ function append_sing_box_rule_signature_body(body, section, sections) {
         body = signature_add_outbound_detour_body(body, section, prefix);
         body = signature_add_mixed_proxy_body(body, section, prefix);
         body = signature_add_value(body, prefix + ".resolve_real_ip_for_routing", bool_option_value(section, "resolve_real_ip_for_routing", false));
+        body = signature_add_value(body, prefix + ".xray_finalmask", bool_option_value(section, "xray_finalmask", false));
+        if (bool_option(section, "xray_finalmask", false)) {
+            body = signature_add_value(body, prefix + ".xray_finalmask_length", option(section, "xray_finalmask_length", "100-200"));
+            body = signature_add_value(body, prefix + ".xray_finalmask_interval", option(section, "xray_finalmask_interval", "10-20"));
+        }
     }
     else if (action == "byedpi") {
         body = signature_add_value(body, prefix + ".byedpi_index", sing_box_signature_enabled_action_index(sections, name, "byedpi"));
@@ -1423,7 +1522,7 @@ function sing_box_signature_body(settings, sections, servers, mwan3_active) {
 
     body = signature_add_value(body, "settings.download_lists_via_proxy", bool_option_value(settings, "download_lists_via_proxy", false));
     body = signature_add_value(body, "settings.download_components_via_proxy", bool_option_value(settings, "download_components_via_proxy", false));
-    body = signature_add_value(body, "settings.persist_lists_locally", bool_option_value(settings, "persist_lists_locally", false));
+    body = signature_add_value(body, "settings.persist_lists_locally", bool_option_value(settings, "persist_lists_locally", true));
     if (download_via_proxy_enabled(settings, "lists"))
         body = signature_add_value(body, "settings.download_lists_via_proxy_section", option(settings, "download_lists_via_proxy_section", ""));
     if (download_via_proxy_enabled(settings, "components"))
@@ -1431,6 +1530,11 @@ function sing_box_signature_body(settings, sections, servers, mwan3_active) {
     body = signature_add_value(body, "settings.route_router_traffic", bool_option_value(settings, "route_router_traffic", false));
     if (bool_option(settings, "route_router_traffic", false))
         body = signature_add_value(body, "settings.route_router_traffic_section", option(settings, "route_router_traffic_section", ""));
+    body = signature_add_value(body, "settings.xray_freedom_fragment", bool_option_value(settings, "xray_freedom_fragment", false));
+    if (bool_option(settings, "xray_freedom_fragment", false)) {
+        body = signature_add_value(body, "settings.xray_freedom_fragment_length", option(settings, "xray_freedom_fragment_length", "100-200"));
+        body = signature_add_value(body, "settings.xray_freedom_fragment_interval", option(settings, "xray_freedom_fragment_interval", "10-20"));
+    }
 
     for (let section in sections)
         body = append_sing_box_rule_signature_body(body, object_or_empty(section), sections);

@@ -98,6 +98,7 @@ export const initialDiagnosticStore: Pick<
     byedpi_installed: 0,
     xray_version: 'loading',
     xray_installed: 0,
+    routing_engine: 'sing-box',
     server_inbounds_enabled_count: -1,
     openwrt_version: 'loading',
     device_model: 'loading',

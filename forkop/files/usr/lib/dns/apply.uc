@@ -6,6 +6,8 @@ let uci = require("core.uci");
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const SB_DNS_INBOUND_ADDRESS = getenv("SB_DNS_INBOUND_ADDRESS") || "127.0.0.42";
 const DNSMASQ_INIT = getenv("DNSMASQ_INIT") || "/etc/init.d/dnsmasq";
+const HTTPS_FILTER_CONF = getenv("FORKOP_DNSMASQ_HTTPS_CONF") || "/tmp/dnsmasq.d/forkop-filter-rr.conf";
+const XRAY_NFTSET_CONF = getenv("FORKOP_DNSMASQ_NFTSET_CONF") || "/tmp/dnsmasq.d/forkop-xray-nftset.conf";
 
 function as_string(value) {
     return value == null ? "" : "" + value;
@@ -73,6 +75,57 @@ function log(message, level) {
     run("logger -t " + shell_quote("forkop") + " " + shell_quote("[" + level + "] " + as_string(message)));
 }
 
+function file_exists(path) {
+    return fs.stat(as_string(path)) != null;
+}
+
+function ensure_parent_dir(path) {
+    path = as_string(path);
+    let slash = rindex(path, "/");
+    if (slash <= 0)
+        return true;
+    let parent = substr(path, 0, slash);
+    if (parent == "" || fs.stat(parent) != null)
+        return true;
+    return run("mkdir -p " + shell_quote(parent));
+}
+
+function dnsmasq_supports_filter_rr() {
+    let forced = as_string(getenv("FORKOP_DNSMASQ_FILTER_RR") || "");
+    if (forced == "1")
+        return true;
+    if (forced == "0")
+        return false;
+    return run("dnsmasq --help 2>&1 | grep -q filter-rr");
+}
+
+function https_filter_conf_body() {
+    let body = "address=/use-application-dns.net/127.0.0.1\n";
+    if (dnsmasq_supports_filter_rr())
+        body += "filter-rr=HTTPS\nfilter-rr=SVCB\n";
+    return body;
+}
+
+function write_https_filter_conf() {
+    let path = HTTPS_FILTER_CONF;
+    if (!ensure_parent_dir(path))
+        return false;
+    return fs.writefile(path, https_filter_conf_body()) != null;
+}
+
+function remove_https_filter_conf() {
+    try {
+        fs.unlink(HTTPS_FILTER_CONF);
+    }
+    catch (e) {
+    }
+    try {
+        fs.unlink(XRAY_NFTSET_CONF);
+    }
+    catch (e2) {
+    }
+}
+
 function restart_dnsmasq() {
     return run("[ -x " + shell_quote(DNSMASQ_INIT) + " ] && " + shell_quote(DNSMASQ_INIT) + " restart");
 }
@@ -98,6 +151,7 @@ function dnsmasq_has_forkop_managed_state() {
         uci_get("dhcp.@dnsmasq[0].forkop_noresolv") != "" ||
         uci_get("dhcp.@dnsmasq[0].forkop_cachesize") != "" ||
         uci_get("dhcp.@dnsmasq[0].forkop_notinterface") != "" ||
+        file_exists(HTTPS_FILTER_CONF) ||
         dnsmasq_legacy_instance_exists();
 }
 
@@ -109,6 +163,7 @@ function dnsmasq_default_config_is_complete() {
     return dnsmasq_default_has_forkop_dns() &&
         uci_get("dhcp.@dnsmasq[0].noresolv") == "1" &&
         uci_get("dhcp.@dnsmasq[0].cachesize") == "0" &&
+        file_exists(HTTPS_FILTER_CONF) &&
         !dnsmasq_legacy_instance_exists();
 }
 
@@ -192,6 +247,7 @@ function dnsmasq_configure_default_instance() {
     uci_add_list("dhcp.@dnsmasq[0].server", SB_DNS_INBOUND_ADDRESS);
     uci_set("dhcp.@dnsmasq[0].noresolv", "1");
     uci_set("dhcp.@dnsmasq[0].cachesize", "0");
+    write_https_filter_conf();
 }
 
 function dnsmasq_restore_default_instance() {
@@ -224,6 +280,7 @@ function dnsmasq_restore_default_instance() {
         restore_dnsmasq_config_option("cachesize", "forkop_cachesize", "");
     else if (managed_global_dns)
         uci_set("dhcp.@dnsmasq[0].cachesize", "150");
+    remove_https_filter_conf();
 }
 
 function dnsmasq_configure(force) {
@@ -238,7 +295,7 @@ function dnsmasq_configure(force) {
         log("Previous Forkop shutdown was unclean and dnsmasq is not ready; applying Forkop DNS settings", "info");
     }
 
-    log("Configuring dnsmasq to forward DNS to sing-box", "info");
+    log("Configuring dnsmasq to forward DNS to the routing plane", "info");
     dnsmasq_cleanup_legacy_instance();
     dnsmasq_configure_default_instance();
     uci_commit("dhcp");

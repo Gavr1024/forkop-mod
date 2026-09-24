@@ -2,6 +2,7 @@
 
 let fs = require("fs");
 let uci_core = require("core.uci");
+let engine = require("core.engine");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
@@ -1055,6 +1056,7 @@ function capability_flags() {
         zapret2_installed: file_executable(ZAPRET2_PROVIDER_NFQWS2_BIN) ? 1 : 0,
         byedpi_installed: file_executable(BYEDPI_BIN) ? 1 : 0,
         xray_installed: file_executable(XRAY_BIN) ? 1 : 0,
+        routing_engine: "sing-box",
         server_inbounds_enabled_count: 0
     };
 
@@ -1090,6 +1092,8 @@ function capability_flags() {
     }
 
     result.server_inbounds_enabled_count = server_inbounds_enabled_count();
+    result.routing_engine = engine.routing_engine();
+    result.need_singbox_sidecar = engine.need_singbox_sidecar() ? 1 : 0;
     return result;
 }
 
@@ -1103,7 +1107,10 @@ function current_ui_state_json() {
     let capabilities = capability_flags();
     let forkop_is_running = forkop_running() ? 1 : 0;
     let forkop_is_enabled = service_enabled() ? 1 : 0;
-    let sing_box_is_running = forkop_is_running ? 1 : (sing_box_running() ? 1 : 0);
+    let sing_box_needed = engine.need_singbox();
+    let sing_box_is_running = 0;
+    if (sing_box_needed)
+        sing_box_is_running = forkop_is_running ? 1 : (sing_box_running() ? 1 : 0);
     let sing_box_is_enabled = sing_box_enabled() ? 1 : 0;
     let forkop_status = service_status_text(forkop_is_running, forkop_is_enabled);
     let sing_box_status = service_status_text(sing_box_is_running, sing_box_is_enabled);
@@ -1441,9 +1448,29 @@ function latency_clash_method(latency_type) {
     return { method: "get_proxy_latency", timeout: "5000" };
 }
 
-function latency_worker(path, latency_type, tag, timeout) {
-    let method = latency_clash_method(latency_type).method;
-    let status = command_status(command_from_args([ BIN_PATH, "clash_api", method, tag, timeout, path ]) + " >/dev/null 2>&1");
+function latency_worker(path, latency_type, tag, timeout, section) {
+    let status = 1;
+    if (engine.is_xray_primary() && !engine.need_singbox_sidecar()) {
+        let cmd = [
+            "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
+            "latency-test", latency_type, tag, timeout
+        ];
+        if (as_string(latency_type) == "group")
+            cmd = [
+                "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
+                "group-latency", as_string(section) != "" ? as_string(section) : tag, timeout
+            ];
+        else if (as_string(latency_type) == "proxy")
+            cmd = [
+                "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
+                "proxy-latency", tag, timeout
+            ];
+        status = command_status(command_from_args(cmd) + " >/dev/null 2>&1");
+    }
+    else {
+        let method = latency_clash_method(latency_type).method;
+        status = command_status(command_from_args([ BIN_PATH, "clash_api", method, tag, timeout, path ]) + " >/dev/null 2>&1");
+    }
     if (status == 0)
         write_finished_action_state(path, true, "Latency test completed", status);
     else
@@ -1472,7 +1499,7 @@ function latency_test_async(latency_type, section, tag, requested_timeout) {
 
     let plan = latency_clash_method(latency_type);
     let timeout = as_string(requested_timeout) != "" ? as_string(requested_timeout) : plan.timeout;
-    let pid = launch_worker([ "latency-worker", path, latency_type, tag, timeout ]);
+    let pid = launch_worker([ "latency-worker", path, latency_type, tag, timeout, section ]);
     if (pid == "" || !set_running_job_pid_file(path, pid)) {
         if (pid != "")
             command_success_from_args([ "kill", pid ]);
@@ -1604,7 +1631,7 @@ else if (mode == "service-action-async")
 else if (mode == "service-action-status")
     service_action_status(ARGV[1]);
 else if (mode == "latency-worker")
-    latency_worker(ARGV[1], ARGV[2], ARGV[3], ARGV[4]);
+    latency_worker(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]);
 else if (mode == "latency-test-async")
     latency_test_async(ARGV[1], ARGV[2], ARGV[3], ARGV[4]);
 else if (mode == "latency-test-status")

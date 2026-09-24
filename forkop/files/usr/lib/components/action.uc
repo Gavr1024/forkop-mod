@@ -3,12 +3,15 @@
 let fs = require("fs");
 let constants = require("core.constants");
 let uci_core = require("core.uci");
+let engine = require("core.engine");
+let list_cache = require("routing.list_cache");
 
+const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || constants.FORKOP_CONFIG_NAME || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
 const BIN_PATH = getenv("FORKOP_BIN") || constants.FORKOP_BIN || "/usr/bin/forkop";
 const SERVICE_INIT = getenv("FORKOP_SERVICE_INIT") || constants.FORKOP_SERVICE_INIT || "/etc/init.d/forkop";
 const FORKOP_VERSION = getenv("FORKOP_VERSION") || constants.FORKOP_VERSION || "";
-const FORKOP_RELEASE_REPO = getenv("FORKOP_RELEASE_REPO") || constants.FORKOP_RELEASE_REPO || "ushan0v/forkop";
+const FORKOP_RELEASE_REPO = getenv("FORKOP_RELEASE_REPO") || constants.FORKOP_RELEASE_REPO || "Gavr1024/forkop-mod";
 const RUNTIME_STATE_DIR = getenv("FORKOP_RUNTIME_STATE_DIR") || "/var/run/forkop";
 const SYSTEM_INFO_CACHE_FILE = getenv("FORKOP_SYSTEM_INFO_CACHE_FILE") || RUNTIME_STATE_DIR + "/system-info.json";
 const COMPONENT_LOCK_DIR = getenv("UPDATES_LOCK_DIR") || RUNTIME_STATE_DIR + "/component-action.lock";
@@ -489,6 +492,18 @@ function read_openwrt_release_value(key) {
 }
 
 function service_proxy_address() {
+    let settings = {};
+    try {
+        settings = uci_core.get_all(CONFIG_NAME, "settings");
+    }
+    catch (e) {
+        settings = {};
+    }
+    if (type(settings) != "object")
+        settings = {};
+    if (engine.is_xray_primary())
+        return list_cache.download_proxy_address(settings, "components");
+
     if (!file_exists(LIB_DIR + "/singbox/runtime.uc"))
         return "";
     if (file_exists(LIB_DIR + "/service/state.uc") &&
@@ -502,12 +517,13 @@ function http_get_once(url, output_path, proxy_address, timeout) {
     output_path = as_string(output_path);
     proxy_address = as_string(proxy_address);
     timeout = as_string(timeout || "30");
+    let spec = list_cache.curl_proxy_spec(proxy_address);
 
     if (command_exists("curl")) {
         let args = [ "curl", "--connect-timeout", "5", "-m", timeout, "-fsSL", "-A", "forkop", "-H", "Accept: application/vnd.github+json" ];
-        if (proxy_address != "") {
+        if (spec != "") {
             push(args, "-x");
-            push(args, "http://" + proxy_address);
+            push(args, spec);
         }
         push(args, url);
         push(args, "-o");
@@ -515,10 +531,10 @@ function http_get_once(url, output_path, proxy_address, timeout) {
         return command_success_from_args(args);
     }
 
-    if (command_exists("wget")) {
+    if (command_exists("wget") && index(spec, "socks") != 0) {
         let command = command_from_args([ "wget", "-T", timeout, "-q", "-U", "forkop", "-O", output_path, url ]);
-        if (proxy_address != "")
-            command = command_env({ http_proxy: "http://" + proxy_address, https_proxy: "http://" + proxy_address }) + " " + command;
+        if (spec != "")
+            command = command_env({ http_proxy: spec, https_proxy: spec }) + " " + command;
         return command_success(command);
     }
 
@@ -2038,6 +2054,7 @@ function managed_xray_service_text() {
         "    [ -x \"$PROG\" ] || return 1\n" +
         "    [ -f \"$CONF\" ] || return 1\n" +
         "    procd_open_instance\n" +
+        "    procd_set_param env XRAY_LOCATION_ASSET=\"/usr/share/xray\"\n" +
         "    procd_set_param command \"$PROG\" run -c \"$CONF\"\n" +
         "    procd_set_param file \"$CONF\"\n" +
         "    procd_set_param stderr 1\n" +
@@ -2233,15 +2250,17 @@ function remove_xray() {
 }
 
 function list_xray_release_tags() {
-    let result = [];
+    let ordered = [];
+    let stable = [];
+    let prerelease = [];
     let seen = {};
     let parts = split(XRAY_RELEASE_REPO, "/");
     if (length(parts) != 2)
-        return result;
+        return { ordered, stable, prerelease };
 
     let releases = github_json("https://api.github.com/repos/" + parts[0] + "/" + parts[1] + "/releases?per_page=30");
     if (type(releases) != "array")
-        return result;
+        return { ordered, stable, prerelease };
 
     for (let release in releases) {
         if (type(release) != "object" || release.draft === true)
@@ -2249,19 +2268,23 @@ function list_xray_release_tags() {
         let tag = normalize_xray_version(release.tag_name);
         if (tag == "" || seen[tag])
             continue;
-        let lowered = lc(tag);
-        if (index(lowered, "alpha") >= 0 || index(lowered, "beta") >= 0 || index(lowered, "rc") >= 0)
-            continue;
         seen[tag] = true;
-        push(result, tag);
+        let lowered = lc(tag);
+        push(ordered, tag);
+        if (release.prerelease === true || index(lowered, "alpha") >= 0 ||
+            index(lowered, "beta") >= 0 || index(lowered, "rc") >= 0)
+            push(prerelease, tag);
+        else
+            push(stable, tag);
     }
-    return result;
+    return { ordered, stable, prerelease };
 }
 
 function list_xray_versions() {
     let current_version = normalize_xray_version(xray_runtime_output("version", []));
-    let versions = list_xray_release_tags();
-    let latest_version = length(versions) > 0 ? versions[0] : current_version;
+    let tags = list_xray_release_tags();
+    let versions = length(tags.ordered) > 0 ? tags.ordered : tags.stable;
+    let latest_version = length(tags.stable) > 0 ? tags.stable[0] : current_version;
     write_json({
         success: true,
         kind: "component",
@@ -2273,7 +2296,8 @@ function list_xray_versions() {
         changed: 0,
         status: "latest",
         release_url: "",
-        available_versions: versions
+        available_versions: versions,
+        prerelease_versions: tags.prerelease
     });
     cleanup_action();
     exit(0);
@@ -2303,10 +2327,17 @@ function dispatch_xray(action) {
     install_xray(action, parsed.tag);
 }
 
+function action_needs_exclusive_lock(action) {
+    action = as_string(action);
+    let sep = index(action, "@");
+    let base = sep < 0 ? action : substr(action, 0, sep);
+    return base != "list_versions" && base != "check_update";
+}
+
 function component_action(component, action) {
     component = normalize_component_name(component);
     action = as_string(action);
-    if (!acquire_component_lock())
+    if (action_needs_exclusive_lock(action) && !acquire_component_lock())
         action_fail(component != "" ? component : "unknown", action != "" ? action : "unknown", "Another component action is already running");
     if (!init_tmp_dir())
         action_fail(component != "" ? component : "unknown", action != "" ? action : "unknown", "Failed to create temporary directory");

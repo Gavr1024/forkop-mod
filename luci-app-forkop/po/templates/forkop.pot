@@ -1097,7 +1097,7 @@ msgid "Expires"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7548
-msgid "Expose this section as a local HTTP+SOCKS proxy"
+msgid "Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:5392
@@ -1180,7 +1180,7 @@ msgid "Fastest"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:3164
-msgid "Filter the servers that will be displayed on the dashboard."
+msgid "Filter the servers that will be displayed on the dashboard. Works only with sing-box."
 msgstr ""
 
 #: src/forkop/tabs/diagnostic/checks/runInboundsCheck.ts:136
@@ -2423,7 +2423,7 @@ msgid "Require a username and password for the local mixed proxy"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7676
-msgid "Resolve domain names before routing so sing-box can use real destination IPs."
+msgid "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7675
@@ -2479,6 +2479,10 @@ msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js:2557
 msgid "Routing mode"
+msgstr ""
+
+#: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:161
+msgid "Routing engine"
 msgstr ""
 
 #: src/forkop/tabs/diagnostic/checks/runInboundsCheck.ts:103
@@ -2702,7 +2706,7 @@ msgid "Server group for automatic lowest-latency selection"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7433
-msgid "Server group for priority failover"
+msgid "Server group for priority failover. Works only with sing-box."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js:1703
@@ -3540,8 +3544,12 @@ msgstr ""
 msgid "When switching to another level, test every server and select the fastest instead of the first working one."
 msgstr ""
 
-#: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7025
-msgid "Which core handles this section. Xray sections are connected through a local SOCKS sidecar so sing-box keeps FakeIP, DNS and nft routing."
+#: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7034
+msgid "Which core handles this section. The routing engine (Settings → Routing engine) still owns TPROXY, FakeIP and DNS. The other core is reached through a local SOCKS sidecar."
+msgstr ""
+
+#: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:163
+msgid "Which core owns TPROXY, FakeIP and DNS. The other core stays available as a SOCKS sidecar for sections that select it."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js:2797

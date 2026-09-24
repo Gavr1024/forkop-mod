@@ -5,6 +5,7 @@ let uci_core = require("core.uci");
 let common = require("core.common");
 let core_ip = require("core.ip");
 let runtime_dns = require("singbox.dns");
+let engine = require("core.engine");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
@@ -316,6 +317,10 @@ function stop_runtime() {
 function start_runtime() {
     let cfg = settings();
     stop_runtime();
+    if (engine.is_xray_primary()) {
+        remove_file(STATE_FILE);
+        return 0;
+    }
     if (!runtime_dns.failover_enabled(cfg)) {
         remove_file(STATE_FILE);
         return 0;

@@ -192,6 +192,51 @@ function refreshLocalListsView() {
     });
 }
 
+function finishListDownload(payload) {
+  localListsBusy = false;
+  const outcome = payload && payload.outcome;
+  if (outcome === "fail") {
+    notify(
+      _("Failed to download some lists. Existing local copies were kept."),
+      "warning",
+    );
+  } else if (outcome === "ok") {
+    notify(_("List download finished"), "info");
+  } else {
+    notify(_("Failed to download lists"), "error");
+  }
+  mountLocalLists(payload || { enabled: true, items: [] });
+}
+
+function pollListDownload(startedAt, failures) {
+  fs.exec("/usr/bin/forkop", ["list_cache_status"])
+    .then((result) => {
+      const payload = parseStatusPayload(result);
+      if (payload.running) {
+        mountLocalLists(payload);
+        if (Date.now() - startedAt > 15 * 60 * 1000) {
+          localListsBusy = false;
+          notify(_("Failed to download lists"), "error");
+          mountLocalLists(payload);
+          return;
+        }
+        window.setTimeout(() => pollListDownload(startedAt, 0), 2000);
+        return;
+      }
+      finishListDownload(payload);
+    })
+    .catch(() => {
+      const next = (failures || 0) + 1;
+      if (next > 5) {
+        localListsBusy = false;
+        notify(_("Failed to download lists"), "error");
+        refreshLocalListsView();
+        return;
+      }
+      window.setTimeout(() => pollListDownload(startedAt, next), 2000);
+    });
+}
+
 function downloadLocalListsNow(currentPayload) {
   if (localListsBusy) {
     return;
@@ -201,22 +246,12 @@ function downloadLocalListsNow(currentPayload) {
   mountLocalLists(currentPayload || { enabled: true, items: [] });
 
   fs.exec("/usr/bin/forkop", ["list_cache_persist"])
-    .then((result) => {
-      const code = result && typeof result.code === "number" ? result.code : 1;
-      if (code === 0) {
-        notify(_("List download finished"), "info");
-      } else {
-        notify(
-          _("Failed to download some lists. Existing local copies were kept."),
-          "warning",
-        );
-      }
+    .then(() => {
+      pollListDownload(Date.now(), 0);
     })
     .catch(() => {
-      notify(_("Failed to download lists"), "error");
-    })
-    .finally(() => {
       localListsBusy = false;
+      notify(_("Failed to download lists"), "error");
       refreshLocalListsView();
     });
 }

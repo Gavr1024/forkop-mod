@@ -111,6 +111,10 @@ function show_help() {
     print("    get_zapret_status       Get zapret provider and Forkop-managed nfqws status\n");
     print("    get_zapret2_status      Get zapret2 provider and Forkop-managed nfqws2 status\n");
     print("    get_byedpi_status       Get ByeDPI provider and Forkop-managed ciadpi status\n");
+    print("    get_xray_stats          Get Xray plane traffic stats as JSON\n");
+    print("    get_xray_connections    Get Xray plane connections as JSON\n");
+    print("    get_xray_nodes          Get Xray section outbounds as JSON\n");
+    print("    set_xray_group_proxy    Pin an Xray section to a specific outbound\n");
     print("    get_system_info         Get system information in JSON format\n");
     print("    get_server_capabilities Get server UI capabilities in JSON format\n");
     print("    get_ui_capabilities     Get lightweight UI capabilities in JSON format\n");
@@ -159,7 +163,7 @@ function command_spec(command) {
         slot_status: [ "config/slots.uc", "status-json", 0 ],
         slot_save: [ "config/slots.uc", "save", 1 ],
         slot_apply: [ "config/slots.uc", "apply", 1 ],
-        slot_configure: [ "config/slots.uc", "configure", 5 ],
+        slot_configure: [ "config/slots.uc", "configure", 6 ],
         slot_probe: [ "config/slots.uc", "probe", 2 ],
         slot_probe_if_due: [ "config/slots.uc", "probe-if-due", 0 ],
         subscription_update: [ "components/updates.uc", "subscription-update", 2 ],
@@ -191,6 +195,12 @@ function command_spec(command) {
         get_subscription_metadata: [ "diagnostics/runtime.uc", "get-subscription-metadata", 1 ],
         get_sing_box_status: [ "diagnostics/runtime.uc", "get-sing-box-status", 0 ],
         get_xray_status: [ "diagnostics/runtime.uc", "get-xray-status", 0 ],
+        get_xray_stats: [ "xray/runtime.uc", "stats", 0 ],
+        get_xray_connections: [ "xray/runtime.uc", "connections", 0 ],
+        get_xray_nodes: [ "xray/runtime.uc", "nodes", 0 ],
+        set_xray_group_proxy: [ "xray/runtime.uc", "select-outbound", 2 ],
+        xray_close_connection: [ "xray/runtime.uc", "close-connection", 1 ],
+        xray_close_all_connections: [ "xray/runtime.uc", "close-all-connections", 0 ],
         get_zapret_status: [ "diagnostics/runtime.uc", "get-zapret-status", 0 ],
         get_zapret2_status: [ "diagnostics/runtime.uc", "get-zapret2-status", 0 ],
         get_byedpi_status: [ "diagnostics/runtime.uc", "get-byedpi-status", 0 ],

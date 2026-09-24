@@ -4,8 +4,12 @@
 "require ui";
 "require fs";
 
+// forkop-slots-ax6000-2: Argon/AX6000-safe slot buttons (inline onclick + capture + confirm)
+
 let slotsBusy = false;
 let slotsSnapshot = null;
+let lastActAt = 0;
+let lastActKey = "";
 
 function escapeHtml(value) {
   return String(value == null ? "" : value)
@@ -49,6 +53,7 @@ function parsePayload(result) {
       backup_host: "",
       interval: 30,
       fail_count: 2,
+      scheduler: "worker",
       active: "",
       last_ok: false,
       last_check: 0,
@@ -62,7 +67,7 @@ function parsePayload(result) {
 
 function slotButton(attrs, label, variant) {
   const extra = variant ? ` fkp-slots__btn--${variant}` : "";
-  return `<input type="button" class="fkp-slots__btn${extra}" ${attrs} value="${escapeHtml(label)}">`;
+  return `<button type="button" class="fkp-slots__btn${extra}" ${attrs} onclick="return window.__forkopSlotsAct(this)">${escapeHtml(label)}</button>`;
 }
 
 function slotCard(kind, item, active) {
@@ -104,7 +109,13 @@ function slotCard(kind, item, active) {
 
 function hostProbeResult(payload, hostname) {
   const list = payload && Array.isArray(payload.hosts) ? payload.hosts : [];
-  const item = list.find((entry) => entry && String(entry.host) === String(hostname || ""));
+  let item = null;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] && String(list[i].host) === String(hostname || "")) {
+      item = list[i];
+      break;
+    }
+  }
   if (!hostname) {
     return { text: "—", cls: "" };
   }
@@ -120,11 +131,11 @@ function hostProbeResult(payload, hostname) {
   return { text: _("Host is reachable"), cls: "is-ok" };
 }
 
-function renderHostField(id, label, value, placeholder, payload) {
+function renderHostField(id, field, label, value, placeholder, payload) {
   const result = hostProbeResult(payload, value);
   return `<div class="fkp-slots__field">
     <label for="${id}">${escapeHtml(label)}</label>
-    <input id="${id}" type="text" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}">
+    <input id="${id}" data-slot-field="${field}" type="text" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}">
     <span class="fkp-slots__rtt ${result.cls}">${escapeHtml(result.text)}</span>
   </div>`;
 }
@@ -136,6 +147,7 @@ function renderSlots(payload) {
   const backupHost = payload.backup_host || "";
   const interval = Number(payload.interval) > 0 ? Number(payload.interval) : 30;
   const failCount = Number(payload.fail_count) > 0 ? Number(payload.fail_count) : 2;
+  const scheduler = payload.scheduler === "cron" ? "cron" : "worker";
   const pingLabel = payload.last_check
     ? payload.last_ok
       ? _("At least one host is reachable")
@@ -176,8 +188,8 @@ function renderSlots(payload) {
         border-left: 3px solid transparent;
       }
       .fkp-slots__card.is-active {
-        border-left-color: var(--fkp-s-primary);
-        background: color-mix(in srgb, var(--fkp-s-primary) 6%, var(--fkp-s-fill));
+        border-left-color: #337ab7;
+        background: var(--fkp-s-fill);
       }
       .fkp-slots__card-top {
         display: flex;
@@ -218,11 +230,6 @@ function renderSlots(payload) {
         border: 1px solid var(--fkp-s-line);
         white-space: nowrap;
       }
-      .fkp-slots__badge.is-on,
-      .fkp-slots__ping.is-ok {
-        background: color-mix(in srgb, var(--fkp-s-primary) 14%, transparent);
-        border-color: color-mix(in srgb, var(--fkp-s-primary) 35%, var(--fkp-s-line));
-      }
       .fkp-slots__meta {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -247,57 +254,68 @@ function renderSlots(payload) {
         flex-wrap: wrap;
         gap: 8px;
         align-items: center;
+        position: relative;
+        z-index: 2;
       }
-      .fkp-slots input.fkp-slots__btn {
-        all: unset;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+      .fkp-slots__actions .fkp-slots__btn,
+      .fkp-slots button.fkp-slots__btn,
+      button.fkp-slots__btn {
+        display: inline-block !important;
         box-sizing: border-box !important;
+        position: relative !important;
+        z-index: 5 !important;
         width: auto !important;
-        min-width: 0 !important;
-        max-width: 100%;
-        height: 30px !important;
-        min-height: 30px !important;
+        min-width: 7.5em !important;
+        max-width: 100% !important;
+        height: 32px !important;
+        min-height: 32px !important;
         margin: 0 !important;
         padding: 0 12px !important;
         border-radius: 4px !important;
         border-style: solid !important;
         border-width: 1px !important;
-        font: inherit !important;
         font-size: 12px !important;
         font-weight: 600 !important;
-        line-height: 1 !important;
+        line-height: 30px !important;
         letter-spacing: 0 !important;
         white-space: nowrap !important;
         text-align: center !important;
         text-decoration: none !important;
+        text-indent: 0 !important;
         text-shadow: none !important;
         background-image: none !important;
         box-shadow: none !important;
         appearance: none !important;
         -webkit-appearance: none !important;
-        cursor: pointer;
-        user-select: none;
+        cursor: pointer !important;
+        pointer-events: auto !important;
+        touch-action: manipulation;
+        opacity: 1;
+        color: inherit;
+        vertical-align: middle;
       }
-      .fkp-slots input.fkp-slots__btn--primary {
-        background: var(--fkp-s-primary) !important;
-        border-color: var(--fkp-s-primary) !important;
+      .fkp-slots button.fkp-slots__btn--primary {
+        background: #337ab7 !important;
+        border-color: #337ab7 !important;
         color: #fff !important;
+        -webkit-text-fill-color: #fff !important;
       }
-      .fkp-slots input.fkp-slots__btn--save {
-        background: var(--fkp-s-ok) !important;
-        border-color: var(--fkp-s-ok) !important;
+      .fkp-slots button.fkp-slots__btn--save {
+        background: #2e8b57 !important;
+        border-color: #2e8b57 !important;
         color: #fff !important;
+        -webkit-text-fill-color: #fff !important;
       }
-      .fkp-slots input.fkp-slots__btn--ghost {
-        background: transparent !important;
-        border-color: var(--fkp-s-line) !important;
-        color: inherit !important;
+      .fkp-slots button.fkp-slots__btn--ghost {
+        background: #fff !important;
+        border-color: #888 !important;
+        color: #333 !important;
+        -webkit-text-fill-color: #333 !important;
       }
-      .fkp-slots input.fkp-slots__btn:disabled {
+      .fkp-slots button.fkp-slots__btn:disabled {
         opacity: .42 !important;
         cursor: not-allowed !important;
+        pointer-events: none !important;
       }
       .fkp-slots__switch { padding: 12px 14px 14px; }
       .fkp-slots__switch-head {
@@ -359,6 +377,14 @@ function renderSlots(payload) {
         opacity: 1;
       }
       .fkp-slots__check input { margin: 0; }
+      .fkp-slots__radios {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 18px;
+        margin: 4px 0 0;
+      }
+      .fkp-slots__radios .fkp-slots__check { margin: 0; }
+      .fkp-slots__field--wide { grid-column: 1 / -1; }
       .fkp-slots__switch .fkp-slots__hint { margin: 10px 0; }
       @media (max-width: 960px) {
         .fkp-slots__grid,
@@ -388,25 +414,39 @@ function renderSlots(payload) {
         </span>
       </div>
       <div class="fkp-slots__form">
-        ${renderHostField("forkop-slots-host", _("Primary host to ping"), host, "1.1.1.1", payload)}
-        ${renderHostField("forkop-slots-host-backup", _("Backup host to ping"), backupHost, "8.8.8.8", payload)}
+        ${renderHostField("forkop-slots-host", "host", _("Primary host to ping"), host, "1.1.1.1", payload)}
+        ${renderHostField("forkop-slots-host-backup", "host-backup", _("Backup host to ping"), backupHost, "8.8.8.8", payload)}
         <div class="fkp-slots__field">
           <label for="forkop-slots-interval">${escapeHtml(_("Interval, sec"))}</label>
-          <input id="forkop-slots-interval" type="number" min="10" step="5" value="${escapeHtml(interval)}">
+          <input id="forkop-slots-interval" data-slot-field="interval" type="number" min="10" step="5" value="${escapeHtml(interval)}">
         </div>
         <div class="fkp-slots__field">
           <label for="forkop-slots-fails">${escapeHtml(_("Checks before switch"))}</label>
-          <input id="forkop-slots-fails" type="number" min="1" max="10" value="${escapeHtml(failCount)}">
+          <input id="forkop-slots-fails" data-slot-field="fails" type="number" min="1" max="10" value="${escapeHtml(failCount)}">
         </div>
         <label class="fkp-slots__check">
-          <input id="forkop-slots-enabled" type="checkbox" ${enabled ? "checked" : ""}>
+          <input id="forkop-slots-enabled" data-slot-field="enabled" type="checkbox" ${enabled ? "checked" : ""}>
           ${escapeHtml(_("Enable auto-switch"))}
         </label>
+        <div class="fkp-slots__field fkp-slots__field--wide">
+          <label>${escapeHtml(_("Ping scheduler"))}</label>
+          <div class="fkp-slots__radios">
+            <label class="fkp-slots__check">
+              <input data-slot-field="scheduler" name="forkop-slots-scheduler" type="radio" value="worker" ${scheduler !== "cron" ? "checked" : ""}>
+              ${escapeHtml(_("Built-in worker"))}
+            </label>
+            <label class="fkp-slots__check">
+              <input data-slot-field="scheduler" name="forkop-slots-scheduler" type="radio" value="cron" ${scheduler === "cron" ? "checked" : ""}>
+              ${escapeHtml(_("System cron"))}
+            </label>
+          </div>
+          <p class="fkp-slots__hint">${escapeHtml(_("Worker runs only while Forkop is started and does not spam syslog. Cron keeps checking every minute even if Forkop is stopped; BusyBox logs each run as cron.err."))}</p>
+        </div>
       </div>
       <p class="fkp-slots__hint">${escapeHtml(_("These switch settings are written into the live config and every saved slot at the same time."))}</p>
       <div class="fkp-slots__actions">
-        ${slotButton(`data-slot-configure${slotsBusy ? " disabled" : ""}`, _("Save switch settings"), "save")}
-        ${slotButton(`data-slot-probe${slotsBusy ? " disabled" : ""}`, _("Check ping now"), "ghost")}
+        ${slotButton(`data-slot-configure="1"${slotsBusy ? " disabled" : ""}`, _("Save switch settings"), "save")}
+        ${slotButton(`data-slot-probe="1"${slotsBusy ? " disabled" : ""}`, _("Check ping now"), "ghost")}
       </div>
     </section>
   </div>`;
@@ -414,127 +454,214 @@ function renderSlots(payload) {
 
 function confirmSlotSave(kind) {
   const slotName = kind === "online" ? _("Online slot") : _("Offline slot");
-  ui.showModal(_("Save current config"), [
-    E("p", {}, _("Overwrite this slot with the current Forkop config?")),
-    E("p", { style: "opacity:.75" }, slotName),
-    E("div", { class: "right" }, [
-      E("div", { class: "btn-group" }, [
-        E(
-          "button",
-          {
-            class: "btn cbi-button",
-            click: ui.hideModal,
-          },
-          _("Cancel"),
-        ),
-        E(
-          "button",
-          {
-            class: "btn cbi-button cbi-button-positive important",
-            click: function () {
-              ui.hideModal();
-              runAction(["slot_save", kind], _("Config saved to slot"));
-            },
-          },
-          _("Save current config"),
-        ),
-      ]),
-    ]),
-  ]);
+  const question = _("Overwrite this slot with the current Forkop config?");
+  let ok = false;
+  try {
+    ok = window.confirm(question + "\n\n" + slotName);
+  } catch (_error) {
+    ok = true;
+  }
+  if (ok) runAction(["slot_save", kind], _("Config saved to slot"));
 }
 
-function bindActions(payload) {
-  const root = document.getElementById("forkop-slots-root");
-  if (!root) return;
+function scopedField(fromEl, name) {
+  let scope = document;
+  if (fromEl && typeof fromEl.closest === "function") {
+    const root = fromEl.closest(".fkp-slots") || fromEl.closest(".fkp-slots-root");
+    if (root) scope = root;
+  }
+  const named = scope.querySelector("[data-slot-field='" + name + "']");
+  if (named) return named;
+  return document.getElementById("forkop-slots-" + name);
+}
 
-  root.querySelectorAll("[data-slot-save]").forEach((button) => {
-    button.addEventListener("click", () =>
-      confirmSlotSave(button.getAttribute("data-slot-save")),
-    );
-  });
-  root.querySelectorAll("[data-slot-apply]").forEach((button) => {
-    button.addEventListener("click", () =>
-      runAction(["slot_apply", button.getAttribute("data-slot-apply")], _("Slot applied")),
-    );
-  });
-  const saveSettings = root.querySelector("[data-slot-configure]");
-  if (saveSettings) {
-    saveSettings.addEventListener("click", () => {
-      const host = document.getElementById("forkop-slots-host");
-      const backupHostField = document.getElementById("forkop-slots-host-backup");
-      const interval = document.getElementById("forkop-slots-interval");
-      const fails = document.getElementById("forkop-slots-fails");
-      const enabled = document.getElementById("forkop-slots-enabled");
-      runAction(
-        [
-          "slot_configure",
-          "enabled=" + (enabled && enabled.checked ? "1" : "0"),
-          "host=" + ((host && host.value) || "1.1.1.1"),
-          "backup_host=" + ((backupHostField && backupHostField.value) || ""),
-          "interval=" + ((interval && interval.value) || "30"),
-          "fail_count=" + ((fails && fails.value) || "2"),
-        ],
-        _("Switch settings saved"),
-      );
-    });
+function collectSwitchArgs(fromEl) {
+  const host = scopedField(fromEl, "host");
+  const backupHostField = scopedField(fromEl, "host-backup");
+  const interval = scopedField(fromEl, "interval");
+  const fails = scopedField(fromEl, "fails");
+  const enabled = scopedField(fromEl, "enabled");
+  let scheduler = "worker";
+  let scope = document;
+  if (fromEl && typeof fromEl.closest === "function") {
+    const root = fromEl.closest(".fkp-slots") || fromEl.closest(".fkp-slots-root");
+    if (root) scope = root;
   }
-  const probe = root.querySelector("[data-slot-probe]");
-  if (probe) {
-    probe.addEventListener("click", () => {
-      const host = document.getElementById("forkop-slots-host");
-      const backupHostField = document.getElementById("forkop-slots-host-backup");
-      runAction(
-        [
-          "slot_probe",
-          "host=" + ((host && host.value) || ""),
-          "backup_host=" + ((backupHostField && backupHostField.value) || ""),
-        ],
-        _("Ping check finished"),
-      );
-    });
+  const radios = scope.querySelectorAll("[data-slot-field='scheduler']");
+  for (let i = 0; i < radios.length; i++) {
+    if (radios[i].checked && radios[i].value) scheduler = radios[i].value;
   }
+  if (scheduler !== "cron") scheduler = "worker";
+  return [
+    "slot_configure",
+    "enabled=" + (enabled && enabled.checked ? "1" : "0"),
+    "host=" + ((host && host.value) || "1.1.1.1"),
+    "backup_host=" + ((backupHostField && backupHostField.value) || ""),
+    "interval=" + ((interval && interval.value) || "30"),
+    "fail_count=" + ((fails && fails.value) || "2"),
+    "scheduler=" + scheduler,
+  ];
+}
+
+function collectProbeArgs(fromEl) {
+  const host = scopedField(fromEl, "host");
+  const backupHostField = scopedField(fromEl, "host-backup");
+  return [
+    "slot_probe",
+    "host=" + ((host && host.value) || ""),
+    "backup_host=" + ((backupHostField && backupHostField.value) || ""),
+  ];
+}
+
+function closestSlotControl(node) {
+  let el = node;
+  if (el && el.nodeType === 3) el = el.parentNode;
+  while (el && el !== document && el !== document.body && el !== document.documentElement) {
+    if (el.getAttribute && (
+      el.hasAttribute("data-slot-save") ||
+      el.hasAttribute("data-slot-apply") ||
+      el.hasAttribute("data-slot-configure") ||
+      el.hasAttribute("data-slot-probe")
+    )) {
+      return el;
+    }
+    el = el.parentNode;
+  }
+  return null;
+}
+
+function activateSlotControl(el) {
+  if (!el) return false;
+  if (el.disabled || (el.hasAttribute && el.hasAttribute("disabled"))) return false;
+  const key = [
+    el.getAttribute("data-slot-save") || "",
+    el.getAttribute("data-slot-apply") || "",
+    el.hasAttribute("data-slot-configure") ? "cfg" : "",
+    el.hasAttribute("data-slot-probe") ? "probe" : "",
+  ].join("|");
+  const now = Date.now();
+  if (key && key === lastActKey && now - lastActAt < 500) return false;
+  lastActAt = now;
+  lastActKey = key;
+  if (el.hasAttribute("data-slot-save")) {
+    confirmSlotSave(el.getAttribute("data-slot-save"));
+    return true;
+  }
+  if (el.hasAttribute("data-slot-apply")) {
+    runAction(["slot_apply", el.getAttribute("data-slot-apply")], _("Slot applied. Forkop is reloading in the background."));
+    return true;
+  }
+  if (el.hasAttribute("data-slot-configure")) {
+    runAction(collectSwitchArgs(el), _("Switch settings saved"));
+    return true;
+  }
+  if (el.hasAttribute("data-slot-probe")) {
+    runAction(collectProbeArgs(el), _("Ping check finished"));
+    return true;
+  }
+  return false;
+}
+
+function handleSlotClick(ev) {
+  const el = closestSlotControl(ev && ev.target);
+  if (!el) return;
+  if (ev.preventDefault) ev.preventDefault();
+  if (ev.stopPropagation) ev.stopPropagation();
+  if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+  activateSlotControl(el);
+}
+
+function ensureDelegated() {
+  if (window.__forkopSlotsClickBound) return;
+  window.__forkopSlotsClickBound = true;
+  document.addEventListener("click", handleSlotClick, true);
+}
+
+window.__forkopSlotsAct = function (el) {
+  activateSlotControl(el);
+  return false;
+};
+
+function bindActions(_payload) {
+  ensureDelegated();
+}
+
+function eachSlotsRoot(fn) {
+  const nodes = document.querySelectorAll("#forkop-slots-root, .fkp-slots-root");
+  for (let i = 0; i < nodes.length; i++) fn(nodes[i]);
 }
 
 function mount(payload) {
-  const node = document.getElementById("forkop-slots-root");
-  if (!node) return;
   slotsSnapshot = payload;
-  node.innerHTML = renderSlots(payload);
+  const html = renderSlots(payload);
+  let found = false;
+  eachSlotsRoot(function (node) {
+    found = true;
+    node.innerHTML = html;
+  });
+  if (!found) return;
   bindActions(payload);
 }
 
 function refreshSlots() {
   return fs
     .exec("/usr/bin/forkop", ["slot_status"])
-    .then((result) => mount(parsePayload(result)))
-    .catch(() => mount(parsePayload(null)));
+    .then(function (result) { mount(parsePayload(result)); })
+    .catch(function () { mount(parsePayload(null)); });
 }
 
 function runAction(args, successMessage) {
   if (slotsBusy) return;
   slotsBusy = true;
   mount(slotsSnapshot || parsePayload(null));
-  fs.exec("/usr/bin/forkop", args)
-    .then((result) => {
-      const code = result && typeof result.code === "number" ? result.code : 1;
-      if (code === 0) notify(successMessage, "info");
-      else notify(_("Slot action failed"), "error");
-    })
-    .catch(() => notify(_("Slot action failed"), "error"))
-    .finally(() => {
-      slotsBusy = false;
-      refreshSlots();
-    });
+  const finish = function () {
+    slotsBusy = false;
+    refreshSlots();
+  };
+  try {
+    const req = fs.exec("/usr/bin/forkop", args);
+    if (!req || typeof req.then !== "function") {
+      notify(_("Slot action failed"), "error");
+      finish();
+      return;
+    }
+    req.then(
+      function (result) {
+        const code = result && typeof result.code === "number" ? result.code : 1;
+        if (code === 0) notify(successMessage, "info");
+        else {
+          const detail = result && (result.stderr || result.stdout);
+          notify(
+            detail ? _("Slot action failed") + ": " + String(detail).replace(/\s+/g, " ").slice(0, 180) : _("Slot action failed"),
+            "error"
+          );
+        }
+        finish();
+      },
+      function () {
+        notify(_("Slot action failed"), "error");
+        finish();
+      }
+    );
+  } catch (_error) {
+    notify(_("Slot action failed"), "error");
+    finish();
+  }
 }
 
 function createSlotsContent(section) {
   const panel = section.option(form.DummyValue, "_slots_panel");
   panel.rawhtml = true;
-  panel.cfgvalue = () => {
-    window.setTimeout(() => refreshSlots(), 0);
-    return `<div id="forkop-slots-root">${renderSlots(parsePayload(null))}</div>`;
+  panel.cfgvalue = function () {
+    ensureDelegated();
+    window.setTimeout(function () { refreshSlots(); }, 0);
+    window.setTimeout(function () { refreshSlots(); }, 300);
+    window.setTimeout(function () { refreshSlots(); }, 1200);
+    return `<div id="forkop-slots-root" class="fkp-slots-root">${renderSlots(parsePayload(null))}</div>`;
   };
 }
+
+ensureDelegated();
 
 return baseclass.extend({
   createSlotsContent,

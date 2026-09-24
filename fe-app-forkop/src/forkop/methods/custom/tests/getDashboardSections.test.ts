@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getConfigSections: vi.fn(),
   getClashApiProxies: vi.fn(),
+  getXrayNodes: vi.fn(),
   canUseDirectClashApi: vi.fn(),
   fsRead: vi.fn(),
 }));
@@ -14,6 +15,7 @@ vi.mock('../getConfigSections', () => ({
 vi.mock('../../shell', () => ({
   ForkopShellMethods: {
     getClashApiProxies: mocks.getClashApiProxies,
+    getXrayNodes: mocks.getXrayNodes,
   },
 }));
 
@@ -136,6 +138,7 @@ describe('getDashboardSections', () => {
   beforeEach(() => {
     mocks.getConfigSections.mockReset();
     mocks.getClashApiProxies.mockReset();
+    mocks.getXrayNodes.mockReset();
     mocks.canUseDirectClashApi.mockReset();
     mocks.fsRead.mockReset();
     mocks.fsRead.mockRejectedValue(new Error('cache miss'));
@@ -146,6 +149,10 @@ describe('getDashboardSections', () => {
     mocks.getClashApiProxies.mockResolvedValue({
       success: true,
       data: { proxies: clashProxies },
+    });
+    mocks.getXrayNodes.mockResolvedValue({
+      success: true,
+      data: { nodes: {}, selected: {} },
     });
     mocks.canUseDirectClashApi.mockReturnValue(false);
   });
@@ -1115,5 +1122,43 @@ describe('getDashboardSections', () => {
     expect(
       section.outbounds.every((outbound) => outbound.proxyCore === 'xray'),
     ).toBe(true);
+  });
+
+  it('shows Xray SOCKS delays on dashboard cards', async () => {
+    mocks.getConfigSections.mockResolvedValue([
+      proxySection({ proxy_core: 'xray' }),
+    ]);
+    mocks.getClashApiProxies.mockResolvedValue({
+      success: true,
+      data: { proxies: {} },
+    });
+    mocks.getXrayNodes.mockResolvedValue({
+      success: true,
+      data: {
+        nodes: {
+          main: [
+            { tag: 'xray-nl', name: 'NL', protocol: 'vless', delay: 87 },
+            {
+              tag: 'xray-hy',
+              name: 'hysteria',
+              protocol: 'hysteria',
+              delay: 210,
+            },
+          ],
+        },
+        selected: { main: 'xray-nl' },
+      },
+    });
+
+    const result = await getDashboardSections();
+    const [section] = result.data;
+    const byCode = Object.fromEntries(
+      section.outbounds.map((outbound) => [outbound.code, outbound]),
+    );
+
+    expect(result.success).toBe(true);
+    expect(byCode['xray-nl']?.latency).toBe(87);
+    expect(byCode['xray-hy']?.latency).toBe(210);
+    expect(byCode['xray-nl']?.selected).toBe(true);
   });
 });

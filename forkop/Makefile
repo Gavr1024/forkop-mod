@@ -24,13 +24,13 @@ define Package/forkop
 	CATEGORY:=Network
 	DEPENDS:=+ca-bundle +kmod-inet-diag +kmod-netlink-diag +kmod-tun +curl +ucode +ucode-mod-fs +ucode-mod-uci +kmod-nft-tproxy +coreutils-base64 +bind-dig +nftables +kmod-nft-nat +ip-full
 	CONFLICTS:=https-dns-proxy nextdns luci-app-passwall luci-app-passwall2
-	TITLE:=Forkop backend service
+	TITLE:=Forkop-Mod
 	URL:=https://github.com/ushan0v/forkop
 	PKGARCH:=all
 endef
 
 define Package/forkop/description
-	Rule-based Forkop backend with hybrid sing-box + zapret orchestration
+	Rule-based Forkop-Mod backend. Routing cores (sing-box, Xray) are optional Components, not package dependencies.
 endef
 
 define Build/Configure

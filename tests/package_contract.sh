@@ -90,8 +90,26 @@ if grep -Fq 'coreutils-sort' "$FORKOP_MAKEFILE" "$BUILD_SCRIPT"; then
   fail "unused coreutils-sort runtime dependency must not be packaged"
 fi
 
-grep -Fq "must use x.y.z format" "$FORKOP_MAKEFILE" ||
-  fail "forkop/Makefile must enforce the three-part release version contract"
+if grep -Eq 'DEPENDS:=.*\+(sing-box|xray)([[:space:]]|$)' "$FORKOP_MAKEFILE"; then
+  fail "forkop package must not depend on sing-box or xray; cores come from Components"
+fi
+if grep -Eq '^BACKEND_DEPENDS_IPK=.*(sing-box|xray)' "$BUILD_SCRIPT"; then
+  fail "manual IPK depends must not include sing-box or xray cores"
+fi
+if grep -Eq '^BACKEND_DEPENDS_APK=.*(sing-box|xray)' "$BUILD_SCRIPT"; then
+  fail "manual APK depends must not include sing-box or xray cores"
+fi
+
+grep -Fq 'PKG_NAME:=forkop' "$FORKOP_MAKEFILE" ||
+  fail "opkg package id must stay forkop for compatibility"
+grep -Fq 'TITLE:=Forkop-Mod' "$FORKOP_MAKEFILE" ||
+  fail "displayed package title must be Forkop-Mod"
+grep -Fq 'LUCI_TITLE:=Forkop-Mod' "$ROOT_DIR/luci-app-forkop/Makefile" ||
+  fail "displayed LuCI package title must be Forkop-Mod"
+grep -Fq 'Package: forkop' "$BUILD_SCRIPT" ||
+  fail "manual IPK control must keep Package: forkop"
+grep -Fq 'Forkop-Mod' "$BUILD_SCRIPT" ||
+  fail "manual IPK description must display Forkop-Mod"
 grep -Fq 'APK_INTERNAL_VERSION="$RELEASE_VERSION"' "$BUILD_SCRIPT" ||
   fail "build.sh must use the exact three-part release version for APK metadata"
 grep -Fq "option component_update_check_enabled '1'" "$FORKOP_CONFIG" ||

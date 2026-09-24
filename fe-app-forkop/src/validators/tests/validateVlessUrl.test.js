@@ -57,6 +57,10 @@ const validUrls = [
     'vless://c2841505-ec32-4b8d-b6dd-3e19d648c321@127.0.0.1:45507?type=xhttp&encryption=none&path=%2Fxhttppath&host=xhttp&mode=auto&security=none#vless-xhttp',
   ],
   [
+    'xhttp + reality',
+    'vless://454cf6b5-8e9b-0008-8983-c0ce49a41eef@188.225.39.141:443?encryption=none&type=xhttp&path=%2F&host=api.evotor.ru&mode=auto&security=reality&sni=api.evotor.ru&fp=edge&pbk=Ru8aB0tTJcc1TmsoQiq2YVMm0YxKGaar43NkF8BeHY&sid=033&spx=%2F#%F0%9F%87%B7%F0%9F%87%BA%20LTE%20%2320(1x)',
+  ],
+  [
     'tcp + ipv6',
     'vless://94792286-7bbe-4f33-8b36-18d1bbf70723@[2001:db8::1]:34520?type=tcp&encryption=none&security=none#vless-ipv6',
   ],

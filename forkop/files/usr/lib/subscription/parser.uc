@@ -396,11 +396,6 @@ function base64_decode(value) {
 
 function urldecode(value) {
     value = as_string(value);
-    if (index(value, "%") < 0 && index(value, "+") < 0)
-        return value;
-
-    if (index(value, "+") >= 0)
-        value = replace(value, /\+/g, " ");
     if (index(value, "%") < 0)
         return value;
     return replace(value, /%([0-9A-Fa-f][0-9A-Fa-f])/g, function(all, hex_value) {

@@ -15,13 +15,13 @@ PKG_VERSION:=$(or $(FORKOP_HAS_RELEASE_VERSION),0.0.0)
 PKG_RELEASE:=
 PKG_PO_VERSION:=$(PKG_VERSION)
 
-LUCI_TITLE:=LuCI Forkop app
+LUCI_TITLE:=Forkop-Mod
 LUCI_DEPENDS:=+luci-base +forkop
 LUCI_PKGARCH:=all
 LUCI_LANG.ru:=Русский (Russian)
 LUCI_LANG.en:=English
 LUCI_MAINTAINER:=ushan0v <ushan0v@users.noreply.github.com>
-LUCI_DESCRIPTION:=Rule-based Forkop LuCI app with hybrid sing-box + zapret orchestration
+LUCI_DESCRIPTION:=LuCI Forkop-Mod app. Routing cores (sing-box, Xray) are installed from Components.
 LUCI_MINIFY_JS:=0
 
 PKG_LICENSE:=GPL-2.0-or-later

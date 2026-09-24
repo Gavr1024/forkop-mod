@@ -109,6 +109,11 @@ const activeConnections = new Map<string, MonitoredConnection>();
 const closedConnections = new Map<string, MonitoredConnection>();
 const closingConnectionIds = new Set<string>();
 
+function isXrayRoutingEngine() {
+  const value = `${store.get().diagnosticsSystemInfo.routing_engine || ''}`.toLowerCase();
+  return value === 'xray' || value === 'xray-core';
+}
+
 function normalizeString(value?: string | number | null): string {
   return value == null ? '' : String(value).trim();
 }
@@ -459,11 +464,11 @@ function getCore(connection: MonitoredConnection): string {
   if (section) {
     return (
       routeSectionCores[getOutboundTagBySection(section.sectionName)] ||
-      'sing-box'
+      (isXrayRoutingEngine() ? 'xray' : 'sing-box')
     );
   }
 
-  return 'sing-box';
+  return isXrayRoutingEngine() ? 'xray' : 'sing-box';
 }
 
 function getNetwork(connection: MonitoredConnection): string {
@@ -1375,8 +1380,9 @@ async function closeConnection(connectionId: string) {
   renderConnections();
 
   try {
-    const response =
-      await ForkopShellMethods.closeClashApiConnection(connectionId);
+    const response = isXrayRoutingEngine()
+      ? await ForkopShellMethods.closeXrayConnection(connectionId)
+      : await ForkopShellMethods.closeClashApiConnection(connectionId);
 
     if (!response.success) {
       showToast(_('Failed to close connection'), 'error');
@@ -1410,7 +1416,9 @@ async function closeAllConnections() {
   renderControls();
 
   try {
-    const response = await ForkopShellMethods.closeAllClashApiConnections();
+    const response = isXrayRoutingEngine()
+      ? await ForkopShellMethods.closeAllXrayConnections()
+      : await ForkopShellMethods.closeAllClashApiConnections();
 
     if (!response.success) {
       showToast(_('Failed to close connections'), 'error');
@@ -1541,7 +1549,9 @@ async function pollConnectionsSnapshot() {
   pollingConnections = true;
 
   try {
-    const response = await ForkopShellMethods.getClashApiConnections();
+    const response = isXrayRoutingEngine()
+      ? await ForkopShellMethods.getXrayConnections()
+      : await ForkopShellMethods.getClashApiConnections();
 
     if (
       !monitoringMounted ||
@@ -1641,13 +1651,13 @@ function startConnectionsUpdates() {
     return;
   }
 
-  if (canUseDirectClashApi()) {
-    const updatesId = ++connectionsUpdatesId;
-    void connectToConnectionsSocket(updatesId);
+  if (isXrayRoutingEngine() || !canUseDirectClashApi()) {
+    startConnectionsPolling();
     return;
   }
 
-  startConnectionsPolling();
+  const updatesId = ++connectionsUpdatesId;
+  void connectToConnectionsSocket(updatesId);
 }
 
 function stopConnectionsUpdates() {
@@ -1709,6 +1719,15 @@ function watchServiceState() {
         running: uiState.service.forkop.running,
       }),
     );
+
+    if (
+      serviceAvailability === 'running' &&
+      isXrayRoutingEngine() &&
+      !connectionsPollTimer
+    ) {
+      stopConnectionsUpdates();
+      startConnectionsPolling();
+    }
   });
 }
 

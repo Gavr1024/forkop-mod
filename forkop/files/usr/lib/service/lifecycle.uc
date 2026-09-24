@@ -3,6 +3,7 @@
 let fs = require("fs");
 let constants = require("core.constants");
 let uci_core = require("core.uci");
+let engine = require("core.engine");
 
 function as_string(value) {
     return value == null ? "" : "" + value;
@@ -54,6 +55,7 @@ const RUNTIME_STABLE_MIN_AGE = int(getenv("FORKOP_RUNTIME_STABLE_MIN_AGE") || "2
 const SING_BOX_START_STABLE_MIN_AGE = int(getenv("FORKOP_SING_BOX_START_STABLE_MIN_AGE") || "8");
 const SING_BOX_START_VERIFY_TIMEOUT = int(getenv("FORKOP_SING_BOX_START_VERIFY_TIMEOUT") || "10");
 const SING_BOX_RELOAD_VERIFY_TIMEOUT = int(getenv("FORKOP_SING_BOX_RELOAD_VERIFY_TIMEOUT") || "25");
+const XRAY_START_VERIFY_TIMEOUT = int(getenv("FORKOP_XRAY_START_VERIFY_TIMEOUT") || "60");
 const NFT_POPULATE_ENABLED_DEFAULT = int(getenv("FORKOP_NFT_POPULATE_ENABLED") || "1");
 
 const TMP_SING_BOX_FOLDER = getenv("TMP_SING_BOX_FOLDER") || constant_value("TMP_SING_BOX_FOLDER", "/tmp/sing-box");
@@ -188,6 +190,20 @@ function command_output_from_args(args) {
 
 function command_success_from_args(args) {
     return command_status(command_from_args(args) + " >/dev/null 2>&1") == 0;
+}
+
+function file_exists(path) {
+    return fs.stat(as_string(path)) != null;
+}
+
+function need_singbox_process() {
+    return engine.need_singbox();
+}
+
+function stop_sing_box_service() {
+    if (!file_exists("/etc/init.d/sing-box"))
+        return 0;
+    return command_status_from_args([ "/etc/init.d/sing-box", "stop" ]);
 }
 
 function external_config_fingerprint() {
@@ -689,13 +705,13 @@ function xray_init_config() {
     if (fs.stat(XRAY_UC) == null)
         return 0;
 
-    let result = module_capture(XRAY_UC, [ "init-config" ]);
+    let result = command_capture(module_command(XRAY_UC, [ "init-config" ]) + " 2>&1");
     if (result.status == 0)
         return 0;
 
     let reason = trim(result.output);
     log_message(
-        "Failed to prepare Xray sidecar" + (reason != "" ? ": " + reason : "") + ". Aborted.",
+        "Failed to prepare Xray" + (reason != "" ? ": " + reason : "") + ". Aborted.",
         "fatal"
     );
     return result.status;
@@ -766,46 +782,93 @@ function start_main() {
 
     status = nft_rebuild_runtime();
     if (status != 0)
-        return status;
+        log_message("nftables rebuild reported an error; continuing so Xray can still start", "warn");
+    else
+        log_message("nftables runtime applied", "info");
 
-    status = module_status(SINGBOX_UC, [ "configure-service" ]);
-    if (status != 0)
-        return status;
+    if (!module_success(NFT_UC, [ "nft-write-xray-nftset-conf", NFT_TABLE_NAME ]))
+        log_message("dnsmasq nftset conf for Xray was not written; continuing", "warn");
 
-    log_message("Preparing Xray sidecar", "debug");
+    let xray_primary = engine.is_xray_primary();
+    let need_sidecar = need_singbox_process();
+
+    if (need_sidecar) {
+        status = module_status(SINGBOX_UC, [ "configure-service" ]);
+        if (status != 0) {
+            log_message("Failed to configure sing-box sidecar. Aborted.", "fatal");
+            return status;
+        }
+    }
+
+    log_message("Preparing Xray", "debug");
     status = xray_init_config();
     if (status != 0)
         return status;
+    log_message("Xray configuration is ready", "debug");
 
-    status = singbox_init_config();
-    if (status != 0)
-        return status;
+    if (need_sidecar) {
+        status = singbox_init_config();
+        if (status != 0)
+            return status;
+    }
+    else {
+        status = nft_populate_runtime_sets();
+        if (status != 0)
+            log_message("Failed to update nftables runtime sets; continuing with the existing table", "warn");
+    }
 
     status = refresh_cron();
     if (status != 0)
         return status;
 
     module_success(BYEDPI_UC, [ "start-runtime" ]);
-    if (!module_success(XRAY_UC, [ "start-runtime" ])) {
-        log_message("Failed to start Xray sidecar. Aborted.", "fatal");
-        return 1;
+
+    if (xray_primary) {
+        if (need_sidecar) {
+            if (!command_success_from_args([ "/etc/init.d/sing-box", "start" ])) {
+                log_message("Failed to start sing-box sidecar. Aborted.", "fatal");
+                return 1;
+            }
+            log_message("Routing plane is Xray; sing-box is the SOCKS sidecar", "info");
+        }
+        else {
+            stop_sing_box_service();
+            log_message("Routing plane is Xray; sing-box sidecar is not required", "info");
+        }
+        if (!module_success(XRAY_UC, [ "start-runtime" ])) {
+            log_message("Failed to start Xray routing plane. Aborted.", "fatal");
+            return 1;
+        }
+    }
+    else {
+        if (!module_success(XRAY_UC, [ "start-runtime" ])) {
+            log_message("Failed to start Xray sidecar. Aborted.", "fatal");
+            return 1;
+        }
+
+        if (!command_success_from_args([ "/etc/init.d/sing-box", "start" ])) {
+            log_message("Failed to start sing-box. Aborted.", "fatal");
+            return 1;
+        }
     }
 
-    if (!command_success_from_args([ "/etc/init.d/sing-box", "start" ])) {
-        log_message("Failed to start sing-box. Aborted.", "fatal");
-        return 1;
-    }
-
+    let verify_timeout = xray_primary ? XRAY_START_VERIFY_TIMEOUT : SING_BOX_START_VERIFY_TIMEOUT;
+    if (xray_primary)
+        log_message(
+            "Waiting up to " + as_string(verify_timeout) +
+            "s for Xray DNS 127.0.0.42:53 and TPROXY :1602",
+            "info"
+        );
     status = module_status(STATE_UC, [
         "wait-forkop-stable-start",
         RT_TABLE_NAME,
         NFT_TABLE_NAME,
         NFT_FAKEIP_MARK,
         as_string(SING_BOX_START_STABLE_MIN_AGE),
-        as_string(SING_BOX_START_VERIFY_TIMEOUT)
+        as_string(verify_timeout)
     ]);
     if (status != 0) {
-        log_message("sing-box did not reach a stable running state after start. Aborted.", "fatal");
+        log_message("Routing plane did not reach a stable running state after start. Aborted.", "fatal");
         return status;
     }
 
@@ -829,12 +892,23 @@ function start_main() {
     module_success(ZAPRET_UC, [ "start-runtime" ]);
     module_success(ZAPRET2_UC, [ "start-runtime" ]);
 
-    module_background(UPDATES_UC, [ "list-update" ]);
-    module_success(SLOTS_UC, [ "sync-cron-from-uci" ]);
+    module_background(UPDATES_UC, [ "list-update-if-missing" ]);
+    module_success(SLOTS_UC, [ "sync-cron-only" ]);
     return 0;
 }
 
+function mark_start_busy() {
+    ensure_dir(RUNTIME_STATE_DIR);
+    return fs.writefile(getenv("FORKOP_START_BUSY") || (RUNTIME_STATE_DIR + "/start.busy"), "1\n") != null;
+}
+
+function clear_start_busy() {
+    let path = getenv("FORKOP_START_BUSY") || (RUNTIME_STATE_DIR + "/start.busy");
+    try { fs.unlink(path); } catch (e) { }
+}
+
 function start_impl() {
+    module_success(SLOTS_UC, [ "stop-worker" ]);
     module_success(SLOTS_UC, [ "prepare-boot-slot" ]);
     let status = start_main();
     if (status != 0) {
@@ -850,6 +924,7 @@ function start_impl() {
         status = dnsmasq_configure(false);
         if (status != 0)
             return status;
+        module_success(NFT_UC, [ "nft-resolve-xray-domains-from-uci", NFT_TABLE_NAME ]);
     }
     else if (dnsmasq_has_forkop_managed_state()) {
         status = dnsmasq_restore(true);
@@ -892,6 +967,7 @@ function stop_main() {
     module_success(PRIORITY_UC, [ "stop-runtime" ]);
     module_success(SUBSCRIPTION_CACHE_UC, [ "stop-deferred-bootstrap-worker" ]);
     module_success(UPDATES_UC, [ "stop-list-update" ]);
+    module_success(SLOTS_UC, [ "stop-worker" ]);
     remove_cron_jobs();
     command_success_from_args([ "find", TMP_RULESET_FOLDER, "-mindepth", "1", "-maxdepth", "1", "-type", "f", "-delete" ]);
 
@@ -912,7 +988,7 @@ function stop_main() {
     if (module_success(NFT_UC, [ "tproxy-route6-present", RT_TABLE_NAME ]))
         command_success_from_args([ "ip", "-6", "route", "flush", "table", RT_TABLE_NAME ]);
 
-    let sing_box_status = command_status_from_args([ "/etc/init.d/sing-box", "stop" ]);
+    let sing_box_status = stop_sing_box_service();
     if (sing_box_status != 0)
         status = sing_box_status;
 
@@ -957,11 +1033,28 @@ function abort_reload(status, runtime_changed) {
     return status;
 }
 
+function mark_stop_busy() {
+    ensure_dir(RUNTIME_STATE_DIR);
+    return fs.writefile(getenv("FORKOP_STOP_BUSY") || (RUNTIME_STATE_DIR + "/stop.busy"), "1\n") != null;
+}
+
+function clear_stop_busy() {
+    remove_file(getenv("FORKOP_STOP_BUSY") || (RUNTIME_STATE_DIR + "/stop.busy"));
+}
+
 function start() {
+    if (getenv("FORKOP_SLOT_RESTART") == "1" && fs.stat(getenv("FORKOP_STOP_BUSY") || (RUNTIME_STATE_DIR + "/stop.busy")) != null) {
+        clear_stop_busy();
+        log_message("Ignored slot restart because Forkop is stopping", "info");
+        return 0;
+    }
+    clear_stop_busy();
+    mark_start_busy();
     let status = start_impl();
     release_start_subscription_update_lock();
 
     if (status != 0) {
+        clear_start_busy();
         cleanup_failed_runtime();
         return status;
     }
@@ -978,15 +1071,21 @@ function start() {
     ]);
     if (status != 0) {
         log_message("Startup verification failed after Forkop was started; rolling back DNS changes", "warn");
+        clear_start_busy();
         cleanup_failed_runtime();
         return status;
     }
 
+    clear_start_busy();
+    module_success(SLOTS_UC, [ "sync-scheduler" ]);
     return 0;
 }
 
 function stop_impl() {
     let status = 0;
+
+    mark_stop_busy();
+    module_success(SLOTS_UC, [ "stop-worker" ]);
 
     if (!setting_bool("dont_touch_dhcp", false)) {
         let dns_status = dnsmasq_restore(false);
@@ -1111,7 +1210,8 @@ function append_reload_action(actions, enabled, label) {
 
 function reload_actions_summary(plan) {
     let actions = "";
-    actions = append_reload_action(actions, plan.needs_sing_box_reload, "sing-box");
+    actions = append_reload_action(actions, plan.needs_sing_box_reload,
+        engine.is_xray_primary() ? "Xray" : "sing-box");
     actions = append_reload_action(actions, plan.needs_nft_rebuild, "nftables");
     actions = append_reload_action(actions, plan.needs_zapret_restart, "Zapret");
     actions = append_reload_action(actions, plan.needs_zapret2_restart, "Zapret2");
@@ -1301,16 +1401,23 @@ function reload(reason) {
     if (plan.needs_nft_rebuild == 1) {
         log_message("Rebuilding nftables rules", "info");
         status = nft_rebuild_runtime();
-        if (status != 0)
+        if (status != 0) {
+            log_message("Failed to apply nftables runtime rules. Aborted.", "fatal");
             return abort_reload(status, true);
+        }
+        if (!module_success(NFT_UC, [ "nft-write-xray-nftset-conf", NFT_TABLE_NAME ]))
+            log_message("dnsmasq nftset conf for Xray was not written; continuing", "warn");
     }
 
     if (plan.needs_sing_box_reload == 1) {
         module_success(DNS_FAILOVER_UC, [ "stop-runtime" ]);
         module_success(PRIORITY_UC, [ "stop-runtime" ]);
-        status = module_status(SINGBOX_UC, [ "configure-service" ]);
-        if (status != 0)
-            return abort_reload(status, true);
+        let need_sidecar = need_singbox_process();
+        if (need_sidecar) {
+            status = module_status(SINGBOX_UC, [ "configure-service" ]);
+            if (status != 0)
+                return abort_reload(status, true);
+        }
         let sing_box_config_path = config_get(CONFIG_NAME + ".settings.config_path", "");
         let sing_box_config_hash_before = file_md5(sing_box_config_path);
         let sing_box_pid_result = module_capture(STATE_UC, [ "sing-box-service-runtime-pid" ]);
@@ -1323,26 +1430,34 @@ function reload(reason) {
             log_message("Failed to reload Xray sidecar. Aborted.", "fatal");
             return abort_reload(1, true);
         }
-        status = singbox_init_config();
-        if (status != 0)
-            return abort_reload(status, true);
-        nft_populate_enabled = NFT_POPULATE_ENABLED_DEFAULT;
-        status = module_status(STATE_UC, [
-            "reload-sing-box-runtime",
-            sing_box_pid_before,
-            sing_box_config_hash_before,
-            file_md5(sing_box_config_path),
-            as_string(force_runtime_reload)
-        ]);
-        if (status != 0)
-            return abort_reload(status, true);
+        if (need_sidecar) {
+            status = singbox_init_config();
+            if (status != 0)
+                return abort_reload(status, true);
+            nft_populate_enabled = NFT_POPULATE_ENABLED_DEFAULT;
+            status = module_status(STATE_UC, [
+                "reload-sing-box-runtime",
+                sing_box_pid_before,
+                sing_box_config_hash_before,
+                file_md5(sing_box_config_path),
+                as_string(force_runtime_reload)
+            ]);
+            if (status != 0)
+                return abort_reload(status, true);
+        }
+        else {
+            nft_populate_enabled = NFT_POPULATE_ENABLED_DEFAULT;
+            status = nft_populate_runtime_sets();
+            if (status != 0)
+                log_message("Failed to update nftables runtime sets after Xray reload; continuing with the existing table", "warn");
+        }
         status = module_status(STATE_UC, [
             "wait-forkop-stable-start",
             RT_TABLE_NAME,
             NFT_TABLE_NAME,
             NFT_FAKEIP_MARK,
             as_string(SING_BOX_START_STABLE_MIN_AGE),
-            as_string(SING_BOX_RELOAD_VERIFY_TIMEOUT)
+            as_string(engine.is_xray_primary() ? XRAY_START_VERIFY_TIMEOUT : SING_BOX_RELOAD_VERIFY_TIMEOUT)
         ]);
         if (status != 0) {
             log_message("Reload verification failed after sing-box was reloaded; restarting Forkop runtime", "warn");
@@ -1387,6 +1502,7 @@ function reload(reason) {
         status = dnsmasq_configure(true);
         if (status != 0)
             return abort_reload(status, true);
+        module_success(NFT_UC, [ "nft-resolve-xray-domains-from-uci", NFT_TABLE_NAME ]);
         module_success(STATE_UC, [ "capture-reload-state", RELOAD_STATE_SNAPSHOT_FILE, as_string(RELOAD_STATE_FORMAT) ]);
     }
     else if (plan.needs_dnsmasq_restore == 1) {

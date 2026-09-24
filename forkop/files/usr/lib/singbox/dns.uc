@@ -159,6 +159,45 @@ function bootstrap_config(settings, override_state) {
     return bootstrap_server(runtime_constants.BOOTSTRAP_DNS_SERVER_TAG, active.bootstrap);
 }
 
+function excluded_bootstrap_host(settings, override_state) {
+    let active = active_values(settings, override_state);
+    let server = runtime_url.host(active.bootstrap);
+    if (server == "")
+        server = as_string(active.bootstrap);
+    if (server == "")
+        server = "1.1.1.1";
+    return server;
+}
+
+function excluded_tls_config(settings, override_state) {
+    let server = excluded_bootstrap_host(settings, override_state);
+    let result = {
+        type: "tls",
+        tag: runtime_constants.EXCLUDED_DNS_SERVER_TAG,
+        server,
+        server_port: 853,
+        detour: runtime_constants.BYPASS_OUTBOUND_TAG
+    };
+    if (!core_ip.valid_ip(server))
+        result.domain_resolver = runtime_constants.BOOTSTRAP_DNS_SERVER_TAG;
+    return result;
+}
+
+function excluded_https_config(settings, override_state) {
+    let server = excluded_bootstrap_host(settings, override_state);
+    let result = {
+        type: "https",
+        tag: runtime_constants.EXCLUDED_DNS_HTTPS_TAG,
+        server,
+        server_port: 443,
+        path: "/dns-query",
+        detour: runtime_constants.BYPASS_OUTBOUND_TAG
+    };
+    if (!core_ip.valid_ip(server))
+        result.domain_resolver = runtime_constants.BOOTSTRAP_DNS_SERVER_TAG;
+    return result;
+}
+
 function failover_enabled(settings) {
     let state = state_template(settings);
     return length(state.main_servers) > 1 || length(state.bootstrap_servers) > 1;
@@ -262,6 +301,8 @@ return {
     config,
     default_domain_resolver,
     detour_tag,
+    excluded_https_config,
+    excluded_tls_config,
     failover_enabled,
     health_port,
     normalize_state,

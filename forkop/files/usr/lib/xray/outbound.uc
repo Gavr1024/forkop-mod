@@ -247,11 +247,21 @@ function ir_uuid(ir) {
     return as_string(ir.uuid || ir.id || "");
 }
 
+function vless_has_transport_security(ir) {
+    ir = object_or_empty(ir);
+    if (tls_security(object_or_empty(ir.tls)) != "none")
+        return true;
+    let encryption = lc(as_string(ir.encryption || "none"));
+    return encryption != "" && encryption != "none";
+}
+
 function convert_vless(ir, tag) {
     ir = object_or_empty(ir);
     let port = int_port(ir.server_port || ir.port);
     let uuid = ir_uuid(ir);
     if (as_string(ir.server || ir.address || "") == "" || port == 0 || uuid == "")
+        return null;
+    if (!vless_has_transport_security(ir))
         return null;
     let encryption = as_string(ir.encryption || "");
     if (encryption == "")
@@ -365,6 +375,58 @@ function convert_socks(ir, tag) {
     };
 }
 
+function hysteria_looks_like_hostname(value) {
+    value = as_string(value);
+    return value != "" && match(value, /[A-Za-z]/) != null;
+}
+
+function hysteria_udphop_ports(server_ports) {
+    if (type(server_ports) != "array" || length(server_ports) == 0)
+        return "";
+    let parts = [];
+    for (let item in server_ports) {
+        item = trim(as_string(item));
+        if (item == "")
+            continue;
+        let colon = index(item, ":");
+        if (colon < 0) {
+            push(parts, item);
+            continue;
+        }
+        let start = substr(item, 0, colon);
+        let stop = substr(item, colon + 1);
+        if (start == stop || stop == "")
+            push(parts, start);
+        else
+            push(parts, start + "-" + stop);
+    }
+    return join(",", parts);
+}
+
+function hysteria_obfs_password(ir) {
+    ir = object_or_empty(ir);
+    let obfs = object_or_empty(ir.obfs);
+    let kind = lc(as_string(obfs.type || ir.obfs_type || ""));
+    if (kind == "" || kind == "none")
+        return "";
+    return as_string(obfs.password || obfs.obfs_password || ir["obfs-password"] || ir.obfs_password || "");
+}
+
+function apply_hysteria_finalmask(stream, obfs_password, hop_ports) {
+    stream = object_or_empty(stream);
+    let mask = {};
+    if (obfs_password != "")
+        mask.udp = [{ type: "salamander", settings: { password: obfs_password } }];
+    if (hop_ports != "") {
+        if (type(mask.quicParams) != "object")
+            mask.quicParams = {};
+        mask.quicParams.udpHop = { ports: hop_ports };
+    }
+    if (length(keys(mask)) > 0)
+        stream.finalmask = mask;
+    return stream;
+}
+
 function convert_hysteria2(ir, tag) {
     ir = object_or_empty(ir);
     let port = int_port(ir.server_port || ir.port);
@@ -383,10 +445,27 @@ function convert_hysteria2(ir, tag) {
     let tls_cfg = tls_settings(tls);
     if (object_or_empty(tls_cfg).alpn == null)
         tls_cfg.alpn = [ "h3" ];
-    if (as_string(tls_cfg.serverName || "") == "")
+    if (as_string(tls_cfg.serverName || "") == "" && hysteria_looks_like_hostname(ir.server || ir.address))
         tls_cfg.serverName = as_string(ir.server || ir.address);
 
     let hy = { version: 2, auth: password };
+    if (ir.up_mbps != null && as_string(ir.up_mbps) != "")
+        hy.up = as_string(ir.up_mbps) + "mbps";
+    if (ir.down_mbps != null && as_string(ir.down_mbps) != "")
+        hy.down = as_string(ir.down_mbps) + "mbps";
+    let hop_ports = hysteria_udphop_ports(ir.server_ports);
+    if (hop_ports != "")
+        hy.udphop = { ports: hop_ports };
+
+    let stream = {
+        network: "hysteria",
+        method: "hysteria",
+        security: "tls",
+        tlsSettings: tls_cfg,
+        hysteriaSettings: hy,
+        sockopt: sockopt()
+    };
+    apply_hysteria_finalmask(stream, hysteria_obfs_password(ir), hop_ports);
 
     return {
         tag: as_string(tag),
@@ -396,14 +475,7 @@ function convert_hysteria2(ir, tag) {
             address: as_string(ir.server || ir.address),
             port: port
         },
-        streamSettings: {
-            network: "hysteria",
-            method: "hysteria",
-            security: "tls",
-            tlsSettings: tls_cfg,
-            hysteriaSettings: hy,
-            sockopt: sockopt()
-        }
+        streamSettings: stream
     };
 }
 
@@ -507,14 +579,25 @@ function normalize_hysteria_native(outbound) {
         stream.hysteriaSettings.version = 2;
     if (as_string(stream.hysteriaSettings.auth || "") == "" && password != "")
         stream.hysteriaSettings.auth = password;
+    let hop_ports = as_string(stream.hysteriaSettings.hopPorts || "");
+    if (hop_ports != "") {
+        delete stream.hysteriaSettings.hopPorts;
+        if (type(stream.hysteriaSettings.udphop) != "object")
+            stream.hysteriaSettings.udphop = { ports: hop_ports };
+    }
     if (as_string(stream.security || "") == "")
         stream.security = "tls";
     if (type(stream.tlsSettings) != "object")
         stream.tlsSettings = {};
     if (object_or_empty(stream.tlsSettings).alpn == null)
         stream.tlsSettings.alpn = [ "h3" ];
-    if (as_string(stream.tlsSettings.serverName || "") == "" && as_string(settings.address || "") != "")
+    if (as_string(stream.tlsSettings.serverName || "") == "" && hysteria_looks_like_hostname(settings.address))
         stream.tlsSettings.serverName = as_string(settings.address);
+    apply_hysteria_finalmask(
+        stream,
+        hysteria_obfs_password(outbound),
+        as_string(object_or_empty(stream.hysteriaSettings.udphop).ports || hop_ports)
+    );
     outbound.streamSettings = stream;
     return outbound;
 }
@@ -558,6 +641,17 @@ function ensure_sockopt(outbound) {
     return outbound;
 }
 
+function native_vless_is_plaintext(outbound) {
+    outbound = object_or_empty(outbound);
+    if (lc(as_string(outbound.protocol || "")) != "vless")
+        return false;
+    let security = lc(as_string(object_or_empty(outbound.streamSettings).security || "none"));
+    if (security != "" && security != "none")
+        return false;
+    let encryption = lc(as_string(object_or_empty(outbound.settings).encryption || "none"));
+    return encryption == "" || encryption == "none";
+}
+
 function convert_xray_native(outbound, tag) {
     outbound = object_or_empty(outbound);
     if (as_string(outbound.protocol || "") == "")
@@ -568,7 +662,64 @@ function convert_xray_native(outbound, tag) {
     result.tag = as_string(tag || outbound.tag || "");
     result = normalize_native_settings(result);
     result = normalize_hysteria_native(result);
+    if (native_vless_is_plaintext(result))
+        return null;
     return ensure_sockopt(result);
+}
+
+function fragment_range(value, fallback) {
+    value = trim(as_string(value));
+    if (match(value, /^[0-9]+$/) == null && match(value, /^[0-9]+-[0-9]+$/) == null)
+        return fallback;
+    return value;
+}
+
+function apply_freedom_fragment(outbound, spec) {
+    outbound = object_or_empty(outbound);
+    spec = object_or_empty(spec);
+    if (lc(as_string(outbound.protocol || "")) != "freedom")
+        return outbound;
+    if (spec.enabled != true)
+        return outbound;
+    if (type(outbound.settings) != "object")
+        outbound.settings = {};
+    outbound.settings.fragment = {
+        packets: "tlshello",
+        length: fragment_range(spec.length, "100-200"),
+        interval: fragment_range(spec.interval, "10-20")
+    };
+    return outbound;
+}
+
+function apply_tcp_finalmask(outbound, spec) {
+    outbound = object_or_empty(outbound);
+    spec = object_or_empty(spec);
+    if (spec.enabled != true)
+        return outbound;
+    let proto = lc(as_string(outbound.protocol || ""));
+    if (proto == "" || proto == "freedom" || proto == "blackhole" || proto == "dns" || proto == "hysteria")
+        return outbound;
+    if (type(outbound.streamSettings) != "object")
+        outbound.streamSettings = {};
+    let stream = outbound.streamSettings;
+    if (type(stream.finalmask) != "object")
+        stream.finalmask = {};
+    if (type(stream.finalmask.tcp) != "array")
+        stream.finalmask.tcp = [];
+    for (let item in stream.finalmask.tcp) {
+        if (type(item) == "object" && lc(as_string(item.type || "")) == "fragment")
+            return outbound;
+    }
+    push(stream.finalmask.tcp, {
+        type: "fragment",
+        settings: {
+            packets: "tlshello",
+            lengths: [ fragment_range(spec.length, "100-200") ],
+            delays: [ fragment_range(spec.interval, "10-20") ]
+        }
+    });
+    outbound.streamSettings = stream;
+    return outbound;
 }
 
 function convert_interface(iface, tag) {
@@ -657,6 +808,8 @@ return {
     convert_interface,
     socks_chain_outbound,
     apply_dialer_proxy,
+    apply_freedom_fragment,
+    apply_tcp_finalmask,
     supported_ir,
     ensure_sockopt,
     sockopt

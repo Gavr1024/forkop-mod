@@ -209,7 +209,9 @@ export interface StoreType {
     byedpi_installed: number;
     xray_version: string;
     xray_installed: number;
+    routing_engine: string;
     server_inbounds_enabled_count: number;
+    need_singbox_sidecar?: number;
     openwrt_version: string;
     device_model: string;
   };

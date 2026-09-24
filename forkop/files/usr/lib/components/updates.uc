@@ -4,6 +4,7 @@ let fs = require("fs");
 let uci_core = require("core.uci");
 let connections = require("config.connections");
 let list_cache = require("routing.list_cache");
+let engine = require("core.engine");
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
 const BIN_PATH = getenv("FORKOP_BIN") || "/usr/bin/forkop";
@@ -11,7 +12,7 @@ const TMP_SING_BOX_FOLDER = getenv("TMP_SING_BOX_FOLDER") || "/tmp/sing-box";
 const TMP_RULESET_FOLDER = getenv("TMP_RULESET_FOLDER") || TMP_SING_BOX_FOLDER + "/rulesets";
 const TMP_SUBSCRIPTION_FOLDER = getenv("TMP_SUBSCRIPTION_FOLDER") || TMP_SING_BOX_FOLDER + "/subscriptions";
 const RUNTIME_STATE_DIR = getenv("FORKOP_RUNTIME_STATE_DIR") || "/var/run/forkop";
-const LIST_UPDATE_STATE_FILE = getenv("FORKOP_LIST_UPDATE_STATE_FILE") || RUNTIME_STATE_DIR + "/list-update.timestamp";
+const LIST_UPDATE_STATE_FILE = getenv("FORKOP_LIST_UPDATE_STATE_FILE") || "/etc/forkop/list-update.timestamp";
 const LIST_UPDATE_PID_FILE = getenv("FORKOP_LIST_UPDATE_PID_FILE") || "/var/run/forkop_list_update.pid";
 const SUBSCRIPTION_UPDATE_STATE_DIR = getenv("FORKOP_SUBSCRIPTION_UPDATE_STATE_DIR") || RUNTIME_STATE_DIR + "/subscription-update";
 const SUBSCRIPTION_JOB_DIR = getenv("FORKOP_SUBSCRIPTION_UPDATE_JOB_DIR") || "/var/run/forkop/subscription-update-jobs";
@@ -601,7 +602,9 @@ function settings_update_interval(settings) {
     if (!bool_option(settings, "list_update_enabled", true))
         return "";
 
-    let value = option(settings, "update_interval", "1d");
+    let value = lc(option(settings, "update_interval", "1d"));
+    if (value == "never" || value == "0" || value == "off" || value == "disabled")
+        return "";
     return value != "" ? value : "1d";
 }
 
@@ -1934,27 +1937,11 @@ function service_proxy_port_for_purpose(purpose) {
 }
 
 function service_proxy_address(settings, purpose) {
-    return download_via_proxy_section(settings, purpose) != "" ?
-        SB_SERVICE_MIXED_INBOUND_ADDRESS + ":" + service_proxy_port_for_purpose(purpose) : "";
+    return list_cache.download_proxy_address(settings, purpose);
 }
 
 function download_to_file(url, filepath, proxy_address) {
-    let attempt = 1;
-    while (attempt <= 3) {
-        let command = command_from_args([ "wget", "-O", filepath, url ]);
-        if (as_string(proxy_address) != "")
-            command = "http_proxy=" + shell_quote("http://" + as_string(proxy_address)) +
-                " https_proxy=" + shell_quote("http://" + as_string(proxy_address)) + " " + command;
-
-        if (command_success(command))
-            return true;
-
-        log_message("Attempt " + attempt + "/3 to download " + as_string(url) + " failed", "warn");
-        command_success_from_args([ "sleep", "2" ]);
-        attempt++;
-    }
-
-    return false;
+    return list_cache.download_to_file(url, filepath, proxy_address);
 }
 
 function convert_crlf_to_lf(path) {
@@ -2136,11 +2123,15 @@ function import_builtin_subnets_from_rule(section, settings) {
             }
 
             if (!download_to_file(url, tmpfile, service_proxy_address(settings, "lists")) || !file_nonempty(tmpfile)) {
-                log_message("Failed to download built-in " + as_string(service) + " subnet list; skipping it until the next successful update", "error");
-                ok = false;
+                log_message("Built-in " + as_string(service) + " subnet list is unavailable (" + as_string(url) + "); keeping the last cached copy", "warn");
                 remove_file(tmpfile);
                 continue;
             }
+
+            try {
+                require("xray.geodata").remember_subnet_file(service, url, tmpfile);
+            }
+            catch (e) { }
 
             if (!nft_module_success([
                 "nft-add-community-subnet-file-for-uci-section",
@@ -2460,7 +2451,7 @@ function github_probe(proxy_address) {
         let args = [ "curl", "-s", "-m", "" + timeout ];
         if (as_string(proxy_address) != "") {
             push(args, "-x");
-            push(args, "http://" + as_string(proxy_address));
+            push(args, list_cache.curl_proxy_spec(proxy_address));
         }
         push(args, "https://github.com");
 
@@ -2481,6 +2472,7 @@ function github_probe(proxy_address) {
 }
 
 function write_list_update_timestamp(timestamp) {
+    ensure_dir("/etc/forkop");
     ensure_dir(RUNTIME_STATE_DIR);
     write_file(LIST_UPDATE_STATE_FILE, as_string(timestamp) + "\n");
 }
@@ -2492,6 +2484,8 @@ function list_update() {
 
     let settings = uci_settings();
     let proxy_address = service_proxy_address(settings, "lists");
+    if (engine.is_xray_primary() && as_string(proxy_address) == "")
+        log_message("Xray plane: enable 'download lists via proxy' and pick an Xray section so GitHub lists can be fetched through SOCKS", "warn");
     if (!dns_probe_passed(proxy_address)) {
         list_update_pid_end();
         exit(1);
@@ -2501,7 +2495,7 @@ function list_update() {
     log_message("Downloading and processing lists", "info");
     let sections = uci_sections("section");
     let ok = true;
-    if (list_cache.persist_enabled(settings) && !list_cache.ensure_download_section_up(settings)) {
+    if (!list_cache.ensure_download_section_up(settings)) {
         log_message("Download section is not ready; local list cache will keep previous copies if any", "warn");
         ok = false;
     }
@@ -2536,6 +2530,37 @@ function list_update() {
         }
     }
 
+    if (engine.is_xray_primary()) {
+        let geodata = require("xray.geodata");
+        let config_path = "/etc/xray/config.json";
+        let nftset_path = getenv("FORKOP_DNSMASQ_NFTSET_CONF") || "/tmp/dnsmasq.d/forkop-xray-nftset.conf";
+        let before_config = file_md5(config_path);
+        let before_nftset = file_md5(nftset_path);
+        if (!geodata.ensure_from_uci(settings, proxy_address, true))
+            log_message("Xray list conversion kept previous copies where download failed", "warn");
+        command_success_from_args([
+            "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "init-config"
+        ]);
+        let after_config = file_md5(config_path);
+        if (list_cache.persist_enabled(settings) && before_config != "" && before_config == after_config) {
+            log_message("Xray configuration unchanged after lists; skip reload", "info");
+        }
+        else {
+            log_message("Refreshing Xray configuration after list conversion", "info");
+            command_success_from_args([
+                "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "reload-runtime"
+            ]);
+        }
+        command_success_from_args([
+            "ucode", "-L", LIB_DIR, LIB_DIR + "/nft/apply.uc", "nft-write-xray-nftset-conf", "ForkopTable"
+        ]);
+        let after_nftset = file_md5(nftset_path);
+        if (list_cache.persist_enabled(settings) && before_nftset != "" && before_nftset == after_nftset)
+            log_message("dnsmasq nftset unchanged after lists; skip dnsmasq restart", "info");
+        else
+            command_success_from_args([ "/etc/init.d/dnsmasq", "restart" ]);
+    }
+
     if (ok) {
         write_list_update_timestamp(now_seconds());
         log_message("Lists update completed successfully", "info");
@@ -2546,6 +2571,36 @@ function list_update() {
 
     list_update_pid_end();
     exit(ok ? 0 : 1);
+}
+
+function xray_list_assets_ready() {
+    if (!engine.is_xray_primary())
+        return true;
+    try {
+        let geodata = require("xray.geodata");
+        return geodata.assets_present_for_uci();
+    }
+    catch (e) {
+        log_message("Xray cache check failed: " + e, "warn");
+        return false;
+    }
+}
+
+function list_update_if_missing() {
+    if (!list_cache.persist_enabled()) {
+        list_update();
+        return;
+    }
+    if (settings_update_interval(uci_settings()) == "") {
+        if (!engine.is_xray_primary() || xray_list_assets_ready()) {
+            log_message("List auto-update is off; keeping flash cache on start", "info");
+            exit(0);
+        }
+        log_message("Xray list assets are missing from cache; running lists update now", "info");
+        list_update();
+        return;
+    }
+    list_update_if_due();
 }
 
 function list_update_if_due() {
@@ -2559,11 +2614,18 @@ function list_update_if_due() {
         exit(1);
     }
 
-    let status = update_due_status(now_seconds(), file_first_line_value(LIST_UPDATE_STATE_FILE), seconds);
+    let last_run = file_first_line_value(LIST_UPDATE_STATE_FILE);
+    let status = update_due_status(now_seconds(), last_run, seconds);
+    if (engine.is_xray_primary() && !xray_list_assets_ready()) {
+        log_message("Xray list assets are missing from cache; running lists update now", "info");
+        list_update();
+    }
     if (status == 0)
         list_update();
-    if (status == 1)
+    if (status == 1) {
+        log_message("Lists are fresh; skipping download", "info");
         exit(0);
+    }
 
     exit(1);
 }
@@ -2889,6 +2951,77 @@ function print_builtin_subnet_urls(service) {
         print(url, "\n");
 }
 
+const LIST_CACHE_JOB_PID = getenv("FORKOP_LIST_CACHE_JOB_PID") || "/tmp/forkop-list-cache.pid";
+const LIST_CACHE_JOB_OUTCOME = getenv("FORKOP_LIST_CACHE_JOB_OUTCOME") || "/tmp/forkop-list-cache.outcome";
+
+function list_cache_job_pid() {
+    let pid = trim(as_string(fs.readfile(LIST_CACHE_JOB_PID) || ""));
+    let newline = index(pid, "\n");
+    if (newline >= 0)
+        pid = substr(pid, 0, newline);
+    return pid;
+}
+
+function list_cache_job_running() {
+    let pid = list_cache_job_pid();
+    if (match(pid, /^[0-9]+$/) == null)
+        return false;
+    return command_success_from_args([ "kill", "-0", pid ]);
+}
+
+function list_cache_job_outcome() {
+    if (list_cache_job_running())
+        return "running";
+    let value = trim(as_string(fs.readfile(LIST_CACHE_JOB_OUTCOME) || ""));
+    if (value == "ok" || value == "fail")
+        return value;
+    if (value == "running")
+        return "fail";
+    return "";
+}
+
+function print_list_cache_status() {
+    let status = list_cache.status_object();
+    if (type(status) != "object")
+        status = {};
+    status.running = list_cache_job_running();
+    status.outcome = list_cache_job_outcome();
+    print(sprintf("%J", status), "\n");
+}
+
+function start_list_cache_persist() {
+    if (list_cache_job_running()) {
+        log_message("list cache download already running", "info");
+        exit(0);
+    }
+    try { fs.writefile(LIST_CACHE_JOB_OUTCOME, "running\n"); } catch (e) { }
+    let inner = command_from_args([
+        "ucode", "-L", LIB_DIR, LIB_DIR + "/components/updates.uc", "list-cache-persist-run"
+    ]);
+    let command = "( setsid " + inner + " >/tmp/forkop-list-cache.log 2>&1 & echo $! > " +
+        shell_quote(LIST_CACHE_JOB_PID) + " )";
+    if (system(command) != 0) {
+        try { fs.writefile(LIST_CACHE_JOB_OUTCOME, "fail\n"); } catch (e2) { }
+        log_message("failed to start list cache download", "error");
+        exit(1);
+    }
+    log_message("list cache download started", "info");
+    exit(0);
+}
+
+function run_list_cache_persist() {
+    let persist_result = list_cache.persist_selected_lists();
+    let ok = true;
+    if (type(persist_result) == "object")
+        ok = persist_result.ok ? true : false;
+    else
+        ok = persist_result ? true : false;
+    try { fs.writefile(LIST_CACHE_JOB_OUTCOME, (ok ? "ok" : "fail") + "\n"); } catch (e) { }
+    try { fs.unlink(LIST_CACHE_JOB_PID); } catch (e2) { }
+    log_message(ok ? "List cache download finished" : "List cache download finished with errors", ok ? "info" : "warn");
+    exit(ok ? 0 : 1);
+}
+
 let mode = ARGV[0] || "";
 
 if (mode == "json-length")
@@ -2920,15 +3053,15 @@ else if (mode == "remove-cron-jobs")
 else if (mode == "list-update")
     list_update();
 else if (mode == "list-cache-status")
-    list_cache.print_status_json();
-else if (mode == "list-cache-persist") {
-    let persist_result = list_cache.persist_selected_lists();
-    if (type(persist_result) == "object")
-        exit(persist_result.ok ? 0 : 1);
-    exit(persist_result ? 0 : 1);
-}
+    print_list_cache_status();
+else if (mode == "list-cache-persist")
+    start_list_cache_persist();
+else if (mode == "list-cache-persist-run")
+    run_list_cache_persist();
 else if (mode == "list-update-if-due")
     list_update_if_due();
+else if (mode == "list-update-if-missing")
+    list_update_if_missing();
 else if (mode == "stop-list-update")
     stop_list_update();
 else if (mode == "list-update-due-status")

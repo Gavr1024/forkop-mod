@@ -7,8 +7,22 @@ import { validateSocksUrl } from './validateSocksUrl';
 import { validateHysteria2Url } from './validateHysteriaUrl';
 
 // TODO refactor current validation and add tests
-export function validateProxyUrl(url: string): ValidationResult {
-  const trimmedUrl = url.trim();
+export function validateProxyUrl(url: string | string[] | null | undefined): ValidationResult {
+  if (url == null || url === '') {
+    return { valid: true, message: 'Valid' };
+  }
+
+  if (Array.isArray(url)) {
+    for (const item of url) {
+      const result = validateProxyUrl(item);
+      if (!result.valid) {
+        return result;
+      }
+    }
+    return { valid: true, message: 'Valid' };
+  }
+
+  const trimmedUrl = `${url}`.trim();
 
   if (trimmedUrl.startsWith('ss://')) {
     return validateShadowsocksUrl(trimmedUrl);

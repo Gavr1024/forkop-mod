@@ -3,6 +3,7 @@
 let common = require("core.common");
 let connections = require("config.connections");
 let runtime_constants = require("singbox.constants");
+let engine = require("core.engine");
 
 let option = common.option;
 let bool_option = common.bool_option;
@@ -18,13 +19,17 @@ function bool_value(value) {
 function config(settings, runtime) {
     let output_network_interface = option(settings, "output_network_interface", "");
     let mwan3_active = type(runtime) == "object" && bool_value(runtime.mwan3_active);
-    let sniff_inbounds = [
-        runtime_constants.TPROXY_INBOUND_TAG,
-        runtime_constants.TPROXY_INBOUND6_TAG,
-        runtime_constants.DNS_INBOUND_TAG
-    ];
-    if (type(runtime) == "object" && bool_value(runtime.source_aware_dns))
-        push(sniff_inbounds, runtime_constants.SOURCE_DNS_INBOUND_TAG);
+    let sniff_inbounds = [];
+    if (engine.is_xray_primary()) {
+        push(sniff_inbounds, runtime_constants.XRAY_PLANE_MIXED_INBOUND_TAG);
+    }
+    else {
+        push(sniff_inbounds, runtime_constants.TPROXY_INBOUND_TAG);
+        push(sniff_inbounds, runtime_constants.TPROXY_INBOUND6_TAG);
+        push(sniff_inbounds, runtime_constants.DNS_INBOUND_TAG);
+        if (type(runtime) == "object" && bool_value(runtime.source_aware_dns))
+            push(sniff_inbounds, runtime_constants.SOURCE_DNS_INBOUND_TAG);
+    }
     if (type(runtime) == "object" && type(runtime.dns_health_inbounds) == "array")
         for (let inbound in runtime.dns_health_inbounds)
             push(sniff_inbounds, inbound);
@@ -33,8 +38,6 @@ function config(settings, runtime) {
     let result = {
         rules: [
             { action: "sniff", inbound: sniff_inbounds },
-            { action: "hijack-dns", port: 53 },
-            { action: "hijack-dns", protocol: "dns" }
         ],
         rule_set: [],
         final: runtime_constants.DIRECT_OUTBOUND_TAG,
@@ -44,6 +47,10 @@ function config(settings, runtime) {
             : runtime_constants.DNS_SERVER_TAG,
         default_mark: runtime_constants.OUTBOUND_MARK
     };
+    if (!engine.is_xray_primary()) {
+        push(result.rules, { action: "hijack-dns", port: 53 });
+        push(result.rules, { action: "hijack-dns", protocol: "dns" });
+    }
 
     if (output_network_interface != "")
         result.default_interface = output_network_interface;

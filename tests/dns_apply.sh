@@ -133,6 +133,8 @@ export DNSMASQ_LOG
 export DNSMASQ_INIT="$WORK_DIR/dnsmasq-init"
 export FORKOP_CONFIG_NAME="forkop"
 export SB_DNS_INBOUND_ADDRESS="127.0.0.42"
+export FORKOP_DNSMASQ_HTTPS_CONF="$WORK_DIR/forkop-filter-rr.conf"
+export FORKOP_DNSMASQ_FILTER_RR="1"
 
 if grep -E 'uci -q|command -v uci' "$APPLY" >/dev/null; then
   fail "dns/apply.uc must use ucode UCI access instead of shelling out to uci"
@@ -178,6 +180,18 @@ assert_dnsmasq_restarted() {
   grep -Fxq 'restart' "$DNSMASQ_LOG" || fail "expected dnsmasq restart"
 }
 
+assert_https_filter() {
+  local path="${FORKOP_DNSMASQ_HTTPS_CONF:?}"
+  [ -s "$path" ] || fail "expected HTTPS/SVCB dnsmasq filter at $path"
+  grep -Fq 'filter-rr=HTTPS' "$path" || fail "dnsmasq conf must strip HTTPS records"
+  grep -Fq 'filter-rr=SVCB' "$path" || fail "dnsmasq conf must strip SVCB records"
+  grep -Fq 'use-application-dns.net' "$path" || fail "dnsmasq conf must poison Chrome DoH canary"
+}
+
+assert_https_filter_absent() {
+  [ ! -e "${FORKOP_DNSMASQ_HTTPS_CONF:?}" ] || fail "HTTPS filter conf should be removed on restore"
+}
+
 cat >"$STATE" <<'EOF_STATE'
 dhcp.@dnsmasq[0].server=1.1.1.1 8.8.8.8
 dhcp.@dnsmasq[0].noresolv=0
@@ -196,6 +210,7 @@ assert_value 'dhcp.@dnsmasq[0].cachesize' '0'
 assert_value 'dhcp.@dnsmasq[0].forkop_cachesize' '150'
 assert_log_contains 'commit dhcp'
 assert_dnsmasq_restarted
+assert_https_filter
 
 : > "$DNSMASQ_LOG"
 : > "$LOG"
@@ -208,6 +223,7 @@ assert_absent 'dhcp.@dnsmasq[0].forkop_noresolv'
 assert_absent 'dhcp.@dnsmasq[0].forkop_cachesize'
 assert_log_contains 'commit dhcp'
 assert_dnsmasq_restarted
+assert_https_filter_absent
 
 cat >"$STATE" <<'EOF_STATE'
 dhcp.@dnsmasq[0].server=127.0.0.42

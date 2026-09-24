@@ -23,6 +23,7 @@ const UNKNOWN_SYSTEM_INFO: StoreType['diagnosticsSystemInfo'] = {
   byedpi_installed: 0,
   xray_version: _('unknown'),
   xray_installed: 0,
+  routing_engine: 'sing-box',
   server_inbounds_enabled_count: -1,
   openwrt_version: _('unknown'),
   device_model: _('unknown'),
@@ -82,6 +83,7 @@ export async function ensureSystemInfo({
             providerInfoLoaded: true,
             server_inbounds_enabled_count:
               currentSystemInfo.server_inbounds_enabled_count,
+            need_singbox_sidecar: currentSystemInfo.need_singbox_sidecar,
             ...systemInfo.data,
           });
 
@@ -108,6 +110,7 @@ export async function ensureSystemInfo({
         xray_installed: latestSystemInfo.xray_installed,
         server_inbounds_enabled_count:
           latestSystemInfo.server_inbounds_enabled_count,
+        need_singbox_sidecar: latestSystemInfo.need_singbox_sidecar,
       };
 
       store.set({

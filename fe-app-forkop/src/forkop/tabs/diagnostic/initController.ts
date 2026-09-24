@@ -963,7 +963,7 @@ function renderDiagnosticSystemInfoWidget() {
 
   const items = [
     {
-      key: 'Forkop',
+      key: 'Forkop-Mod',
       value: normalizeCompiledVersion(diagnosticsSystemInfo.forkop_version),
     },
     {

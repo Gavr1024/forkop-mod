@@ -15,6 +15,8 @@ SETTINGS_JS="$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/
 UCI_DEFAULT="$ROOT_DIR/forkop/files/etc/config/forkop"
 RU_PO="$ROOT_DIR/luci-app-forkop/po/ru/forkop.po"
 XRAY_RUNTIME="$FORKOP_LIB/xray/runtime.uc"
+XRAY_GEN="$FORKOP_LIB/xray/generator.uc"
+XRAY_CONST="$FORKOP_LIB/xray/constants.uc"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -86,6 +88,15 @@ if awk '
 ' "$GENERATOR_UC"; then
   fail "redirect inbound must not set the unknown field network"
 fi
+
+require_contains "$XRAY_CONST" 'XRAY_REDIRECT_PORT = 1604' \
+  "Xray plane must listen on the same redirect port nft DNAT uses"
+require_contains "$XRAY_GEN" 'function apply_router_traffic_route' \
+  "Xray plane must route redirect-in through the selected section outbound"
+require_contains "$XRAY_GEN" 'function redirect_inbound' \
+  "Xray plane must emit dokodemo-door followRedirect for router OUTPUT DNAT"
+require_contains "$GENERATOR_UC" 'if (engine.is_xray_primary())' \
+  "sing-box must not bind :1604 when Xray is the routing plane"
 
 if awk '
   $0 ~ /function start_main\(/ { in_fn = 1 }

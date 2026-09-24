@@ -10,8 +10,35 @@ describe('validateOutboundJson', () => {
 
   it('accepts a server outbound with server and numeric server_port', () => {
     const result = validateOutboundJson(
-      '{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080}',
+      '{"type":"hysteria2","tag":"hy2-out","server":"example.com","server_port":443,"password":"pw","tls":{"enabled":true,"server_name":"example.com"},"obfs":{"type":"salamander","password":"obf"}}',
     );
+
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts hysteria2 JSON with server_port as a string', () => {
+    const result = validateOutboundJson(
+      '{"type":"hysteria2","tag":"hy2-out","server":"example.com","server_port":"443"}',
+    );
+
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts Xray-native hysteria JSON with protocol/address/port', () => {
+    const result = validateOutboundJson(
+      '{"protocol":"hysteria","tag":"hy2-out","settings":{"version":2,"address":"example.com","port":443}}',
+    );
+
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts an already-parsed outbound object', () => {
+    const result = validateOutboundJson({
+      type: 'hysteria2',
+      tag: 'hy2-out',
+      server: 'example.com',
+      server_port: 443,
+    });
 
     expect(result.valid).toBe(true);
   });

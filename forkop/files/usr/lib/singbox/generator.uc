@@ -17,6 +17,7 @@ let list_cache = require("routing.list_cache");
 let rule_config = require("config.rule");
 let connections = require("config.connections");
 let core_ip = require("core.ip");
+let engine = require("core.engine");
 let subscription_share_link = require("subscription.share_link");
 let uci = null;
 let fixture_uci_data = null;
@@ -541,6 +542,8 @@ function cli_bool(value) {
 }
 
 function tproxy_inbound_matcher() {
+    if (engine.is_xray_primary())
+        return [ runtime_constants.XRAY_PLANE_MIXED_INBOUND_TAG ];
     return [
         runtime_constants.TPROXY_INBOUND_TAG,
         runtime_constants.TPROXY_INBOUND6_TAG
@@ -563,36 +566,48 @@ function base_config(settings, service_address, runtime_context) {
     let dns_rules = [];
     for (let rule in dns_config.rules)
         push(dns_rules, rule);
-    for (let rule in [
-        { action: "reject", query_type: "HTTPS" },
-        { action: "reject", domain_suffix: "use-application-dns.net" },
-        {
+    push(dns_rules, { action: "reject", query_type: "HTTPS" });
+    push(dns_rules, { action: "reject", domain_suffix: "use-application-dns.net" });
+    if (!engine.is_xray_primary()) {
+        push(dns_rules, {
             action: "route",
             server: runtime_constants.FAKEIP_DNS_SERVER_TAG,
             rewrite_ttl,
             domain: [ runtime_constants.FAKEIP_TEST_DOMAIN, runtime_constants.CHECK_PROXY_IP_DOMAIN ]
-        }
-    ])
-        push(dns_rules, rule);
+        });
+    }
 
     let dns_servers = [];
     for (let server in dns_config.servers)
         push(dns_servers, server);
-    push(dns_servers, {
-        type: "fakeip",
-        tag: runtime_constants.FAKEIP_DNS_SERVER_TAG,
-        inet4_range: runtime_constants.FAKEIP_INET4_RANGE,
-        inet6_range: runtime_constants.FAKEIP_INET6_RANGE
-    });
+    if (!engine.is_xray_primary()) {
+        push(dns_servers, {
+            type: "fakeip",
+            tag: runtime_constants.FAKEIP_DNS_SERVER_TAG,
+            inet4_range: runtime_constants.FAKEIP_INET4_RANGE,
+            inet6_range: runtime_constants.FAKEIP_INET6_RANGE
+        });
+    }
 
     runtime_context = object_or_empty(runtime_context);
-    let inbounds = [
-        { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND_TAG, listen: runtime_constants.TPROXY_INBOUND_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true },
-        { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND6_TAG, listen: runtime_constants.TPROXY_INBOUND6_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true },
-        { type: "direct", tag: runtime_constants.DNS_INBOUND_TAG, listen: runtime_constants.DNS_INBOUND_ADDRESS, listen_port: runtime_constants.DNS_INBOUND_PORT }
-    ];
-    if (runtime_context.source_aware_dns)
-        push(inbounds, { type: "direct", tag: runtime_constants.SOURCE_DNS_INBOUND_TAG, listen: runtime_constants.SOURCE_DNS_INBOUND_ADDRESS, listen_port: runtime_constants.SOURCE_DNS_INBOUND_PORT });
+    let inbounds = [];
+    if (!engine.is_xray_primary()) {
+        push(inbounds, { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND_TAG, listen: runtime_constants.TPROXY_INBOUND_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true });
+        push(inbounds, { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND6_TAG, listen: runtime_constants.TPROXY_INBOUND6_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true });
+        push(inbounds, { type: "direct", tag: runtime_constants.DNS_INBOUND_TAG, listen: runtime_constants.DNS_INBOUND_ADDRESS, listen_port: runtime_constants.DNS_INBOUND_PORT });
+        if (runtime_context.source_aware_dns)
+            push(inbounds, { type: "direct", tag: runtime_constants.SOURCE_DNS_INBOUND_TAG, listen: runtime_constants.SOURCE_DNS_INBOUND_ADDRESS, listen_port: runtime_constants.SOURCE_DNS_INBOUND_PORT });
+    }
+    else {
+        push(inbounds, {
+            type: "mixed",
+            tag: runtime_constants.XRAY_PLANE_MIXED_INBOUND_TAG,
+            listen: runtime_constants.XRAY_PLANE_MIXED_INBOUND_ADDRESS,
+            listen_port: runtime_constants.XRAY_PLANE_MIXED_INBOUND_PORT,
+            tcp_fast_open: true,
+            udp_fragment: true
+        });
+    }
     for (let inbound in dns_config.inbounds)
         push(inbounds, inbound);
 
@@ -629,7 +644,7 @@ function base_config(settings, service_address, runtime_context) {
             cache_file: {
                 enabled: true,
                 path: cache_path,
-                store_fakeip: true
+                store_fakeip: !engine.is_xray_primary()
             },
             clash_api: clash_api_config(settings, service_address)
         }
@@ -2405,6 +2420,8 @@ function strip_redirect_inbound_network(config) {
 }
 
 function add_router_traffic_redirect(config, settings) {
+    if (engine.is_xray_primary())
+        return;
     let section_name = router_traffic_section(settings);
     if (section_name == "")
         return;
@@ -2810,7 +2827,7 @@ function add_domain_ip_list_ruleset(config, section_name, rule_set_tags, dns_rul
 }
 
 function exclusion_fix_marker() {
-    return "forkop-exclusions-fix-4";
+    return "forkop-exclusions-fix-5";
 }
 
 function looks_like_ipv4(value) {
@@ -3180,6 +3197,59 @@ function prepend_item(list, item) {
     return result;
 }
 
+function prepend_all(list, items) {
+    let result = [];
+    for (let item in array_or_empty(items))
+        push(result, item);
+    for (let value in array_or_empty(list))
+        push(result, value);
+    return result;
+}
+
+function dns_server_tag_exists(config, tag_name) {
+    for (let server in array_or_empty(object_or_empty(config.dns).servers))
+        if (as_string(server.tag) == as_string(tag_name))
+            return true;
+    return false;
+}
+
+function ensure_excluded_dns_servers(config) {
+    if (type(config.dns) != "object")
+        config.dns = {};
+    if (type(config.dns.servers) != "array")
+        config.dns.servers = [];
+
+    let settings = runtime_settings();
+    if (!dns_server_tag_exists(config, runtime_constants.EXCLUDED_DNS_SERVER_TAG))
+        push(config.dns.servers, runtime_dns.excluded_tls_config(settings));
+    if (!dns_server_tag_exists(config, runtime_constants.EXCLUDED_DNS_HTTPS_TAG))
+        push(config.dns.servers, runtime_dns.excluded_https_config(settings));
+}
+
+function excluded_non_fakeip_rule(inbound, source) {
+    return {
+        type: "logical",
+        mode: "and",
+        rules: [
+            {
+                inbound,
+                source_ip_cidr: source
+            },
+            {
+                match_response: true,
+                ip_cidr: [
+                    runtime_constants.FAKEIP_INET4_RANGE,
+                    runtime_constants.FAKEIP_INET6_RANGE
+                ],
+                invert: true
+            }
+        ],
+        action: "route",
+        server: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
+        disable_cache: true
+    };
+}
+
 function add_global_routing_exclusions(config) {
     let excluded = [];
     try {
@@ -3192,19 +3262,64 @@ function add_global_routing_exclusions(config) {
     if (length(excluded) == 0)
         return;
 
+    // When Xray owns TPROXY/DNS, excluded LAN clients never hit the sidecar.
+    // The DNS-exclusion rules reference SOURCE_DNS inbound that does not exist.
+    if (engine.is_xray_primary())
+        return;
+
     try {
         if (type(config.dns) != "object")
             config.dns = {};
         if (type(config.dns.rules) != "array")
             config.dns.rules = [];
 
-        config.dns.rules = prepend_item(config.dns.rules, {
-            action: "route",
-            server: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
-            inbound: source_dns_inbound_matcher(),
-            source_ip_cidr: single_or_array(excluded),
-            disable_cache: true
-        });
+        ensure_excluded_dns_servers(config);
+
+        let inbound = source_dns_inbound_matcher();
+        let source = single_or_array(excluded);
+        let fakeip_proof = [
+            {
+                action: "evaluate",
+                server: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
+                inbound,
+                source_ip_cidr: source,
+                disable_cache: true
+            },
+            excluded_non_fakeip_rule(inbound, source),
+            {
+                action: "route",
+                server: runtime_constants.EXCLUDED_DNS_SERVER_TAG,
+                inbound,
+                source_ip_cidr: source,
+                disable_cache: true
+            },
+            {
+                action: "route",
+                server: runtime_constants.EXCLUDED_DNS_HTTPS_TAG,
+                inbound,
+                source_ip_cidr: source,
+                disable_cache: true
+            }
+        ];
+        if (!sing_box_at_least_1_14()) {
+            fakeip_proof = [
+                {
+                    action: "route",
+                    server: runtime_constants.EXCLUDED_DNS_SERVER_TAG,
+                    inbound,
+                    source_ip_cidr: source,
+                    disable_cache: true
+                },
+                {
+                    action: "route",
+                    server: runtime_constants.EXCLUDED_DNS_HTTPS_TAG,
+                    inbound,
+                    source_ip_cidr: source,
+                    disable_cache: true
+                }
+            ];
+        }
+        config.dns.rules = prepend_all(config.dns.rules, fakeip_proof);
 
         insert_route_rules_after_system(config, [{
             action: "route",
@@ -3293,6 +3408,8 @@ function push_dns_matcher_rule(config, rule) {
 }
 
 function section_dns_server(section) {
+    if (engine.is_xray_primary())
+        return runtime_constants.DNS_SERVER_TAG;
     return option(section, "action", "") == "bypass"
         ? runtime_constants.DNS_SERVER_TAG
         : runtime_constants.FAKEIP_DNS_SERVER_TAG;

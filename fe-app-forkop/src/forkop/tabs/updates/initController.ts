@@ -110,8 +110,10 @@ let singBoxAvailableVersions: string[] = [...SING_BOX_EXTENDED_FALLBACK_VERSIONS
 let singBoxVersionsLoading = false;
 let singBoxSelectedVersion = '';
 let xrayAvailableVersions: string[] = [...XRAY_FALLBACK_VERSIONS];
+let xrayPrereleaseVersions: string[] = [];
 let xrayVersionsLoading = false;
 let xraySelectedVersion = '';
+let xrayIncludePrerelease = false;
 let coreVersionsLoading = false;
 let componentActionStateRefreshPromise: Promise<void> | null = null;
 const followedComponentJobs = new Set<string>();
@@ -260,9 +262,12 @@ function applyCachedCheckResults(results: Forkop.ComponentActionResult[]) {
 
     if (Array.isArray(result.available_versions) && result.component === 'xray') {
       xrayAvailableVersions = result.available_versions.filter(Boolean);
+      xrayPrereleaseVersions = Array.isArray(result.prerelease_versions)
+        ? result.prerelease_versions.filter(Boolean)
+        : [];
       if (
         xraySelectedVersion &&
-        !xrayAvailableVersions.includes(xraySelectedVersion)
+        !visibleXrayVersionTags().includes(xraySelectedVersion)
       ) {
         xraySelectedVersion = '';
       }
@@ -499,12 +504,12 @@ function liveSelectedXrayVersion() {
   const select = document.querySelector(
     '.fkp_xray-version-select',
   ) as HTMLSelectElement | null;
-  const fromSelect = normalizeXrayVersionTag(select?.value || '');
+  const fromSelect = normalizeXrayVersionTag(select?.value || '', true);
   if (fromSelect) {
     xraySelectedVersion = fromSelect;
     return fromSelect;
   }
-  return normalizeXrayVersionTag(xraySelectedVersion);
+  return normalizeXrayVersionTag(xraySelectedVersion, true);
 }
 
 function currentXrayVersionInstallAction(tag: string) {
@@ -574,7 +579,7 @@ function mergeSingBoxVersions(values: unknown[]) {
   return result;
 }
 
-function normalizeXrayVersionTag(value: unknown) {
+function normalizeXrayVersionTag(value: unknown, allowPrerelease = false) {
   let tag = `${value || ''}`.trim();
   if (!tag) {
     return '';
@@ -583,23 +588,35 @@ function normalizeXrayVersionTag(value: unknown) {
     tag = tag.slice(1);
   }
   const lowered = tag.toLowerCase();
+  if (lowered === 'version' || !/^\d+\.\d+\.\d+/.test(tag)) {
+    return '';
+  }
   if (
-    lowered === 'version' ||
-    lowered.includes('alpha') ||
-    lowered.includes('beta') ||
-    lowered.includes('rc') ||
-    !/^\d+\.\d+\.\d+/.test(tag)
+    !allowPrerelease &&
+    (lowered.includes('alpha') ||
+      lowered.includes('beta') ||
+      lowered.includes('rc'))
   ) {
     return '';
   }
   return tag;
 }
 
-function mergeXrayVersions(values: unknown[]) {
+function isXrayPrereleaseTag(tag: string) {
+  const lowered = tag.toLowerCase();
+  return (
+    lowered.includes('alpha') ||
+    lowered.includes('beta') ||
+    lowered.includes('rc') ||
+    xrayPrereleaseVersions.includes(tag)
+  );
+}
+
+function mergeXrayVersions(values: unknown[], allowPrerelease = false) {
   const seen = new Set<string>();
   const result: string[] = [];
   values.forEach((value) => {
-    const tag = normalizeXrayVersionTag(value);
+    const tag = normalizeXrayVersionTag(value, allowPrerelease);
     if (!tag || seen.has(tag)) {
       return;
     }
@@ -607,6 +624,23 @@ function mergeXrayVersions(values: unknown[]) {
     result.push(tag);
   });
   return result;
+}
+
+function visibleXrayVersionTags() {
+  const currentVersion = normalizeXrayVersionTag(
+    store.get().diagnosticsSystemInfo.xray_version,
+    true,
+  );
+  const ordered = mergeXrayVersions(
+    [...xrayAvailableVersions, ...XRAY_FALLBACK_VERSIONS, currentVersion],
+    true,
+  );
+  if (xrayIncludePrerelease) {
+    return ordered;
+  }
+  return ordered.filter(
+    (tag) => tag === currentVersion || !isXrayPrereleaseTag(tag),
+  );
 }
 
 async function fetchSingBoxVersionsFromGitHub() {
@@ -644,6 +678,51 @@ async function loadSingBoxVersionsFromRouter() {
   return mergeSingBoxVersions(response.data.available_versions);
 }
 
+function xrayVersionOptionLabel(version: string, currentVersion: string) {
+  const marks = [];
+  if (version === currentVersion) {
+    marks.push(_('current'));
+  }
+  if (isXrayPrereleaseTag(version)) {
+    marks.push(_('pre-release'));
+  }
+  return marks.length ? `${version} (${marks.join(', ')})` : version;
+}
+
+function syncXrayVersionSelect() {
+  const select = document.querySelector(
+    '.fkp_xray-version-select',
+  ) as HTMLSelectElement | null;
+  if (!select) {
+    return;
+  }
+  const currentVersion = normalizeXrayVersionTag(
+    store.get().diagnosticsSystemInfo.xray_version,
+    true,
+  );
+  const options = visibleXrayVersionTags();
+  const selected =
+    xraySelectedVersion && options.includes(xraySelectedVersion)
+      ? xraySelectedVersion
+      : options.includes(currentVersion)
+        ? currentVersion
+        : options[0] || '';
+  xraySelectedVersion = selected;
+  select.replaceChildren(
+    ...options.map((version) =>
+      E(
+        'option',
+        {
+          value: version,
+          selected: version === selected ? 'selected' : null,
+        },
+        xrayVersionOptionLabel(version, currentVersion),
+      ),
+    ),
+  );
+  select.value = selected;
+}
+
 async function fetchXrayVersionsFromGitHub() {
   const response = await fetch(
     'https://api.github.com/repos/XTLS/Xray-core/releases?per_page=30',
@@ -656,17 +735,27 @@ async function fetchXrayVersionsFromGitHub() {
   if (!Array.isArray(data)) {
     throw new Error('github xray releases invalid');
   }
-  return mergeXrayVersions(
-    data
-      .filter(
-        (item) =>
-          item &&
-          typeof item === 'object' &&
-          item.draft !== true &&
-          item.prerelease !== true,
-      )
-      .map((item) => item && item.tag_name),
-  );
+  const ordered: string[] = [];
+  const prerelease: string[] = [];
+  const seen = new Set<string>();
+  data.forEach((item) => {
+    if (!item || typeof item !== 'object' || item.draft === true) {
+      return;
+    }
+    const tag = normalizeXrayVersionTag(item.tag_name, true);
+    if (!tag || seen.has(tag)) {
+      return;
+    }
+    seen.add(tag);
+    if (item.prerelease === true || /alpha|beta|rc/i.test(tag)) {
+      prerelease.push(tag);
+    }
+    ordered.push(tag);
+  });
+  return {
+    ordered: mergeXrayVersions(ordered, true),
+    prerelease: mergeXrayVersions(prerelease, true),
+  };
 }
 
 async function loadXrayVersionsFromRouter() {
@@ -675,7 +764,7 @@ async function loadXrayVersionsFromRouter() {
     'list_versions',
   );
   if (!startResponse.success || !startResponse.data.job_id) {
-    return [];
+    return { ordered: [] as string[], prerelease: [] as string[] };
   }
 
   const response = await ForkopShellMethods.waitComponentActionJob(
@@ -684,9 +773,12 @@ async function loadXrayVersionsFromRouter() {
     'list_versions',
   );
   if (!response.success || !Array.isArray(response.data.available_versions)) {
-    return [];
+    return { ordered: [] as string[], prerelease: [] as string[] };
   }
-  return mergeXrayVersions(response.data.available_versions);
+  return {
+    ordered: mergeXrayVersions(response.data.available_versions, true),
+    prerelease: mergeXrayVersions(response.data.prerelease_versions || [], true),
+  };
 }
 
 async function loadCoreVersionLists() {
@@ -713,18 +805,19 @@ async function loadCoreVersionLists() {
       }),
       fetchXrayVersionsFromGitHub().catch((error) => {
         logger.debug('[UPDATES]', 'load xray versions from GitHub failed', error);
-        return [] as string[];
+        return { ordered: [] as string[], prerelease: [] as string[] };
       }),
     ]);
 
     if (githubSingBox.length) {
       singBoxAvailableVersions = githubSingBox;
     }
-    if (githubXray.length) {
-      xrayAvailableVersions = githubXray;
+    if (githubXray.ordered.length || githubXray.prerelease.length) {
+      xrayAvailableVersions = githubXray.ordered;
+      xrayPrereleaseVersions = githubXray.prerelease;
     }
     singBoxVersionsLoading = !githubSingBox.length;
-    xrayVersionsLoading = !githubXray.length;
+    xrayVersionsLoading = !(githubXray.ordered.length || githubXray.prerelease.length);
     renderUpdatesComponents();
 
     if (!githubSingBox.length) {
@@ -738,11 +831,12 @@ async function loadCoreVersionLists() {
       }
     }
 
-    if (!githubXray.length) {
+    if (!githubXray.ordered.length && !githubXray.prerelease.length) {
       try {
         const routerVersions = await loadXrayVersionsFromRouter();
-        if (routerVersions.length) {
-          xrayAvailableVersions = routerVersions;
+        if (routerVersions.ordered.length || routerVersions.prerelease.length) {
+          xrayAvailableVersions = routerVersions.ordered;
+          xrayPrereleaseVersions = routerVersions.prerelease;
         }
       } catch (error) {
         logger.debug('[UPDATES]', 'load xray versions from router failed', error);
@@ -770,10 +864,14 @@ async function applyCompletedComponentAction({
     if (Array.isArray(result.available_versions)) {
       const versions = result.available_versions.filter(Boolean);
       if (result.component === 'xray') {
-        xrayAvailableVersions = mergeXrayVersions(versions);
+        xrayAvailableVersions = mergeXrayVersions(versions, true);
+        xrayPrereleaseVersions = mergeXrayVersions(
+          result.prerelease_versions || [],
+          true,
+        );
         if (
           xraySelectedVersion &&
-          !xrayAvailableVersions.includes(xraySelectedVersion)
+          !visibleXrayVersionTags().includes(xraySelectedVersion)
         ) {
           xraySelectedVersion = '';
         }
@@ -1279,7 +1377,7 @@ function getComponentCards(): ComponentCard[] {
     {
       component: 'forkop',
       column: 0,
-      title: 'Forkop',
+      title: 'Forkop-Mod',
       version: systemInfoLoading
         ? _('Loading...')
         : normalizeCompiledVersion(systemInfo.forkop_version),
@@ -1641,12 +1739,8 @@ function renderComponentCard(card: ComponentCard) {
   }
 
   if (card.component === 'xray') {
-    const currentVersion = normalizeXrayVersionTag(card.version);
-    const options = mergeXrayVersions([
-      ...xrayAvailableVersions,
-      ...XRAY_FALLBACK_VERSIONS,
-      currentVersion,
-    ]);
+    const currentVersion = normalizeXrayVersionTag(card.version, true);
+    const options = visibleXrayVersionTags();
     const selected =
       xraySelectedVersion && options.includes(xraySelectedVersion)
         ? xraySelectedVersion
@@ -1662,6 +1756,25 @@ function renderComponentCard(card: ComponentCard) {
           { class: 'fkp_updates-page__component__variants-title' },
           _('Install specific version:'),
         ),
+        E('label', { class: 'fkp_updates-page__component__prerelease' }, [
+          (() => {
+            const checkbox = E('input', {
+              type: 'checkbox',
+              id: 'fkp-xray-prerelease',
+              click: (event: Event) => event.stopPropagation(),
+              change: (event: Event) => {
+                event.stopPropagation();
+                const target = event.target as HTMLInputElement;
+                xrayIncludePrerelease = Boolean(target.checked);
+                syncXrayVersionSelect();
+              },
+            }) as HTMLInputElement;
+            checkbox.checked = xrayIncludePrerelease;
+            checkbox.autocomplete = 'off';
+            return checkbox;
+          })(),
+          _('Show pre-release versions'),
+        ]),
         E('div', { class: 'fkp_updates-page__component__versions-row' }, [
           E(
             'select',
@@ -1675,10 +1788,11 @@ function renderComponentCard(card: ComponentCard) {
             options.map((version) =>
               E(
                 'option',
-                { value: version },
-                version === currentVersion
-                  ? `${version} (${_('current')})`
-                  : version,
+                {
+                  value: version,
+                  selected: version === selected ? 'selected' : null,
+                },
+                xrayVersionOptionLabel(version, currentVersion),
               ),
             ),
           ),

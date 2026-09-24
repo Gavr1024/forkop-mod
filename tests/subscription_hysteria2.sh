@@ -51,6 +51,13 @@ assert_contains "$allow_insecure_output" '"server_name": "example.com"' "hy2 all
 assert_contains "$allow_insecure_output" '"insecure": true' "hy2 allowInsecure TLS"
 assert_contains "$allow_insecure_output" '"obfs": { "type": "salamander", "password": "obf" }' "hy2 allowInsecure obfs"
 
+ech_output="$(
+  normalize_link \
+    "hy2-ech-plus" \
+    "hysteria2://pw@example.com:443?sni=example.com&ech=AGD%2BDQBc#hy2-ech"
+)"
+assert_contains "$ech_output" 'AGD+DQBc' "hy2 ech must keep base64 plus signs"
+
 insecure_output="$(
   normalize_link \
     "hy2-insecure" \

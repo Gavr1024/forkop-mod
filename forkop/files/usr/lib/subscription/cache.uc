@@ -3,6 +3,7 @@
 let fs = require("fs");
 let uci_core = require("core.uci");
 let connections = require("config.connections");
+let list_cache = require("routing.list_cache");
 let subscription_share_link = require("subscription.share_link");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
@@ -1487,7 +1488,7 @@ function download_subscription(url, filepath, http_proxy_address, headers_filepa
 
         if (http_proxy_address != "") {
             push(args, "-x");
-            push(args, "http://" + http_proxy_address);
+            push(args, list_cache.curl_proxy_spec(http_proxy_address));
         }
         if (headers_tmpfile != "") {
             push(args, "-D");
@@ -1574,10 +1575,31 @@ function subscription_config_is_current(section_name_value, subscription_url, su
     return false;
 }
 
+function download_section_proxy_ready() {
+    if (connections.is_xray_primary() && list_cache.xray_socks_proxy_url("") != "")
+        return true;
+    return sing_box_service_running();
+}
+
 function get_subscription_download_proxy_address(section_name_value, sections, parsed, phase) {
     let download_section = as_string(object_or_empty(parsed).download_section);
     if (download_section == "" || download_section == as_string(section_name_value))
         return "";
+
+    if (connections.is_xray_primary()) {
+        let socks = list_cache.xray_socks_proxy_url(download_section);
+        if (socks != "") {
+            log_message("Downloading subscription for rule '" + section_name_value + "' via Xray SOCKS " + socks, "debug");
+            return socks;
+        }
+        if (!sing_box_service_running()) {
+            if (phase == "startup")
+                log_message("Subscription source for rule '" + section_name_value + "' is configured to download via rule '" + download_section + "', but Xray SOCKS is not ready yet; downloading it directly during startup", "warn");
+            else
+                log_message("Subscription source for rule '" + section_name_value + "' is configured to download via rule '" + download_section + "', but Xray SOCKS is not ready; downloading it directly", "warn");
+            return "";
+        }
+    }
 
     let port = connections.subscription_download_target_port(sections, download_section, int(SB_SERVICE_MIXED_INBOUND_PORT));
     if (port <= 0)
@@ -2234,7 +2256,7 @@ function prepare_subscription_caches(phase, already_prepared, no_refresh) {
     }
 
     if (phase == "startup" && subscription_bootstrap_download_section_is_ready(sections, state.startup_blocked_sections, get_subscription_user_agent(""))) {
-        log_message("Starting temporarily without subscription-only rule(s): " + state.startup_blocked_sections + ". They will be retried through the service proxy after sing-box starts", "warn");
+        log_message("Starting temporarily without subscription-only rule(s): " + state.startup_blocked_sections + ". They will be retried through the download section proxy after the routing plane starts", "warn");
         print(state.startup_blocked_sections, "\n");
         return 0;
     }
@@ -2375,10 +2397,10 @@ function run_deferred_subscription_bootstrap(deferred_sections) {
     if (deferred_sections == "")
         return;
 
-    log_message("Waiting for sing-box service proxy before retrying deferred subscription rule(s): " + deferred_sections, "info");
+    log_message("Waiting for download section proxy before retrying deferred subscription rule(s): " + deferred_sections, "info");
     let ready = false;
     for (let attempt = 1; attempt <= 10; attempt++) {
-        if (sing_box_service_running()) {
+        if (download_section_proxy_ready()) {
             ready = true;
             break;
         }
@@ -2386,7 +2408,7 @@ function run_deferred_subscription_bootstrap(deferred_sections) {
     }
 
     if (!ready) {
-        log_message("sing-box service proxy did not become ready in time; deferred subscription rule(s) will remain disabled until the next successful subscription update", "warn");
+        log_message("Download section proxy did not become ready in time; deferred subscription rule(s) will remain disabled until the next successful subscription update", "warn");
         start_deferred_subscription_bootstrap_retry_worker(deferred_sections);
         return;
     }
@@ -2408,8 +2430,8 @@ function deferred_subscription_bootstrap_retry_worker(remaining_sections) {
 
     while (remaining_sections != "") {
         system("sleep 30");
-        if (!sing_box_service_running()) {
-            log_message("Stopping subscription bootstrap retry worker because sing-box is not running", "warn");
+        if (!download_section_proxy_ready()) {
+            log_message("Stopping subscription bootstrap retry worker because the download section proxy is not running", "warn");
             break;
         }
 

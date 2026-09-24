@@ -853,25 +853,29 @@ function init_config(populate_nft, caches_prepared, no_refresh, prepared_deferre
         exit(1);
     }
 
-    if (populate_nft && !module_success([
-        LIB_DIR + "/nft/apply.uc",
-        "nft-populate-runtime-sets-from-uci",
-        "1",
-        deferred_sections,
-        NFT_TABLE_NAME,
-        NFT_COMMON_SET_NAME,
-        NFT_PORT_SET_NAME,
-        NFT_IP_PORT_SET_NAME,
-        NFT_INTERFACE_SET_NAME,
-        NFT_LOCALV4_SET_NAME,
-        NFT_FAKEIP_MARK,
-        NFT_COMMON6_SET_NAME,
-        NFT_IP_PORT6_SET_NAME,
-        NFT_LOCALV6_SET_NAME
-    ])) {
-        log_message("Failed to update nftables runtime sets from the generated sing-box configuration. Aborted.", "fatal");
-        remove_files([ temp_config, runtime_log ]);
-        exit(1);
+    if (populate_nft) {
+        let populate_status = command_status(
+            module_command([
+                LIB_DIR + "/nft/apply.uc",
+                "nft-populate-runtime-sets-from-uci",
+                "1",
+                deferred_sections,
+                NFT_TABLE_NAME,
+                NFT_COMMON_SET_NAME,
+                NFT_PORT_SET_NAME,
+                NFT_IP_PORT_SET_NAME,
+                NFT_INTERFACE_SET_NAME,
+                NFT_LOCALV4_SET_NAME,
+                NFT_FAKEIP_MARK,
+                NFT_COMMON6_SET_NAME,
+                NFT_IP_PORT6_SET_NAME,
+                NFT_LOCALV6_SET_NAME
+            ]) + " >>" + shell_quote(runtime_log) + " 2>&1"
+        );
+        if (populate_status != 0) {
+            log_file_lines(runtime_log, "warn", "nft populate: ");
+            log_message("Failed to update nftables runtime sets; continuing with the existing table", "warn");
+        }
     }
 
     if (!save_config_file(temp_config, config_path)) {

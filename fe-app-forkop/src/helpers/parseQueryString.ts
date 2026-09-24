@@ -12,8 +12,18 @@ export function parseQueryString(query: string): Record<string, string> {
           return acc;
         }
 
-        const key = decodeURIComponent(rawKey);
-        const value = decodeURIComponent(rawValue);
+        let key = rawKey;
+        let value = rawValue;
+        try {
+          key = decodeURIComponent(rawKey);
+        } catch {
+          /* keep raw */
+        }
+        try {
+          value = decodeURIComponent(rawValue);
+        } catch {
+          /* keep raw */
+        }
 
         return { ...acc, [key]: value };
       },

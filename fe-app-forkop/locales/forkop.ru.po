@@ -242,6 +242,9 @@ msgstr "Браузер использует FakeIP"
 msgid "Built-in rule sets"
 msgstr "Встроенные наборы правил"
 
+msgid "Built-in worker"
+msgstr "Встроенный воркер"
+
 msgid "By flag emoji from name"
 msgstr "По эмодзи флага из названия"
 
@@ -439,6 +442,9 @@ msgstr "Не удалось сравнить публичные IP FakeIP и к�
 
 msgid "current"
 msgstr "текущая"
+
+msgid "pre-release"
+msgstr "предварительная"
 
 msgid "Current section cannot be used as its own transit section"
 msgstr "Текущую секцию нельзя использовать как транзит для самой себя"
@@ -644,8 +650,8 @@ msgstr "Скачивать списки через секцию"
 msgid "Download remote lists and rule sets via the selected section"
 msgstr "Скачивать удаленные списки и наборы правил через выбранную секцию"
 
-msgid "Download selected community lists and rule sets to flash and use them as a backup when the online repository is unavailable. If download through a section is enabled, that section is started first."
-msgstr "Скачивать выбранные общедоступные списки и наборы правил на флэш-память и использовать их как резерв, если онлайн-репозиторий недоступен. Если включено скачивание через секцию, сначала поднимается эта секция."
+msgid "When enabled, selected lists and Xray DAT stay on flash. Start reuses that cache until the interval below elapses. When disabled, lists are fetched on every start, as before. If download through a section is enabled, that section is started first."
+msgstr "Если включено, выбранные списки и DAT Xray остаются на флэш-памяти. Старт берёт этот кэш, пока не истечёт интервал ниже. Если выключено — списки скачиваются при каждом старте, как раньше. Если включено скачивание через секцию, сначала поднимается эта секция."
 
 msgid "Download subscription through a section"
 msgstr "Скачивать подписку через секцию"
@@ -782,8 +788,26 @@ msgstr "Ожидается: %s"
 msgid "Expires"
 msgstr "Истекает"
 
-msgid "Expose this section as a local HTTP+SOCKS proxy"
-msgstr "Открыть эту секцию как локальный HTTP+SOCKS прокси"
+msgid "Every 12 hours"
+msgstr "Каждые 12 часов"
+
+msgid "Every 3 days"
+msgstr "Каждые 3 дня"
+
+msgid "Every 3 hours"
+msgstr "Каждые 3 часа"
+
+msgid "Every 6 hours"
+msgstr "Каждые 6 часов"
+
+msgid "Every 7 days"
+msgstr "Каждые 7 дней"
+
+msgid "Every day"
+msgstr "Каждый день"
+
+msgid "Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."
+msgstr "Открыть эту секцию как локальный HTTP+SOCKS прокси. Работает только с sing-box."
 
 msgid "External nfqws config files bypass Forkop queue management and explicit validation."
 msgstr "Внешние конфиги nfqws обходят управление очередями и явную валидацию Forkop."
@@ -833,8 +857,8 @@ msgstr "Интервал поиска более быстрого сервера
 msgid "Fastest"
 msgstr "Самый быстрый"
 
-msgid "Filter the servers that will be displayed on the dashboard."
-msgstr "Отфильтровать серверы, которые будут отображаться в дашборде."
+msgid "Filter the servers that will be displayed on the dashboard. Works only with sing-box."
+msgstr "Отфильтровать серверы, которые будут отображаться в дашборде. Работает только с sing-box."
 
 msgid "Firewall WAN port"
 msgstr "Порт в firewall для WAN"
@@ -994,6 +1018,9 @@ msgstr "Как часто проверять активные DNS-серверы
 
 msgid "How often to check whether a higher-priority DNS server has recovered."
 msgstr "Как часто проверять, восстановился ли DNS-сервер с более высоким приоритетом."
+
+msgid "How often to fetch new lists. If lists are already downloaded, start does not hit GitHub until this interval has passed. Never turns off automatic updates; the dashboard button still downloads them."
+msgstr "Как часто скачивать новые списки. Если списки уже скачаны, при старте GitHub не трогается, пока не истечёт этот интервал. «Никогда» отключает автообновление, кнопка на информационной панели по-прежнему скачивает их."
 
 msgid "HTTP error"
 msgstr "Ошибка HTTP"
@@ -1310,6 +1337,9 @@ msgstr "Список должен быть HTTP(S) URL или локальным
 msgid "List Update Frequency"
 msgstr "Частота обновления списков"
 
+msgid "List update interval"
+msgstr "Интервал обновления списков"
+
 msgid "Listen address"
 msgstr "Адрес прослушивания"
 
@@ -1390,6 +1420,9 @@ msgstr "Должно быть числом в диапазоне 0 - 10000"
 
 msgid "Name"
 msgstr "Имя"
+
+msgid "Never"
+msgstr "Никогда"
 
 msgid "Name displayed on the dashboard"
 msgstr "Имя, которое отображается в дашборде"
@@ -1604,6 +1637,9 @@ msgstr "Закрепить в дашборде"
 msgid "Ping check finished"
 msgstr "Проверка ping завершена"
 
+msgid "Ping scheduler"
+msgstr "Как проверять ping"
+
 msgid "Port cannot be empty"
 msgstr "Порт не может быть пустым"
 
@@ -1712,8 +1748,8 @@ msgstr "Исключить из уровня указанные серверы."
 msgid "Require a username and password for the local mixed proxy"
 msgstr "Требовать логин и пароль для локального смешанного прокси"
 
-msgid "Resolve domain names before routing so sing-box can use real destination IPs."
-msgstr "Разрешать доменные имена перед маршрутизацией, чтобы sing-box использовал реальные IP-адреса назначения."
+msgid "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box."
+msgstr "Разрешать доменные имена перед маршрутизацией, чтобы sing-box использовал реальные IP-адреса назначения. Работает только с sing-box."
 
 msgid "Resolve real IP for routing"
 msgstr "Разрешать реальный IP для маршрутизации"
@@ -1756,6 +1792,21 @@ msgstr "Маршрутизировать трафик роутера"
 
 msgid "Router traffic through"
 msgstr "Трафик роутера через"
+
+msgid "Routing engine"
+msgstr "Движок маршрутизации"
+
+msgid "primary"
+msgstr "основной"
+
+msgid "sidecar"
+msgstr "дополнительный"
+
+msgid "Not used"
+msgstr "Не используется"
+
+msgid "Sidecar"
+msgstr "Дополнительный"
 
 msgid "Routing mode"
 msgstr "Режим маршрутизации"
@@ -1922,8 +1973,8 @@ msgstr "Фильтрация серверов"
 msgid "Server group for automatic lowest-latency selection"
 msgstr "Группа серверов для автоматического выбора по наименьшей задержке"
 
-msgid "Server group for priority failover"
-msgstr "Группа автоматически выбирает рабочий узел на основе установленного приоритета."
+msgid "Server group for priority failover. Works only with sing-box."
+msgstr "Группа автоматически выбирает рабочий узел на основе установленного приоритета. Работает только с sing-box."
 
 msgid "Server information"
 msgstr "Информация о сервере"
@@ -1960,6 +2011,9 @@ msgstr "Информация о сервисах"
 
 msgid "Settings"
 msgstr "Настройки"
+
+msgid "Show pre-release versions"
+msgstr "Показывать предварительные версии"
 
 msgid "Show metadata on dashboard"
 msgstr "Отображать метаданные в дашборде"
@@ -2012,6 +2066,21 @@ msgstr "Sing-box слушает порты"
 msgid "Sing-box process running"
 msgstr "Процесс sing-box запущен"
 
+msgid "Sing-box sidecar not used"
+msgstr "Sidecar sing-box не используется"
+
+msgid "Sing-box ports not required"
+msgstr "Порты sing-box не требуются"
+
+msgid "Xray FakeDNS works"
+msgstr "FakeDNS Xray работает"
+
+msgid "Xray FakeDNS does not work"
+msgstr "FakeDNS Xray не работает"
+
+msgid "Browser FakeIP check skipped for Xray"
+msgstr "Проверка FakeIP в браузере пропущена для Xray"
+
 msgid "Sing-box service exist"
 msgstr "Сервис sing-box существует"
 
@@ -2026,6 +2095,9 @@ msgstr "Не удалось выполнить действие со слото�
 
 msgid "Slot applied"
 msgstr "Слот применён"
+
+msgid "Slot applied. Forkop is reloading in the background."
+msgstr "Слот применён. Forkop перезагружается в фоне."
 
 msgid "Slot is active"
 msgstr "Слот активен"
@@ -2125,6 +2197,9 @@ msgstr "Переключение по ping"
 
 msgid "Switch settings saved"
 msgstr "Параметры переключения сохранены"
+
+msgid "System cron"
+msgstr "Системный cron"
 
 msgid "System info"
 msgstr "Системная информация"
@@ -2486,8 +2561,14 @@ msgstr "Когда пинг есть"
 msgid "When switching to another level, test every server and select the fastest instead of the first working one."
 msgstr "При переходе на другой уровень тестировать все сервера и выбирать самый быстрый, а не первый работающий."
 
-msgid "Which core handles this section. Xray sections are connected through a local SOCKS sidecar so sing-box keeps FakeIP, DNS and nft routing."
-msgstr "Какое ядро обрабатывает эту секцию. Секции Xray подключаются через локальный SOCKS sidecar, а sing-box сохраняет FakeIP, DNS и nft-маршрутизацию."
+msgid "Which core handles this section. Empty follows Settings → Routing engine. The other core is reached through a local SOCKS sidecar. Neither core is bundled; install from Components."
+msgstr "Какое ядро обрабатывает эту секцию. Пустое значение — то же ядро, что в Настройки → Движок маршрутизации. До второго ядра трафик идёт через локальный SOCKS-sidecar. Ядра не входят в пакет: ставьте их во вкладке Компоненты."
+
+msgid "Which core owns TPROXY, FakeIP and DNS. The other core stays available as a SOCKS sidecar for sections that select it. Neither core is bundled with Forkop; install the chosen core from Components."
+msgstr "Какое ядро обслуживает TPROXY, FakeIP и DNS. Второе ядро остаётся SOCKS-дополнением для секций, которые его выберут. Ни одно ядро не входит в пакет: нужное ставьте во вкладке Компоненты."
+
+msgid "Worker runs only while Forkop is started and does not spam syslog. Cron keeps checking every minute even if Forkop is stopped; BusyBox logs each run as cron.err."
+msgstr "Воркер работает только пока запущен Forkop и не спамит syslog. Cron проверяет каждую минуту даже если Forkop остановлен; BusyBox пишет каждый запуск как cron.err."
 
 msgid "XHTTP mode"
 msgstr "Режим XHTTP"
@@ -2578,3 +2659,39 @@ msgstr "sing-box outbound для Zapret2 настроен"
 
 msgid "Zapret2 sing-box outbound is not configured"
 msgstr "sing-box outbound для Zapret2 не настроен"
+
+msgid "Fragment direct connections"
+msgstr "Фрагментировать прямые подключения"
+
+msgid "Split the TLS handshake on direct Xray connections so filters do not see the site name in one packet. Works only with Xray."
+msgstr "Резать TLS-рукопожатие на прямых подключениях Xray, чтобы фильтр не видел имя сайта в одном пакете. Работает только с Xray."
+
+msgid "Fragment length"
+msgstr "Длина фрагмента"
+
+msgid "Byte size of each piece, for example 100-200. Works only with Xray."
+msgstr "Размер куска в байтах, например 100-200. Работает только с Xray."
+
+msgid "Use a number or a range like 100-200"
+msgstr "Укажите число или диапазон, например 100-200"
+
+msgid "Fragment interval"
+msgstr "Интервал фрагментации"
+
+msgid "Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."
+msgstr "Пауза между кусками в миллисекундах, например 10-20. Работает только с Xray."
+
+msgid "Use a number or a range like 10-20"
+msgstr "Укажите число или диапазон, например 10-20"
+
+msgid "FinalMask"
+msgstr "FinalMask"
+
+msgid "Split the TLS handshake toward servers in this section. The server does not need the same setting. Works only with Xray."
+msgstr "Резать TLS-рукопожатие к серверам этой секции. На сервере такая же настройка не нужна. Работает только с Xray."
+
+msgid "FinalMask length"
+msgstr "Длина FinalMask"
+
+msgid "FinalMask interval"
+msgstr "Интервал FinalMask"

@@ -1,0 +1,40 @@
+Файлы, изменённые относительно стокового Forkop 1.0.5
+(плоскость Xray, конвертация списков, DNS parity).
+
+Backend (пакет forkop)
+  forkop/files/usr/lib/xray/generator.uc
+  forkop/files/usr/lib/xray/geodata.uc          # новый
+  forkop/files/usr/lib/xray/constants.uc
+  forkop/files/usr/lib/xray/runtime.uc
+  forkop/files/usr/lib/xray/outbound.uc
+  forkop/files/usr/lib/dns/apply.uc
+  forkop/files/usr/lib/nft/apply.uc
+  forkop/files/usr/lib/components/updates.uc
+  forkop/files/usr/lib/service/state.uc
+  forkop/files/usr/lib/service/lifecycle.uc
+  forkop/files/usr/lib/service/ui.uc
+  forkop/files/usr/lib/core/engine.uc
+  forkop/files/usr/lib/singbox/dns_failover.uc
+  forkop/files/usr/lib/singbox/generator.uc
+  forkop/files/usr/lib/singbox/runtime.uc
+  forkop/files/usr/lib/core/constants.uc
+  forkop/files/usr/lib/config/validator.uc
+  forkop/files/usr/lib/config/migration.uc
+  forkop/files/usr/lib/diagnostics/runtime.uc
+
+LuCI (пакет luci-app-forkop)
+  luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js
+  luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js
+  luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+
+Тесты
+  tests/xray_primary_plane.sh
+  tests/xray_dual_core.sh
+  tests/xray_geodata.sh
+  tests/dns_apply.sh
+
+Сборка
+  build.sh
+  BUILD.md
+  PATCHES.md
+  COPY-XRAY-LISTS.txt

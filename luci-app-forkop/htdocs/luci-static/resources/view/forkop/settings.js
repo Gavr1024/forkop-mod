@@ -157,6 +157,60 @@ function configureDnsDuration(
 function createSettingsContent(section, capabilities) {
   let o = section.option(
     form.ListValue,
+    "routing_engine",
+    _("Routing engine"),
+    _(
+      "Which core owns TPROXY, FakeIP and DNS. The other core stays available as a SOCKS sidecar for sections that select it. Neither core is bundled with Forkop; install the chosen core from Components.",
+    ),
+  );
+  o.value("sing-box", "sing-box");
+  o.value("xray", "Xray");
+  o.default = "sing-box";
+  o.rmempty = false;
+
+  o = section.option(
+    form.Flag,
+    "xray_freedom_fragment",
+    _("Fragment direct connections"),
+    _(
+      "Split the TLS handshake on direct Xray connections so filters do not see the site name in one packet. Works only with Xray.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+
+  o = section.option(
+    form.Value,
+    "xray_freedom_fragment_length",
+    _("Fragment length"),
+    _("Byte size of each piece, for example 100-200. Works only with Xray."),
+  );
+  o.default = "100-200";
+  o.rmempty = false;
+  o.depends("xray_freedom_fragment", "1");
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 100-200");
+  };
+
+  o = section.option(
+    form.Value,
+    "xray_freedom_fragment_interval",
+    _("Fragment interval"),
+    _("Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."),
+  );
+  o.default = "10-20";
+  o.rmempty = false;
+  o.depends("xray_freedom_fragment", "1");
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 10-20");
+  };
+
+  o = section.option(
+    form.ListValue,
     "dns_type",
     _("DNS Protocol Type"),
     _("Select DNS protocol to use"),
@@ -567,51 +621,6 @@ function createSettingsContent(section, capabilities) {
 
   o = section.option(
     form.Flag,
-    "list_update_enabled",
-    _("Enable list updates"),
-    _("Enable automatic updates for remote lists and rule sets"),
-  );
-  o.default = "1";
-  o.rmempty = false;
-
-  o = section.option(
-    form.Value,
-    "update_interval",
-    _("List Update Frequency"),
-    _("Use sing-box duration format like 1d, 12h or 30m"),
-  );
-  o.depends("list_update_enabled", "1");
-  o.placeholder = "1d";
-  o.default = "1d";
-  o.rmempty = false;
-  o.cfgvalue = function (section_id) {
-    return uci.get(UCI_PACKAGE, section_id, "update_interval") || "1d";
-  };
-  o.write = function (section_id, value) {
-    const normalized = value ? `${value}`.trim() : "";
-
-    if (normalized.length) {
-      uci.set(UCI_PACKAGE, section_id, "update_interval", normalized);
-    } else {
-      uci.set(UCI_PACKAGE, section_id, "update_interval", "1d");
-    }
-  };
-  o.validate = function (_section_id, value) {
-    const normalized = value ? `${value}`.trim() : "";
-
-    if (!normalized.length) {
-      return _("Use sing-box duration format like 1d, 12h or 30m");
-    }
-
-    if (isSingBoxDuration(normalized)) {
-      return true;
-    }
-
-    return _("Use sing-box duration format like 1d, 12h or 30m");
-  };
-
-  o = section.option(
-    form.Flag,
     "component_update_check_enabled",
     _("Automatic component update checks"),
     _("Automatically check installed components for new versions"),
@@ -672,14 +681,46 @@ function createSettingsContent(section, capabilities) {
 
   o = section.option(
     form.Flag,
+    "list_update_enabled",
+    _("Enable list updates"),
+    _("Enable automatic updates for remote lists and rule sets"),
+  );
+  o.default = "1";
+  o.rmempty = false;
+
+  o = section.option(
+    form.Flag,
     "persist_lists_locally",
     _("Save selected lists locally"),
     _(
-      "Download selected community lists and rule sets to flash and use them as a backup when the online repository is unavailable. If download through a section is enabled, that section is started first.",
+      "When enabled, selected lists and Xray DAT stay on flash. Start reuses that cache until the interval below elapses. When disabled, lists are fetched on every start, as before. If download through a section is enabled, that section is started first.",
     ),
   );
-  o.default = "0";
+  o.default = "1";
   o.rmempty = false;
+
+  o = section.option(
+    form.ListValue,
+    "update_interval",
+    _("List update interval"),
+    _(
+      "How often to fetch new lists. If lists are already downloaded, start does not hit GitHub until this interval has passed. Never turns off automatic updates; the dashboard button still downloads them.",
+    ),
+  );
+  o.value("3h", _("Every 3 hours"));
+  o.value("6h", _("Every 6 hours"));
+  o.value("12h", _("Every 12 hours"));
+  o.value("1d", _("Every day"));
+  o.value("3d", _("Every 3 days"));
+  o.value("7d", _("Every 7 days"));
+  o.value("never", _("Never"));
+  o.default = "1d";
+  o.rmempty = false;
+  o.cfgvalue = function (section_id) {
+    const allowed = ["3h", "6h", "12h", "1d", "3d", "7d", "never"];
+    const current = uci.get(UCI_PACKAGE, section_id, "update_interval") || "1d";
+    return allowed.indexOf(current) >= 0 ? current : "1d";
+  };
 
   o = section.option(
     form.Flag,

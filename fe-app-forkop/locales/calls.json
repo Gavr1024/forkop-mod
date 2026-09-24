@@ -1818,8 +1818,8 @@
     ]
   },
   {
-    "call": "Expose this section as a local HTTP+SOCKS proxy",
-    "key": "Expose this section as a local HTTP+SOCKS proxy",
+    "call": "Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box.",
+    "key": "Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box.",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7548"
     ]
@@ -1952,8 +1952,8 @@
     ]
   },
   {
-    "call": "Filter the servers that will be displayed on the dashboard.",
-    "key": "Filter the servers that will be displayed on the dashboard.",
+    "call": "Filter the servers that will be displayed on the dashboard. Works only with sing-box.",
+    "key": "Filter the servers that will be displayed on the dashboard. Works only with sing-box.",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:3164"
     ]
@@ -4065,8 +4065,8 @@
     ]
   },
   {
-    "call": "Resolve domain names before routing so sing-box can use real destination IPs.",
-    "key": "Resolve domain names before routing so sing-box can use real destination IPs.",
+    "call": "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box.",
+    "key": "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box.",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7676"
     ]
@@ -4149,6 +4149,13 @@
     "key": "Routing mode",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js:2557"
+    ]
+  },
+  {
+    "call": "Routing engine",
+    "key": "Routing engine",
+    "places": [
+      "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:161"
     ]
   },
   {
@@ -4524,8 +4531,8 @@
     ]
   },
   {
-    "call": "Server group for priority failover",
-    "key": "Server group for priority failover",
+    "call": "Server group for priority failover. Works only with sing-box.",
+    "key": "Server group for priority failover. Works only with sing-box.",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7433"
     ]
@@ -5921,10 +5928,17 @@
     ]
   },
   {
-    "call": "Which core handles this section. Xray sections are connected through a local SOCKS sidecar so sing-box keeps FakeIP, DNS and nft routing.",
-    "key": "Which core handles this section. Xray sections are connected through a local SOCKS sidecar so sing-box keeps FakeIP, DNS and nft routing.",
+    "call": "Which core handles this section. The routing engine (Settings → Routing engine) still owns TPROXY, FakeIP and DNS. The other core is reached through a local SOCKS sidecar.",
+    "key": "Which core handles this section. The routing engine (Settings → Routing engine) still owns TPROXY, FakeIP and DNS. The other core is reached through a local SOCKS sidecar.",
     "places": [
-      "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7025"
+      "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js:7034"
+    ]
+  },
+  {
+    "call": "Which core owns TPROXY, FakeIP and DNS. The other core stays available as a SOCKS sidecar for sections that select it.",
+    "key": "Which core owns TPROXY, FakeIP and DNS. The other core stays available as a SOCKS sidecar for sections that select it.",
+    "places": [
+      "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:163"
     ]
   },
   {

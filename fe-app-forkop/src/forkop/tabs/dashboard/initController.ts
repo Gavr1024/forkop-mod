@@ -39,10 +39,17 @@ import { shouldShowLoadingForRestoredAction } from '../../helpers/restoredAction
 import { getServiceAvailability } from '../../helpers/serviceAvailability';
 
 const SECTIONS_REFRESH_INTERVAL_MS = 10000;
+const XRAY_STATS_POLL_INTERVAL_MS = 2000;
 const LATENCY_TEST_BUTTON_CLASS = 'dashboard-sections-grid-item-test-latency';
 const LATENCY_TEST_BUTTON_LABEL_CLASS =
   'dashboard-sections-grid-item-test-latency__label';
 let sectionsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let xrayStatsTimer: ReturnType<typeof setInterval> | null = null;
+let lastXrayTrafficSample: {
+  uplink: number;
+  downlink: number;
+  at: number;
+} | null = null;
 let sectionsRefreshPromise: Promise<boolean> | null = null;
 let sectionsRefreshQueued = false;
 let actionStateUnsubscribe: (() => void) | null = null;
@@ -451,6 +458,30 @@ function stopActionStateWatcher() {
   actionStateUnsubscribe = null;
 }
 
+function getDashboardRoutingEngine(): 'xray' | 'sing-box' {
+  const value = `${store.get().diagnosticsSystemInfo.routing_engine || ''}`.toLowerCase();
+  return value === 'xray' || value === 'xray-core' ? 'xray' : 'sing-box';
+}
+
+function isSingBoxSidecarNeeded() {
+  return Number(store.get().diagnosticsSystemInfo.need_singbox_sidecar || 0) !== 0;
+}
+
+function formatEngineStatus(running: boolean, role?: string) {
+  const state = running ? _('✔ Running') : _('✘ Stopped');
+  return role ? `${state} (${role})` : state;
+}
+
+function formatSingBoxServiceStatus(running: boolean) {
+  if (getDashboardRoutingEngine() === 'xray' && !isSingBoxSidecarNeeded()) {
+    return _('Not used');
+  }
+  if (getDashboardRoutingEngine() === 'xray') {
+    return formatEngineStatus(running, _('sidecar'));
+  }
+  return formatEngineStatus(running);
+}
+
 async function connectToClashSockets(dataUpdatesId: number) {
   const mountId = dashboardMountId;
   const clashApiSecret = await getClashApiSecret();
@@ -475,6 +506,9 @@ async function connectToClashSockets(dataUpdatesId: number) {
       }
 
       const parsedMsg = JSON.parse(msg);
+      if (getDashboardRoutingEngine() === 'xray') {
+        return;
+      }
 
       store.set({
         bandwidthWidget: {
@@ -518,6 +552,9 @@ async function connectToClashSockets(dataUpdatesId: number) {
       }
 
       const parsedMsg = JSON.parse(msg);
+      if (getDashboardRoutingEngine() === 'xray') {
+        return;
+      }
 
       store.set({
         trafficTotalWidget: {
@@ -588,9 +625,69 @@ function stopDashboardDataUpdates() {
     clearInterval(sectionsRefreshTimer);
     sectionsRefreshTimer = null;
   }
+  if (xrayStatsTimer) {
+    clearInterval(xrayStatsTimer);
+    xrayStatsTimer = null;
+  }
+  lastXrayTrafficSample = null;
 
   sectionsRefreshQueued = false;
   socket.resetAll();
+}
+
+async function pollXrayPlaneStats(dataUpdatesId: number) {
+  if (
+    dataUpdatesId !== dashboardDataUpdatesId ||
+    getDashboardRoutingEngine() !== 'xray' ||
+    getDashboardServiceAvailability() === 'stopped'
+  ) {
+    return;
+  }
+
+  const response = await ForkopShellMethods.getXrayStats();
+  if (
+    dataUpdatesId !== dashboardDataUpdatesId ||
+    !response.success ||
+    !response.data
+  ) {
+    return;
+  }
+
+  const uplink = Number(response.data.uplink) || 0;
+  const downlink = Number(response.data.downlink) || 0;
+  const now = Date.now();
+  let up = 0;
+  let down = 0;
+  if (lastXrayTrafficSample) {
+    const dt = Math.max((now - lastXrayTrafficSample.at) / 1000, 0.5);
+    up = Math.max(0, (uplink - lastXrayTrafficSample.uplink) / dt);
+    down = Math.max(0, (downlink - lastXrayTrafficSample.downlink) / dt);
+  }
+  lastXrayTrafficSample = { uplink, downlink, at: now };
+
+  store.set({
+    bandwidthWidget: {
+      loading: false,
+      failed: false,
+      data: { up, down },
+    },
+    trafficTotalWidget: {
+      loading: false,
+      failed: false,
+      data: {
+        uploadTotal: uplink,
+        downloadTotal: downlink,
+      },
+    },
+    systemInfoWidget: {
+      loading: false,
+      failed: false,
+      data: {
+        connections: Number(response.data.connections) || 0,
+        memory: Number(response.data.memory) || 0,
+      },
+    },
+  });
 }
 
 function startDashboardDataUpdates() {
@@ -606,6 +703,10 @@ function startDashboardDataUpdates() {
   const dataUpdatesId = ++dashboardDataUpdatesId;
   void fetchDashboardSections({ force: true });
   void connectToClashSockets(dataUpdatesId);
+  void pollXrayPlaneStats(dataUpdatesId);
+  xrayStatsTimer = setInterval(() => {
+    void pollXrayPlaneStats(dataUpdatesId);
+  }, XRAY_STATS_POLL_INTERVAL_MS);
   sectionsRefreshTimer = setInterval(() => {
     void fetchDashboardSections();
   }, SECTIONS_REFRESH_INTERVAL_MS);
@@ -651,7 +752,11 @@ async function handleChooseOutbound(
   setSelectorSwitching(sectionName, tag);
 
   try {
-    await ForkopShellMethods.setClashApiGroupProxy(selector, tag);
+    if (section.proxyCore === 'xray') {
+      await ForkopShellMethods.setXrayGroupProxy(sectionName, tag);
+    } else {
+      await ForkopShellMethods.setClashApiGroupProxy(selector, tag);
+    }
     await fetchDashboardSections({ force: true });
   } finally {
     setSelectorSwitching(sectionName);
@@ -1644,6 +1749,14 @@ function getDashboardCoresSummaryItems() {
 
   return [
     {
+      key: _('Routing engine'),
+      value: getDashboardRoutingEngine() === 'xray' ? 'Xray' : 'sing-box',
+    },
+    {
+      key: _('Sidecar'),
+      value: getDashboardRoutingEngine() === 'xray' ? 'sing-box' : 'Xray',
+    },
+    {
       key: _('Cores'),
       value: `sing-box ${singboxOutbounds} · Xray ${xrayOutbounds}`,
     },
@@ -1663,7 +1776,10 @@ function getXrayServiceRow(data: StoreType['servicesInfoWidget']['data']) {
 
   return {
     key: 'Xray',
-    value: data.xray ? _('✔ Running') : _('✘ Stopped'),
+    value:
+      getDashboardRoutingEngine() === 'xray'
+        ? formatEngineStatus(Boolean(data.xray))
+        : formatEngineStatus(Boolean(data.xray), _('sidecar')),
     attributes: {
       class: data.xray
         ? 'fkp_dashboard-page__widgets-section__item__row--success'
@@ -1711,13 +1827,16 @@ async function renderServicesInfoWidget() {
       },
       {
         key: 'Sing-box',
-        value: servicesInfoWidget.data.singbox
-          ? _('✔ Running')
-          : _('✘ Stopped'),
+        value: formatSingBoxServiceStatus(
+          Boolean(servicesInfoWidget.data.singbox),
+        ),
         attributes: {
-          class: servicesInfoWidget.data.singbox
-            ? 'fkp_dashboard-page__widgets-section__item__row--success'
-            : 'fkp_dashboard-page__widgets-section__item__row--error',
+          class:
+            getDashboardRoutingEngine() === 'xray' && !isSingBoxSidecarNeeded()
+              ? ''
+              : servicesInfoWidget.data.singbox
+                ? 'fkp_dashboard-page__widgets-section__item__row--success'
+                : 'fkp_dashboard-page__widgets-section__item__row--error',
         },
       },
       getXrayServiceRow(servicesInfoWidget.data),

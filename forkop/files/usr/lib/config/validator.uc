@@ -12,6 +12,7 @@ let core_url = require("core.url");
 let core_ip = require("core.ip");
 let rule_config = require("config.rule");
 let connections = require("config.connections");
+let engine = require("core.engine");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const DEFAULT_LATENCY_TEST_URL = "https://www.gstatic.com/generate_204";
@@ -1491,7 +1492,9 @@ function validate_rule(section, sections, context) {
         if (core != "sing-box" && core != "xray")
             fail_validation("Connection rule '" + name + "' has unsupported proxy core '" + core + "'. Aborted.");
         if (core == "xray" && !context.xray_installed)
-            fail_validation("Connection rule '" + name + "' uses Xray, but Xray is not installed. Install it from Components or switch the section core to sing-box. Aborted.");
+            fail_validation("Connection rule '" + name + "' uses Xray, but Xray is not installed. Install it from Components or switch the section core. Aborted.");
+        if (core == "sing-box" && !command_exists("sing-box"))
+            fail_validation("Connection rule '" + name + "' uses sing-box, but sing-box is not installed. Install it from Components or switch the section core. Aborted.");
     }
 
     if (connections.is_connections_action(action)) {
@@ -1704,9 +1707,11 @@ function validate_list_update_settings(settings) {
     if (!bool_option(settings, "list_update_enabled", true))
         return;
 
-    let update_interval = option(settings, "update_interval", "1d");
-    if (update_interval == "")
+    let update_interval = lc(option(settings, "update_interval", "1d"));
+    if (update_interval == "" )
         update_interval = "1d";
+    if (update_interval == "never" || update_interval == "0" || update_interval == "off" || update_interval == "disabled")
+        return;
     validate_required_duration_option(update_interval, "settings.update_interval");
 }
 
@@ -1751,6 +1756,12 @@ function validate_runtime_mark_ranges_context(context) {
 function validate_runtime_config(context) {
     let settings = settings_section();
     let sections = sections_by_type("section");
+
+    let routing_engine = lc(option(settings, "routing_engine", "sing-box"));
+    if (routing_engine != "" && routing_engine != "sing-box" && routing_engine != "xray" && routing_engine != "xray-core")
+        fail_validation("settings.routing_engine must be sing-box or xray. Aborted.");
+    if ((routing_engine == "xray" || routing_engine == "xray-core") && !context.xray_installed)
+        fail_validation("Xray is selected as the routing plane, but Xray is not installed. Install it from Components. Aborted.");
 
     validate_runtime_mark_ranges_context(context);
     validate_dns_settings(settings, sections, context);
@@ -2098,25 +2109,36 @@ function check_runtime_requirements() {
     log_message("Checking required packages and runtime settings", "info");
 
     let ctx = context_from_runtime();
-    let sing_box_version_output = command_exists("sing-box") ? command_output_from_args([ "sing-box", "version" ]) : "";
-    let sing_box_version = sing_box_compressed_marker_set(ctx) ? sing_box_version_state(ctx) : first_line_last_field(sing_box_version_output);
+    let need_singbox = engine.need_singbox();
+
+    if (engine.need_xray() && !ctx.xray_installed)
+        fail_requirement("Xray is not installed. Install it from Components. Aborted.", "error");
+
+    if (need_singbox) {
+        let sing_box_version_output = command_exists("sing-box") ? command_output_from_args([ "sing-box", "version" ]) : "";
+        let sing_box_version = sing_box_compressed_marker_set(ctx) ? sing_box_version_state(ctx) : first_line_last_field(sing_box_version_output);
+
+        if (sing_box_version == "") {
+            if (!command_exists("sing-box") || !sing_box_compressed_marker_set(ctx))
+                fail_requirement("sing-box is not installed. Install it from Components. Aborted.", "error");
+        }
+        else if (!version_at_least(sing_box_version, ctx.sing_box_required_version)) {
+            fail_requirement("Package 'sing-box' version (" + sing_box_version + ") is lower than the required minimum (" + ctx.sing_box_required_version + "). Update sing-box from Components. Aborted.", "error");
+        }
+
+        if (!service_exists("sing-box") && sing_box_compressed_marker_set(ctx))
+            install_managed_sing_box_service_script(ctx);
+
+        if (!service_exists("sing-box"))
+            fail_requirement("Service 'sing-box' is missing. Install sing-box from Components. Aborted.", "error");
+
+        validate_extended_server_features(ctx, sing_box_version, sing_box_version_output);
+    }
+    else {
+        log_message("sing-box is not required; Xray is the routing plane", "debug");
+    }
+
     let coreutils_base64_version = first_line_field_from_text(command_output("base64 --version 2>/dev/null"), 4);
-
-    if (sing_box_version == "") {
-        if (!command_exists("sing-box") || !sing_box_compressed_marker_set(ctx))
-            fail_requirement("Package 'sing-box' is not installed. Aborted.", "error");
-    }
-    else if (!version_at_least(sing_box_version, ctx.sing_box_required_version)) {
-        fail_requirement("Package 'sing-box' version (" + sing_box_version + ") is lower than the required minimum (" + ctx.sing_box_required_version + "). Update sing-box: opkg update && opkg remove sing-box && opkg install sing-box. Aborted.", "error");
-    }
-
-    if (!service_exists("sing-box") && sing_box_compressed_marker_set(ctx))
-        install_managed_sing_box_service_script(ctx);
-
-    if (!service_exists("sing-box"))
-        fail_requirement("Service 'sing-box' is missing. Install a sing-box package or reinstall the compressed sing-box-extended binary variant. Aborted.", "error");
-
-    validate_extended_server_features(ctx, sing_box_version, sing_box_version_output);
 
     if (coreutils_base64_version == "")
         fail_requirement("Package 'coreutils-base64' is not installed. Aborted.", "error");

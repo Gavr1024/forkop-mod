@@ -31,14 +31,21 @@ export async function runSingBoxCheck() {
   }
 
   const data = singBoxChecks.data;
+  const sidecarRequired = data.sing_box_required !== 0;
+  const processOk = sidecarRequired
+    ? Boolean(data.sing_box_process_running)
+    : true;
+  const portsOk = sidecarRequired
+    ? Boolean(data.sing_box_ports_listening)
+    : true;
 
   const allGood =
     Boolean(data.sing_box_installed) &&
     Boolean(data.sing_box_version_ok) &&
     Boolean(data.sing_box_service_exist) &&
     Boolean(data.sing_box_autostart_disabled) &&
-    Boolean(data.sing_box_process_running) &&
-    Boolean(data.sing_box_ports_listening);
+    processOk &&
+    portsOk;
 
   const atLeastOneGood =
     Boolean(data.sing_box_installed) ||
@@ -46,7 +53,8 @@ export async function runSingBoxCheck() {
     Boolean(data.sing_box_service_exist) ||
     Boolean(data.sing_box_autostart_disabled) ||
     Boolean(data.sing_box_process_running) ||
-    Boolean(data.sing_box_ports_listening);
+    Boolean(data.sing_box_ports_listening) ||
+    !sidecarRequired;
 
   const { state, description } = getMeta({ atLeastOneGood, allGood });
 
@@ -78,19 +86,31 @@ export async function runSingBoxCheck() {
         value: '',
       },
       {
-        state: data.sing_box_process_running ? 'success' : 'error',
-        key: _('Sing-box process running'),
+        state: sidecarRequired
+          ? data.sing_box_process_running
+            ? 'success'
+            : 'error'
+          : 'success',
+        key: sidecarRequired
+          ? _('Sing-box process running')
+          : _('Sing-box sidecar not used'),
         value: '',
       },
       {
-        state: data.sing_box_ports_listening ? 'success' : 'error',
-        key: _('Sing-box listening ports'),
+        state: sidecarRequired
+          ? data.sing_box_ports_listening
+            ? 'success'
+            : 'error'
+          : 'success',
+        key: sidecarRequired
+          ? _('Sing-box listening ports')
+          : _('Sing-box ports not required'),
         value: '',
       },
     ],
   });
 
-  if (!atLeastOneGood || !data.sing_box_process_running) {
+  if (!atLeastOneGood || (sidecarRequired && !data.sing_box_process_running)) {
     throw new Error('Sing-box checks failed');
   }
 }

@@ -18,8 +18,19 @@ export async function runFakeIPCheck() {
   });
 
   const routerFakeIPResponse = await ForkopShellMethods.checkFakeIP();
-  const checkFakeIPResponse = await RemoteFakeIPMethods.getFakeIpCheck();
-  const checkIPResponse = await RemoteFakeIPMethods.getIpCheck();
+  const xrayFakeDNS =
+    routerFakeIPResponse.success &&
+    `${routerFakeIPResponse.data.engine || ''}`.toLowerCase() === 'xray';
+  const checkFakeIPResponse = xrayFakeDNS
+    ? {
+        success: true as const,
+        data: { fakeip: true, IP: routerFakeIPResponse.data.IP },
+        message: '',
+      }
+    : await RemoteFakeIPMethods.getFakeIpCheck();
+  const checkIPResponse = xrayFakeDNS
+    ? { success: false as const, data: { IP: '' }, message: '' }
+    : await RemoteFakeIPMethods.getIpCheck();
   const browserFakeIPCheckUnavailable = !checkFakeIPResponse.success;
   const browserFakeIPCheckMessage = checkFakeIPResponse.success
     ? ''
@@ -37,14 +48,18 @@ export async function runFakeIPCheck() {
       checkFakeIPResponse.data.IP !== checkIPResponse.data.IP,
   };
 
-  const fakeIPWorks = checks.singBoxFakeIP && checks.browserFakeIP;
+  const fakeIPWorks = xrayFakeDNS
+    ? checks.singBoxFakeIP
+    : checks.singBoxFakeIP && checks.browserFakeIP;
   const { state, description } = fakeIPWorks
-    ? checks.differentIP
+    ? xrayFakeDNS
       ? { state: 'success' as const, description: _('Checks passed') }
-      : {
-          state: 'warning' as const,
-          description: _('FakeIP works; public IP comparison is inconclusive'),
-        }
+      : checks.differentIP
+        ? { state: 'success' as const, description: _('Checks passed') }
+        : {
+            state: 'warning' as const,
+            description: _('FakeIP works; public IP comparison is inconclusive'),
+          }
     : browserFakeIPCheckUnavailable && checks.singBoxFakeIP
       ? {
           state: 'warning' as const,
@@ -65,34 +80,45 @@ export async function runFakeIPCheck() {
       {
         state: checks.singBoxFakeIP ? 'success' : 'error',
         key: checks.singBoxFakeIP
-          ? _('Sing-box FakeIP DNS works')
-          : _('Sing-box FakeIP DNS does not work'),
+          ? xrayFakeDNS
+            ? _('Xray FakeDNS works')
+            : _('Sing-box FakeIP DNS works')
+          : xrayFakeDNS
+            ? _('Xray FakeDNS does not work')
+            : _('Sing-box FakeIP DNS does not work'),
         value: routerFakeIPResponse.success ? routerFakeIPResponse.data.IP : '',
       },
       {
-        state: browserFakeIPCheckUnavailable
-          ? 'warning'
-          : checks.browserFakeIP
-            ? 'success'
-            : 'error',
-        key: browserFakeIPCheckUnavailable
-          ? _('Browser FakeIP check could not be completed')
-          : checks.browserFakeIP
-            ? _('Browser is using FakeIP correctly')
-            : _('Browser is not using FakeIP'),
+        state: xrayFakeDNS
+          ? 'success'
+          : browserFakeIPCheckUnavailable
+            ? 'warning'
+            : checks.browserFakeIP
+              ? 'success'
+              : 'error',
+        key: xrayFakeDNS
+          ? _('Browser FakeIP check skipped for Xray')
+          : browserFakeIPCheckUnavailable
+            ? _('Browser FakeIP check could not be completed')
+            : checks.browserFakeIP
+              ? _('Browser is using FakeIP correctly')
+              : _('Browser is not using FakeIP'),
         value: browserFakeIPCheckMessage,
       },
-      ...insertIf<IDiagnosticsChecksItem>(checks.browserFakeIP, [
-        {
-          state: checks.differentIP ? 'success' : 'warning',
-          key: !checks.canComparePublicIP
-            ? _('Could not compare FakeIP and control public IPs')
-            : checks.differentIP
-              ? _('FakeIP and control checks use different public IPs')
-              : _('FakeIP and control checks use the same public IP'),
-          value: '',
-        },
-      ]),
+      ...insertIf<IDiagnosticsChecksItem>(
+        !xrayFakeDNS && checks.browserFakeIP,
+        [
+          {
+            state: checks.differentIP ? 'success' : 'warning',
+            key: !checks.canComparePublicIP
+              ? _('Could not compare FakeIP and control public IPs')
+              : checks.differentIP
+                ? _('FakeIP and control checks use different public IPs')
+                : _('FakeIP and control checks use the same public IP'),
+            value: '',
+          },
+        ],
+      ),
     ],
   });
 }

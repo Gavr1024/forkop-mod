@@ -4,6 +4,7 @@ let fs = require("fs");
 let constants = require("core.constants");
 let core_ip = require("core.ip");
 let uci_core = require("core.uci");
+let engine = require("core.engine");
 let runtime_dns = require("singbox.dns");
 let netstat = require("core.netstat");
 
@@ -12,7 +13,7 @@ const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
 const FORKOP_VERSION = getenv("FORKOP_VERSION") || constants.FORKOP_VERSION || "";
 const FORKOP_CONFIG = getenv("FORKOP_CONFIG") || constants.FORKOP_CONFIG || "/etc/config/" + CONFIG_NAME;
 const FORKOP_SERVICE_NAME = getenv("FORKOP_SERVICE_NAME") || constants.FORKOP_SERVICE_NAME || "forkop";
-const FORKOP_RELEASE_REPO = getenv("FORKOP_RELEASE_REPO") || constants.FORKOP_RELEASE_REPO || "ushan0v/forkop";
+const FORKOP_RELEASE_REPO = getenv("FORKOP_RELEASE_REPO") || constants.FORKOP_RELEASE_REPO || "Gavr1024/forkop-mod";
 const FORKOP_LUCI_VIEW_DIR = getenv("FORKOP_LUCI_VIEW_DIR") || constants.FORKOP_LUCI_VIEW_DIR || "/www/luci-static/resources/view/forkop";
 const RUNTIME_STATE_DIR = getenv("FORKOP_RUNTIME_STATE_DIR") || "/var/run/forkop";
 const SYSTEM_INFO_CACHE_FILE = getenv("FORKOP_SYSTEM_INFO_CACHE_FILE") || RUNTIME_STATE_DIR + "/system-info.json";
@@ -1112,6 +1113,7 @@ function build_system_info() {
         byedpi_installed,
         xray_version,
         xray_installed,
+        routing_engine: engine.routing_engine(),
         openwrt_version: openwrt_release(),
         device_model,
         generated_at: int(clock()[0])
@@ -1356,9 +1358,16 @@ function check_dns_available() {
     let dns_on_router = 0;
     let bootstrap_dns_status = 0;
     let dhcp_config_status = 1;
+    let xray_primary = false;
+    try {
+        xray_primary = engine.is_xray_primary();
+    }
+    catch (e) {
+        xray_primary = false;
+    }
 
     let active_dns_args = [ "dig" ];
-    if (runtime_dns.failover_enabled(cfg)) {
+    if (!xray_primary && runtime_dns.failover_enabled(cfg)) {
         push(active_dns_args, "-p");
         push(active_dns_args, as_string(runtime_dns.health_port("active", 0)));
     }
@@ -1380,7 +1389,13 @@ function check_dns_available() {
     let dns_server_host = url_host(dns_server);
     if (dns_server_host == "")
         dns_server_host = dns_server;
-    if (bootstrap_dns_server != "") {
+    if (xray_primary) {
+        if (dns_status)
+            bootstrap_dns_status = 1;
+        else if (dns_check_resolve_host(domain, SB_DNS_INBOUND_ADDRESS, timeout_seconds) != "")
+            bootstrap_dns_status = 1;
+    }
+    else if (bootstrap_dns_server != "") {
         if (length(active.state.bootstrap_servers) > 1) {
             for (let line in split(command_output_from_args([
                 "dig", "-p", as_string(runtime_dns.health_port("bootstrap", active.state.bootstrap_index)),
@@ -1523,6 +1538,14 @@ function check_sing_box() {
     let sing_box_autostart_disabled = 0;
     let sing_box_process_running = 0;
     let sing_box_ports_listening = 0;
+    let sing_box_required = 1;
+    try {
+        if (engine.is_xray_primary() && !engine.need_singbox())
+            sing_box_required = 0;
+    }
+    catch (e) {
+        sing_box_required = 1;
+    }
 
     if (command_exists("sing-box")) {
         sing_box_installed = 1;
@@ -1556,7 +1579,8 @@ function check_sing_box() {
         sing_box_service_exist,
         sing_box_autostart_disabled,
         sing_box_process_running,
-        sing_box_ports_listening
+        sing_box_ports_listening,
+        sing_box_required
     });
     return 0;
 }
@@ -1586,11 +1610,20 @@ function check_fakeip() {
             break;
         }
     }
+    let plane = "sing-box";
+    try {
+        if (engine.is_xray_primary())
+            plane = "xray";
+    }
+    catch (e) {
+        plane = "sing-box";
+    }
     write_json({
         fakeip: match(fakeip_address, /^198\.(18|19)\./) != null || match(fakeip6_address, /^fc[0-3][0-9a-f]:/) != null,
         IP: fakeip_address != "" ? fakeip_address : fakeip6_address,
         IPv4: fakeip_address,
-        IPv6: fakeip6_address
+        IPv6: fakeip6_address,
+        engine: plane
     });
     return 0;
 }
@@ -1623,6 +1656,61 @@ function clash_json_error(message) {
     if (result.output != "")
         print(result.output);
     return 1;
+}
+
+function xray_print_module_json(mode, arg1, arg2) {
+    let output = replace(module_output(XRAY_RUNTIME_UC, [ mode, as_string(arg1 || ""), as_string(arg2 || "") ]), /[\r\n]+$/g, "");
+    if (output == "")
+        return false;
+    print(output);
+    if (!match(output, /\n$/))
+        print("\n");
+    return true;
+}
+
+function xray_proxy_latency_ok(tag, timeout) {
+    let output = replace(module_output(XRAY_RUNTIME_UC, [ "proxy-latency", as_string(tag || ""), as_string(timeout || "") ]), /[\r\n]+$/g, "");
+    if (output == "")
+        return false;
+    let parsed = {};
+    try {
+        parsed = json(output);
+    }
+    catch (e) {
+        return false;
+    }
+    if (type(parsed) != "object" || int(parsed.delay || 0) <= 0)
+        return false;
+    print(output);
+    if (!match(output, /\n$/))
+        print("\n");
+    return true;
+}
+
+function xray_group_latency_ok(tag, timeout) {
+    let output = replace(module_output(XRAY_RUNTIME_UC, [ "group-latency", as_string(tag || ""), as_string(timeout || "") ]), /[\r\n]+$/g, "");
+    if (output == "")
+        return false;
+    let parsed = {};
+    try {
+        parsed = json(output);
+    }
+    catch (e) {
+        return false;
+    }
+    if (type(parsed) != "object")
+        return false;
+    let found = false;
+    for (let key in parsed) {
+        if (int(parsed[key] || 0) > 0)
+            found = true;
+    }
+    if (!found)
+        return false;
+    print(output);
+    if (!match(output, /\n$/))
+        print("\n");
+    return true;
 }
 
 function clash_proxy_type_map(base_url, auth) {
@@ -1678,6 +1766,17 @@ function clash_api(action, arg1, arg2, arg3) {
     if (action == "get_proxy_latency") {
         if (as_string(arg1) == "")
             return clash_json_error("proxy_tag required");
+        if (xray_proxy_latency_ok(arg1, arg2))
+            return 0;
+        let xray_only = false;
+        try {
+            xray_only = engine.is_xray_primary() && !engine.need_singbox_sidecar();
+        }
+        catch (e) {
+            xray_only = false;
+        }
+        if (xray_only)
+            return clash_json_error("timeout");
         let url = as_string(arg3 || "");
         if (url == "")
             url = test_url;
@@ -1741,6 +1840,17 @@ function clash_api(action, arg1, arg2, arg3) {
     if (action == "get_group_latency") {
         if (as_string(arg1) == "")
             return clash_json_error("group_tag required");
+        if (xray_group_latency_ok(arg1, arg2))
+            return 0;
+        let xray_only = false;
+        try {
+            xray_only = engine.is_xray_primary() && !engine.need_singbox_sidecar();
+        }
+        catch (e) {
+            xray_only = false;
+        }
+        if (xray_only)
+            return clash_json_error("timeout");
         let args = [ "curl", "-G", "-s", base_url + "/group/" + clash_urlencode(arg1) + "/delay" ];
         for (let item in auth) push(args, item);
         push(args, "--data-urlencode");
