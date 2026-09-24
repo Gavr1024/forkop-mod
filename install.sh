@@ -1745,47 +1745,8 @@ sing_box_is_present() {
 }
 
 select_sing_box_installation() {
-    answer=""
-    default_choice=1
-
-    if [ "$FORKOP_LEGACY_DETECTED" -eq 1 ] &&
-        [ -r /etc/init.d/sing-box ] &&
-        grep -Fq 'managed sing-box service for binary variants' /etc/init.d/sing-box; then
-        SING_BOX_INSTALL_VARIANT="extended-compressed"
-        msg "The legacy binary-managed sing-box variant will be reinstalled for Forkop"
-        return 0
-    fi
-
-    if sing_box_is_present; then
-        SING_BOX_INSTALL_VARIANT=""
-        return 0
-    fi
-
-    if [ ! -t 0 ]; then
-        SING_BOX_INSTALL_VARIANT="stable"
-        msg "$(installer_text sing_box_prompt): $default_choice ($(installer_text sing_box_stable), non-interactive)"
-        return 0
-    fi
-
-    while :; do
-        printf '\n%s\n' "$(installer_text sing_box_prompt)"
-        printf '  1) %s\n' "$(installer_text sing_box_stable)"
-        printf '  2) %s\n' "$(installer_text sing_box_extended)"
-        printf '%s [%s]: ' "$(installer_text select)" "$default_choice"
-        read -r answer || return 1
-        [ -n "$answer" ] || answer="$default_choice"
-
-        if [ "$answer" = "1" ]; then
-            SING_BOX_INSTALL_VARIANT="stable"
-            return 0
-        fi
-        if [ "$answer" = "2" ]; then
-            SING_BOX_INSTALL_VARIANT="extended"
-            return 0
-        fi
-
-        warn "$(installer_text invalid_choice)"
-    done
+    SING_BOX_INSTALL_VARIANT=""
+    return 0
 }
 
 install_selected_sing_box() {
