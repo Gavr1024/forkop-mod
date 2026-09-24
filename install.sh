@@ -1,7 +1,7 @@
 #!/bin/sh
 # shellcheck shell=dash
 
-REPO_OWNER="ushan0v"
+REPO_OWNER="Gavr1024"
 REPO_NAME="forkop"
 
 REQUIRED_SPACE_KB=15360
