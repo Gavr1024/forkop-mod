@@ -484,6 +484,10 @@ extract_fn "$XRAY_GEN" "add_byedpi_outbound" | grep -Fq 'protocol: "socks"' ||
   fail "ByeDPI on the Xray plane must be a local SOCKS outbound to ciadpi"
 extract_fn "$XRAY_GEN" "section_policy_tproxy_target" | grep -Fq 'byedpi' ||
   fail "ByeDPI TPROXY matchers must stay on Xray, not the sidecar"
+extract_fn "$XRAY_GEN" "collect_byedpi_real_dns_domains" | grep -Fq 'byedpi' ||
+  fail "ByeDPI domains must be resolved by real DNS, not FakeIP, before ciadpi dials"
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'collect_byedpi_real_dns_domains' ||
+  fail "ByeDPI real DNS server must be inserted before FakeDNS"
 extract_fn "$XRAY_GEN" "collect_dns_action_servers" | grep -Fq 'dns_action_tag' ||
   fail "DNS action sections must become Xray DNS servers"
 grep -Fq 'function need_singbox_sidecar' "$LIB/core/engine.uc" ||

@@ -178,8 +178,18 @@ extract_fn "$GEO" "community_matchers" | grep -Fq 'supercell_json_path' ||
   fail "supercell must use supercell.json on the Xray plane"
 extract_fn "$GEO" "lst_to_matchers" | grep -Fq 'domain:' ||
   fail "RAW lst domains must be emitted as Xray domain: suffix matchers"
-extract_fn "$NFT_APPLY" "write_xray_dnsmasq_nftset_conf" | grep -Fq 'section_list_nftset_domains' ||
-  fail "community list hosts must go into dnsmasq nftset so facebook.com is intercepted"
+extract_fn "$NFT_APPLY" "write_xray_dnsmasq_nftset_conf" | grep -Fq 'sets.resolved' ||
+  fail "dnsmasq nftset must fill a plain address set; interval sets reject host inserts"
+extract_fn "$NFT_APPLY" "nft_create_ipv4_host_set" | grep -Fq 'type ipv4_addr' ||
+  fail "resolved domain addresses need a non-interval nft set"
+extract_fn "$NFT_APPLY" "section_has_unresolved_domain_lists" | grep -Fq 'community_lists' ||
+  fail "built-in lists such as Youtube must pull LAN traffic into Xray"
+extract_fn "$NFT_APPLY" "xray_list_catch_all_needed" | grep -Fq 'is_xray_primary' ||
+  fail "list catch-all is only for the Xray plane"
+extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'xray_list_catch_all_needed' ||
+  fail "runtime nft must install the list catch-all"
+extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'port-unreachable' ||
+  fail "unmatched QUIC (UDP/443) must be rejected so YouTube falls back to TCP"
 extract_fn "$NFT_APPLY" "section_has_xray_domain_nft" | grep -Fq 'community_lists' ||
   fail "community list nftset lines must have matching forkop_rule_*_subnets sets"
 extract_fn "$NFT_APPLY" "section_list_nftset_domains" | grep -Fq 'catch' ||

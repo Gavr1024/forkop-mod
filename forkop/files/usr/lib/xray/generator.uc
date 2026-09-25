@@ -1217,6 +1217,19 @@ function fake_dns_alias_matcher(value) {
     return "";
 }
 
+function collect_byedpi_real_dns_domains(sections) {
+    let domains = [];
+    for (let section in array_or_empty(sections)) {
+        if (option(section, "action", "") != "byedpi")
+            continue;
+        for (let value in section_domain_matchers(section)) {
+            if (fake_dns_domain_usable(value))
+                push_unique(domains, value);
+        }
+    }
+    return domains;
+}
+
 function section_uses_interface_outbound(section) {
     let items = [];
     try {
@@ -1240,7 +1253,8 @@ function collect_fake_dns_domains(sections) {
     push_unique(domains, "full:ip.podkop.fyi");
     push_unique(domains, "full:use-application-dns.net");
     for (let section in array_or_empty(sections)) {
-        if (option(section, "action", "") != "dns")
+        let claim_action = option(section, "action", "");
+        if (claim_action != "dns" && claim_action != "byedpi")
             continue;
         for (let value in section_domain_matchers(section)) {
             value = trim(as_string(value));
@@ -1274,6 +1288,32 @@ function primary_dns_config(sections) {
     let servers = [];
     for (let server in collect_dns_action_servers(sections))
         push(servers, server);
+    let byedpi_domains = collect_byedpi_real_dns_domains(sections);
+    if (length(byedpi_domains) > 0) {
+        let pinned = false;
+        for (let value in settings_list("dns_server", "8.8.8.8")) {
+            let address = xray_dns_server_address(dns_type, value);
+            if (address == "")
+                continue;
+            push(servers, {
+                address: address,
+                tag: xray_constants.XRAY_DNS_REMOTE_TAG,
+                domains: byedpi_domains,
+                skipFallback: true,
+                timeoutMs: 2000
+            });
+            pinned = true;
+            break;
+        }
+        if (!pinned)
+            push(servers, {
+                address: "8.8.8.8",
+                tag: xray_constants.XRAY_DNS_REMOTE_TAG,
+                domains: byedpi_domains,
+                skipFallback: true,
+                timeoutMs: 2000
+            });
+    }
     let fake_server = { address: "fakedns", skipFallback: true };
     if (length(fake.domains) > 0)
         fake_server.domains = fake.domains;

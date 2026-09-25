@@ -278,6 +278,12 @@ msgstr "Outbound ByeDPI в sing-box настроен"
 msgid "ByeDPI sing-box outbound is not configured"
 msgstr "Outbound ByeDPI в sing-box не настроен"
 
+msgid "ByeDPI Xray outbound is configured"
+msgstr "Outbound ByeDPI в Xray настроен"
+
+msgid "ByeDPI Xray outbound is not configured"
+msgstr "Outbound ByeDPI в Xray не настроен"
+
 msgid "ByeDPI Strategy"
 msgstr "Стратегия ByeDPI"
 

@@ -8818,6 +8818,8 @@ async function runByedpiCheck() {
   const standaloneServiceRunning = Boolean(data.standalone_service_running);
   const standaloneConflict = hasByedpiRules && standaloneServiceRunning;
   const standaloneAutostartRisk = hasByedpiRules && standaloneServiceEnabled && !standaloneServiceRunning;
+  const xrayPlane = data.routing_plane === "xray";
+  const outboundReady = xrayPlane ? outboundsConfigured && Boolean(data.routes_configured) : outboundsConfigured;
   const items = [
     {
       state: providerAvailable ? "success" : hasByedpiRules ? "error" : "warning",
@@ -8840,8 +8842,8 @@ async function runByedpiCheck() {
       value: hasByedpiRules ? runtimeUnstable ? `${restartCount}` : `${runningProcesses}/${expectedProcesses}` : ""
     },
     {
-      state: !hasByedpiRules || outboundsConfigured ? "success" : "error",
-      key: outboundsConfigured ? _("ByeDPI sing-box outbound is configured") : _("ByeDPI sing-box outbound is not configured"),
+      state: !hasByedpiRules || outboundReady ? "success" : "error",
+      key: xrayPlane ? outboundReady ? _("ByeDPI Xray outbound is configured") : _("ByeDPI Xray outbound is not configured") : outboundsConfigured ? _("ByeDPI sing-box outbound is configured") : _("ByeDPI sing-box outbound is not configured"),
       value: `${data.listen_address}:${Number(data.port_base || 0)}`
     },
     {

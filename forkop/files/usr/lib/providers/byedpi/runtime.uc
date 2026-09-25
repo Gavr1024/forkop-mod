@@ -492,7 +492,8 @@ function runtime_config_status(sections) {
     return {
         rules_configured,
         outbounds_configured,
-        routes_configured
+        routes_configured,
+        routing_plane: xray_primary ? "xray" : "sing-box"
     };
 }
 
@@ -561,6 +562,7 @@ function status_json() {
         port_base: int(BYEDPI_PORT_BASE),
         outbounds_configured: config_state.outbounds_configured,
         routes_configured: config_state.routes_configured,
+        routing_plane: config_state.routing_plane,
         ready,
         conflict,
         status_message: message

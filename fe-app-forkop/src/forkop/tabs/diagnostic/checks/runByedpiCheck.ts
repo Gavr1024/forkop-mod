@@ -52,6 +52,10 @@ export async function runByedpiCheck() {
   const standaloneConflict = hasByedpiRules && standaloneServiceRunning;
   const standaloneAutostartRisk =
     hasByedpiRules && standaloneServiceEnabled && !standaloneServiceRunning;
+  const xrayPlane = data.routing_plane === 'xray';
+  const outboundReady = xrayPlane
+    ? outboundsConfigured && Boolean(data.routes_configured)
+    : outboundsConfigured;
 
   const items: Array<IDiagnosticsChecksItem> = [
     {
@@ -102,10 +106,14 @@ export async function runByedpiCheck() {
         : '',
     },
     {
-      state: !hasByedpiRules || outboundsConfigured ? 'success' : 'error',
-      key: outboundsConfigured
-        ? _('ByeDPI sing-box outbound is configured')
-        : _('ByeDPI sing-box outbound is not configured'),
+      state: !hasByedpiRules || outboundReady ? 'success' : 'error',
+      key: xrayPlane
+        ? outboundReady
+          ? _('ByeDPI Xray outbound is configured')
+          : _('ByeDPI Xray outbound is not configured')
+        : outboundsConfigured
+          ? _('ByeDPI sing-box outbound is configured')
+          : _('ByeDPI sing-box outbound is not configured'),
       value: `${data.listen_address}:${Number(data.port_base || 0)}`,
     },
     {
