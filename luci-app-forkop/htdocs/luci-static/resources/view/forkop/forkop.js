@@ -4,6 +4,7 @@
 "require baseclass";
 "require uci";
 "require ui";
+"require dom";
 "require view.forkop.main as main";
 
 // Global settings
@@ -416,7 +417,7 @@ const EntryPoint = {
       form.GridSection,
       "server",
       _("Servers"),
-      _("Accept external proxy connections and route them with sing-box."),
+      _("Accept external proxy connections and route them with the selected routing engine."),
     );
     configureGridSection(
       serverSection,
@@ -501,6 +502,64 @@ const EntryPoint = {
       return ["updates"];
     };
     updates.createUpdatesContent(updatesSection);
+
+    let syncingRoutingTabs = false;
+    function refreshOpenModalMaps() {
+      document.querySelectorAll("#modal_overlay .cbi-map").forEach((node) => {
+        if (node.classList.contains("hidden")) {
+          return;
+        }
+
+        const inst = dom.findClassInstance(node);
+        if (
+          !inst ||
+          inst === forkopMap ||
+          inst.forkopEngineRefresh ||
+          typeof inst.checkDepends !== "function"
+        ) {
+          return;
+        }
+
+        inst.forkopEngineRefresh = true;
+        try {
+          inst.checkDepends();
+        } catch (_error) {
+          /* A stacked modal can render before its widgets are ready. */
+        } finally {
+          inst.forkopEngineRefresh = false;
+        }
+      });
+    }
+
+    function syncRoutingEngineTabs() {
+      if (syncingRoutingTabs) {
+        return;
+      }
+
+      syncingRoutingTabs = true;
+      try {
+        refreshOpenModalMaps();
+      } finally {
+        syncingRoutingTabs = false;
+      }
+    }
+
+    const originalCheckDepends = forkopMap.checkDepends;
+    forkopMap.checkDepends = function () {
+      const result = originalCheckDepends.apply(this, arguments);
+      syncRoutingEngineTabs();
+      return result;
+    };
+
+    const originalRender = forkopMap.render;
+    forkopMap.render = function () {
+      return Promise.resolve(originalRender.apply(this, arguments)).then(
+        (node) => {
+          syncRoutingEngineTabs();
+          return node;
+        },
+      );
+    };
 
     await loadUiCapabilities().catch(() => null);
 

@@ -59,8 +59,8 @@ msgstr "5 секунд"
 msgid "60 seconds"
 msgstr "60 секунд"
 
-msgid "Accept external proxy connections and route them with sing-box."
-msgstr "Принимает внешние прокси-подключения и маршрутизирует их через sing-box."
+msgid "Accept external proxy connections and route them with the selected routing engine."
+msgstr "Принимает внешние прокси-подключения и маршрутизирует их через выбранное ядро."
 
 msgid "Accept routes"
 msgstr "Принимать маршруты"
@@ -158,8 +158,8 @@ msgstr "Весь трафик с этих IP-адресов будет напр�
 msgid "Allowed domain prefixes are full:, keyword:, and regex:"
 msgstr "Разрешённые префиксы доменов: full:, keyword: и regex:"
 
-msgid "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall."
-msgstr "Обеспечивает доступ к YACD из WAN. Убедитесь, что в брандмауэре открыт соответствующий порт."
+msgid "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall. Works only with sing-box."
+msgstr "Обеспечивает доступ к YACD из WAN. Убедитесь, что в брандмауэре открыт соответствующий порт. Работает только с sing-box."
 
 msgid "Allows limiting the list of servers for URLTest"
 msgstr "Позволяет ограничить список серверов для URLTest"
@@ -725,6 +725,9 @@ msgstr "Включить выходной сетевой интерфейс"
 msgid "Enable YACD"
 msgstr "Включить YACD"
 
+msgid "Works only with sing-box."
+msgstr "Работает только с sing-box."
+
 msgid "Enable YACD WAN Access"
 msgstr "Включить доступ YACD WAN"
 
@@ -1019,11 +1022,11 @@ msgstr "Как часто проверять верхние уровни при�
 msgid "How often the currently selected server is checked"
 msgstr "Как часто проверяется текущий выбранный сервер"
 
-msgid "How often to check the active DNS servers."
-msgstr "Как часто проверять активные DNS-серверы."
+msgid "How often to check the active DNS servers. Works only with sing-box."
+msgstr "Как часто проверять активные DNS-серверы. Работает только с sing-box."
 
-msgid "How often to check whether a higher-priority DNS server has recovered."
-msgstr "Как часто проверять, восстановился ли DNS-сервер с более высоким приоритетом."
+msgid "How often to check whether a higher-priority DNS server has recovered. Works only with sing-box."
+msgstr "Как часто проверять, восстановился ли DNS-сервер с более высоким приоритетом. Работает только с sing-box."
 
 msgid "How often to fetch new lists. If lists are already downloaded, start does not hit GitHub until this interval has passed. Never turns off automatic updates; the dashboard button still downloads them."
 msgstr "Как часто скачивать новые списки. Если списки уже скачаны, при старте GitHub не трогается, пока не истечёт этот интервал. «Никогда» отключает автообновление, кнопка на информационной панели по-прежнему скачивает их."
@@ -1087,6 +1090,9 @@ msgstr "Установить выбранную"
 
 msgid "Install specific version:"
 msgstr "Установить конкретную версию:"
+
+msgid "Only the OpenWrt package version is available for tiny."
+msgstr "Для tiny доступна только версия из пакета OpenWrt."
 
 msgid "Installed version is newer than release"
 msgstr "Установлена версия новее релиза"
@@ -1391,8 +1397,8 @@ msgstr "Совпадение по IP-адресам или подсетям на
 msgid "Match destination ports. Use a single port or a range"
 msgstr "Совпадение по портам назначения. Используйте одиночный порт или диапазон"
 
-msgid "Maximum time to wait for example.com to resolve during a DNS health check."
-msgstr "Максимальное время ожидания разрешения example.com при проверке доступности DNS."
+msgid "Maximum time to wait for example.com to resolve during a DNS health check. Works only with sing-box."
+msgstr "Максимальное время ожидания разрешения example.com при проверке доступности DNS. Работает только с sing-box."
 
 msgid "Memory Usage"
 msgstr "Использование памяти"
@@ -1883,8 +1889,8 @@ msgstr "Сколько секунд подождать после успешно
 msgid "Secret"
 msgstr "Секрет"
 
-msgid "Secret key for authenticating remote access to YACD when WAN access is enabled."
-msgstr "Секретный ключ для аутентификации удаленного доступа к YACD при включенном доступе через WAN."
+msgid "Secret key for authenticating remote access to YACD when WAN access is enabled. Works only with sing-box."
+msgstr "Секретный ключ для аутентификации удаленного доступа к YACD при включенном доступе через WAN. Работает только с sing-box."
 
 msgid "Section"
 msgstr "Секция"
@@ -1931,17 +1937,17 @@ msgstr "Выберите сетевой интерфейс для VPN-подкл
 msgid "Select or enter a User-Agent"
 msgstr "Выберите или введите User-Agent"
 
-msgid "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing"
-msgstr "Выберите или введите путь к файлу кеша sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете"
+msgid "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing. Works only with sing-box."
+msgstr "Выберите или введите путь к файлу кеша sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете. Работает только с sing-box."
 
-msgid "Select path for sing-box config file. Change this ONLY if you know what you are doing"
-msgstr "Выберите путь к файлу конфигурации sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете"
+msgid "Select path for sing-box config file. Change this ONLY if you know what you are doing. Works only with sing-box."
+msgstr "Выберите путь к файлу конфигурации sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете. Работает только с sing-box."
 
 msgid "Select the fastest node"
 msgstr "Выбирать самый быстрый узел"
 
-msgid "Select the log level for sing-box"
-msgstr "Выберите уровень логов для sing-box"
+msgid "Log level for sing-box and Xray"
+msgstr "Уровень логов sing-box и Xray"
 
 msgid "Select the network interface from which the traffic will originate"
 msgstr "Выберите сетевой интерфейс, с которого будет исходить трафик"
@@ -2309,8 +2315,8 @@ msgstr "Отметьте все нужные готовые списки. Выб
 msgid "Time"
 msgstr "Время"
 
-msgid "Time in seconds for DNS record caching (default: 60)"
-msgstr "Время в секундах для кэширования DNS записей (по умолчанию: 60)"
+msgid "Time in seconds for DNS record caching (default: 60). Works only with sing-box."
+msgstr "Время в секундах для кэширования DNS записей (по умолчанию: 60). Работает только с sing-box."
 
 msgid "Time skew tolerance"
 msgstr "Допуск расхождения времени"
@@ -2701,3 +2707,81 @@ msgstr "Длина FinalMask"
 
 msgid "FinalMask interval"
 msgstr "Интервал FinalMask"
+
+msgid "All remaining servers means every server not already assigned to a higher-priority level. Works only with sing-box."
+msgstr "Добавляет все серверы, которые не попали в уровни с более высоким приоритетом. Работает только с sing-box."
+
+msgid "Allows limiting the list of servers for URLTest Works only with sing-box."
+msgstr "Позволяет ограничить список серверов для URLTest Работает только с sing-box."
+
+msgid "Check timeout after which the server is considered dead Works only with sing-box."
+msgstr "Таймаут проверки, после которого сервер считается мёртвым Работает только с sing-box."
+
+msgid "Enable built-in DNS resolver for domains handled by this section Works only with sing-box."
+msgstr "Включить встроенный DNS-резолвер для доменов, обрабатываемых этой секцией Работает только с sing-box."
+
+msgid "Hide individual nodes that are already included in imported subscription URLTest groups Works only with sing-box."
+msgstr "Скрывать отдельные узлы, которые уже входят в импортированные URLTest группы подписки Работает только с sing-box."
+
+msgid "Hide intermediate nodes used as detours by other subscription nodes Works only with sing-box."
+msgstr "Скрывать промежуточные узлы, которые используются как detour для других узлов подписки Работает только с sing-box."
+
+msgid "How often higher priority levels are checked while a lower level is active Works only with sing-box."
+msgstr "Как часто проверять верхние уровни приоритета, пока активен нижний уровень Работает только с sing-box."
+
+msgid "How often the currently selected server is checked Works only with sing-box."
+msgstr "Как часто проверяется текущий выбранный сервер Работает только с sing-box."
+
+msgid "Import URLTest groups returned by this subscription provider Works only with sing-box."
+msgstr "Импортировать URLTest группы, если провайдер подписки возвращает их Работает только с sing-box."
+
+msgid "Interrupt connections when priority failover switches server Works only with sing-box."
+msgstr "Разрывать соединения при переключении сервера приоритетом Работает только с sing-box."
+
+msgid "Interrupt connections when URLTest switches the selected server Works only with sing-box."
+msgstr "Прерывать соединения, когда URLTest переключает выбранный сервер Работает только с sing-box."
+
+msgid "Keep Priority before latency-sorted servers Works only with sing-box."
+msgstr "Показывать Priority перед серверами, отсортированными по задержке Работает только с sing-box."
+
+msgid "Minimum latency difference in milliseconds that triggers switching to a faster server. Works only with sing-box."
+msgstr "Минимальная разница задержки в миллисекундах, при которой произойдет переключение на более быстрый сервер. Работает только с sing-box."
+
+msgid "Name shown in the priority level list Works only with sing-box."
+msgstr "Имя, которое отображается в списке уровней приоритета Работает только с sing-box."
+
+msgid "Periodically check the current level and switch to a faster server even when the current one works. Works only with sing-box."
+msgstr "Периодически проверять текущий уровень и переключаться на более быстрый сервер, даже если текущий работает. Работает только с sing-box."
+
+msgid "Port for the local mixed proxy of this section Works only with sing-box."
+msgstr "Порт локального смешанного прокси для этой секции Работает только с sing-box."
+
+msgid "Require a username and password for the local mixed proxy Works only with sing-box."
+msgstr "Требовать логин и пароль для локального смешанного прокси Работает только с sing-box."
+
+msgid "Stop checking when URLTest group is not used. Use sing-box duration format like 1d, 12h or 30m. Works only with sing-box."
+msgstr "Останавливать проверку если URLTest группа не используется. Используйте формат длительности sing-box, например 1d, 12h или 30m. Работает только с sing-box."
+
+msgid "Top level has the highest priority; lower levels are used as fallback Works only with sing-box."
+msgstr "Верхний уровень имеет самый высокий приоритет; нижние уровни используются как резерв Работает только с sing-box."
+
+msgid "Traffic for this level goes directly. Works only with sing-box."
+msgstr "Трафик этого уровня пойдёт напрямую. Работает только с sing-box."
+
+msgid "URL used to check whether a server is alive Works only with sing-box."
+msgstr "URL, который используется для проверки, что сервер жив Работает только с sing-box."
+
+msgid "When switching to another level, test every server and select the fastest instead of the first working one. Works only with sing-box."
+msgstr "При переходе на другой уровень тестировать все сервера и выбирать самый быстрый, а не первый работающий. Работает только с sing-box."
+
+msgid "Name displayed on the dashboard Works only with sing-box."
+msgstr "Имя, которое отображается в дашборде Работает только с sing-box."
+
+msgid "Use sing-box duration format like 1d, 12h or 30m Works only with sing-box."
+msgstr "Используйте формат длительности sing-box, например 1d, 12h или 30m Работает только с sing-box."
+
+msgid "DNS protocol used by this interface. Works only with sing-box."
+msgstr "Протокол DNS этого интерфейса. Работает только с sing-box."
+
+msgid "DNS server used by this interface. Works only with sing-box."
+msgstr "DNS-сервер этого интерфейса. Работает только с sing-box."

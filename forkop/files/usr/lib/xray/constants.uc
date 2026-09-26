@@ -47,6 +47,7 @@ const SINGBOX_SIDECAR_TAG = "sing-box-sidecar";
 const SINGBOX_SIDECAR_LISTEN = "127.0.0.1";
 const SINGBOX_SIDECAR_PORT = 4536;
 const SINGBOX_SIDECAR_INBOUND_TAG = "xray-plane-mixed-in";
+const XRAY_SECTION_PIN_PORT_BASE = 17020;
 const FAKEIP_INET4_RANGE = "198.18.0.0/15";
 const FAKEIP_INET6_RANGE = "fc00::/18";
 const XRAY_LOCATION_ASSET = "/usr/share/xray";
@@ -59,6 +60,10 @@ const XRAY_LAST_DIR = "/etc/forkop/xray-last";
 
 function as_string(value) {
     return value == null ? "" : "" + value;
+}
+
+function trim(value) {
+    return replace(as_string(value), /^[ \t\r\n]+|[ \t\r\n]+$/g, "");
 }
 
 function inbound_tag(section_name) {
@@ -77,6 +82,64 @@ function outbound_tag(section_name, index) {
 
 function balancer_tag(section_name) {
     return "balancer-" + as_string(section_name);
+}
+
+function section_pin_tag(section_name) {
+    return "pin-in-" + as_string(section_name);
+}
+
+function section_pin6_tag(section_name) {
+    return "pin6-in-" + as_string(section_name);
+}
+
+function section_pin_port(index) {
+    return XRAY_SECTION_PIN_PORT_BASE + int(index);
+}
+
+function section_pin_has_recorded_domains(section, connections) {
+    if (length(connections.community_lists(section)) > 0)
+        return true;
+    if (trim(as_string(section.domain || "")) != "")
+        return true;
+    if (trim(as_string(section.domain_list || "")) != "")
+        return true;
+    if (trim(as_string(section.domain_suffix_text || "")) != "")
+        return true;
+    if (trim(as_string(section.domain_ip_lists || "")) != "")
+        return true;
+    return false;
+}
+
+function section_pin_specs() {
+    let engine = require("core.engine");
+    if (!engine.is_xray_primary())
+        return [];
+    let uci_core = require("core.uci");
+    let connections = require("config.connections");
+    if (!uci_core.available())
+        return [];
+    let specs = [];
+    for (let section in uci_core.section_objects("forkop", "section")) {
+        if (type(section) != "object")
+            continue;
+        let enabled = section.enabled == null ? "1" : as_string(section.enabled);
+        if (enabled == "0")
+            continue;
+        let action = connections.action(section);
+        if (action != "connection" && action != "block" && action != "byedpi" && action != "zapret" && action != "zapret2")
+            continue;
+        if (!section_pin_has_recorded_domains(section, connections))
+            continue;
+        let name = as_string(section[".name"] || "");
+        if (name == "")
+            continue;
+        push(specs, {
+            name: name,
+            port: section_pin_port(length(specs)),
+            action: action
+        });
+    }
+    return specs;
 }
 
 return {
@@ -110,6 +173,7 @@ return {
     XRAY_TPROXY_FAKEIP_TAG,
     XRAY_TPROXY_FAKEIP6_TAG,
     XRAY_TPROXY_FAKEIP_PORT,
+    XRAY_SECTION_PIN_PORT_BASE,
     XRAY_API_TAG,
     XRAY_API_PORT,
     XRAY_DNS_INBOUND_TAG,
@@ -140,5 +204,9 @@ return {
     inbound_tag,
     node_inbound_tag,
     outbound_tag,
-    balancer_tag
+    balancer_tag,
+    section_pin_tag,
+    section_pin6_tag,
+    section_pin_port,
+    section_pin_specs
 };

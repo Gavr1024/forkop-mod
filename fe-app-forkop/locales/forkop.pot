@@ -55,7 +55,7 @@ msgid "✘ Stopped"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js:419
-msgid "Accept external proxy connections and route them with sing-box."
+msgid "Accept external proxy connections and route them with the selected routing engine."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js:3129

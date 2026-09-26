@@ -13744,6 +13744,8 @@ var XRAY_FALLBACK_VERSIONS = [
 var singBoxAvailableVersions = [...SING_BOX_EXTENDED_FALLBACK_VERSIONS];
 var singBoxVersionsLoading = false;
 var singBoxSelectedVersion = "";
+var singBoxVersionRequest = 0;
+var singBoxVersionsListFlavor = "";
 var xrayAvailableVersions = [...XRAY_FALLBACK_VERSIONS];
 var xrayPrereleaseVersions = [];
 var xrayVersionsLoading = false;
@@ -13841,9 +13843,17 @@ function applyCachedCheckResults(results) {
   results.forEach((result) => {
     const status = result.status || null;
     if (Array.isArray(result.available_versions) && result.component === "sing_box") {
-      singBoxAvailableVersions = result.available_versions.filter(Boolean);
-      if (singBoxSelectedVersion && !singBoxAvailableVersions.includes(singBoxSelectedVersion)) {
-        singBoxSelectedVersion = "";
+      const listFlavor = singBoxVersionsListFlavor || singBoxVersionListFlavor(currentSingBoxVersionFlavor());
+      const merged = mergeSingBoxVersionsForList(
+        result.available_versions,
+        listFlavor
+      );
+      if (merged.length && listFlavor === singBoxVersionListFlavor(currentSingBoxVersionFlavor())) {
+        singBoxVersionsListFlavor = listFlavor;
+        singBoxAvailableVersions = merged;
+        if (singBoxSelectedVersion && !singBoxAvailableVersions.includes(singBoxSelectedVersion)) {
+          singBoxSelectedVersion = "";
+        }
       }
     }
     if (Array.isArray(result.available_versions) && result.component === "xray") {
@@ -13936,6 +13946,11 @@ function reloadPageAfterForkopUpdate() {
     window.location.reload();
   }, 1200);
 }
+function componentActionBase(action) {
+  const value = `${action || ""}`;
+  const separator = value.indexOf("@");
+  return separator < 0 ? value : value.slice(0, separator);
+}
 function patchSystemInfoAfterMutation(result) {
   const systemInfo = store.get().diagnosticsSystemInfo;
   const nextSystemInfo = { ...systemInfo, loading: false, loaded: true };
@@ -13945,25 +13960,26 @@ function patchSystemInfoAfterMutation(result) {
   }
   if (result.component === "sing_box") {
     nextSystemInfo.sing_box_version = version;
-    if (result.action === "install_extended") {
+    const singBoxAction = componentActionBase(result.action);
+    if (singBoxAction === "install_extended") {
       nextSystemInfo.sing_box_extended = 1;
       nextSystemInfo.sing_box_tiny = 0;
       nextSystemInfo.sing_box_compressed = 0;
       nextSystemInfo.sing_box_tailscale = 1;
     }
-    if (result.action === "install_extended_compressed") {
+    if (singBoxAction === "install_extended_compressed") {
       nextSystemInfo.sing_box_extended = 1;
       nextSystemInfo.sing_box_tiny = 0;
       nextSystemInfo.sing_box_compressed = 1;
       nextSystemInfo.sing_box_tailscale = 1;
     }
-    if (result.action === "install_stable") {
+    if (singBoxAction === "install_stable") {
       nextSystemInfo.sing_box_extended = 0;
       nextSystemInfo.sing_box_tiny = 0;
       nextSystemInfo.sing_box_compressed = 0;
       nextSystemInfo.sing_box_tailscale = 1;
     }
-    if (result.action === "install_tiny") {
+    if (singBoxAction === "install_tiny") {
       nextSystemInfo.sing_box_extended = 0;
       nextSystemInfo.sing_box_tiny = 1;
       nextSystemInfo.sing_box_compressed = 0;
@@ -14018,16 +14034,83 @@ function patchSystemInfoAfterMutation(result) {
     notifyActionProvidersAvailabilityChanged(normalizedSystemInfo);
   }
 }
+function singBoxVersionIsPlaceholder(version) {
+  const normalized = `${version || ""}`.trim().toLowerCase();
+  if (!normalized || normalized === "loading" || normalized === "unknown" || normalized === "not installed" || normalized === "loading...") {
+    return true;
+  }
+  if (typeof _ !== "function") {
+    return false;
+  }
+  return normalized === _("unknown").toLowerCase() || normalized === _("Not installed").toLowerCase() || normalized === _("Loading...").toLowerCase();
+}
+function currentSingBoxVersionFlavor() {
+  const systemInfo = normalizeSingBoxVariantFields(
+    store.get().diagnosticsSystemInfo
+  );
+  if (singBoxVersionIsPlaceholder(systemInfo.sing_box_version)) {
+    return "extended";
+  }
+  if (systemInfo.sing_box_compressed && systemInfo.sing_box_extended) {
+    return "extended-compressed";
+  }
+  if (systemInfo.sing_box_extended) {
+    return "extended";
+  }
+  if (systemInfo.sing_box_tiny) {
+    return "tiny";
+  }
+  return "stable";
+}
+function singBoxVersionListFlavor(flavor) {
+  if (flavor === "stable") {
+    return "stable";
+  }
+  if (flavor === "tiny") {
+    return "tiny";
+  }
+  return "extended";
+}
+function singBoxVersionFlavorLabel(flavor) {
+  if (flavor === "extended-compressed") {
+    return "extended compressed";
+  }
+  if (flavor === "tiny") {
+    return "tiny";
+  }
+  if (flavor === "stable") {
+    return "stable";
+  }
+  return "extended";
+}
+function singBoxSelectedInstallKey() {
+  const flavor = currentSingBoxVersionFlavor();
+  if (flavor === "extended-compressed") {
+    return "singBoxInstallExtendedCompressed";
+  }
+  if (flavor === "tiny") {
+    return "singBoxInstallTiny";
+  }
+  if (flavor === "stable") {
+    return "singBoxInstallStable";
+  }
+  return "singBoxInstallExtended";
+}
+function rawInstalledSingBoxVersion() {
+  const version = `${store.get().diagnosticsSystemInfo.sing_box_version || ""}`.trim();
+  return singBoxVersionIsPlaceholder(version) ? "" : version;
+}
 function liveSelectedSingBoxVersion() {
   const select = document.querySelector(
     ".fkp_singbox-version-select"
   );
-  const fromSelect = normalizeExtendedVersionTag(select?.value || "");
-  if (fromSelect) {
-    singBoxSelectedVersion = fromSelect;
-    return fromSelect;
+  const raw = `${select?.value || singBoxSelectedVersion || ""}`.trim();
+  const options = visibleSingBoxVersionTags();
+  if (raw && options.includes(raw)) {
+    singBoxSelectedVersion = raw;
+    return raw;
   }
-  return normalizeExtendedVersionTag(singBoxSelectedVersion);
+  return options.includes(singBoxSelectedVersion) ? singBoxSelectedVersion : "";
 }
 function liveSelectedXrayVersion() {
   const select = document.querySelector(
@@ -14045,17 +14128,18 @@ function currentXrayVersionInstallAction(tag) {
   return normalized ? `install@${normalized}` : "install";
 }
 function currentSingBoxVersionInstallAction(tag) {
-  const systemInfo = normalizeSingBoxVariantFields(
-    store.get().diagnosticsSystemInfo
-  );
+  const flavor = currentSingBoxVersionFlavor();
   const normalized = `${tag || ""}`.trim();
-  if (!normalized) {
-    return systemInfo.sing_box_compressed ? "install_extended_compressed" : "install_extended";
+  if (flavor === "extended-compressed") {
+    return normalized ? `install_extended_compressed@${normalized}` : "install_extended_compressed";
   }
-  if (systemInfo.sing_box_compressed) {
-    return `install_extended_compressed@${normalized}`;
+  if (flavor === "tiny") {
+    return normalized ? `install_tiny@${normalized}` : "install_tiny";
   }
-  return `install_extended@${normalized}`;
+  if (flavor === "stable") {
+    return normalized ? `install_stable@${normalized}` : "install_stable";
+  }
+  return normalized ? `install_extended@${normalized}` : "install_extended";
 }
 function tagHasOpenwrtPackageBuild(tag) {
   const match = tag.match(/extended-([0-9]+)\.([0-9]+)/i);
@@ -14080,11 +14164,35 @@ function normalizeExtendedVersionTag(value) {
   }
   return tag;
 }
-function mergeSingBoxVersions(values) {
+function normalizeOfficialStableTag(value) {
+  let tag = `${value || ""}`.trim();
+  if (!tag) {
+    return "";
+  }
+  if (tag[0] === "v" || tag[0] === "V") {
+    tag = tag.slice(1);
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(tag)) {
+    return "";
+  }
+  const lowered = tag.toLowerCase();
+  if (lowered.includes("alpha") || lowered.includes("beta") || lowered.includes("rc") || lowered.includes("extended")) {
+    return "";
+  }
+  return tag;
+}
+function normalizeTinyVersionTag(value) {
+  const tag = `${value || ""}`.trim();
+  if (!tag || singBoxVersionIsPlaceholder(tag) || tag.toLowerCase().includes("extended")) {
+    return "";
+  }
+  return tag;
+}
+function mergeUniqueVersionTags(values, normalize) {
   const seen = /* @__PURE__ */ new Set();
   const result = [];
   values.forEach((value) => {
-    const tag = normalizeExtendedVersionTag(value);
+    const tag = normalize(value);
     if (!tag || seen.has(tag)) {
       return;
     }
@@ -14092,6 +14200,41 @@ function mergeSingBoxVersions(values) {
     result.push(tag);
   });
   return result;
+}
+function mergeSingBoxVersions(values) {
+  return mergeUniqueVersionTags(values, normalizeExtendedVersionTag);
+}
+function mergeSingBoxVersionsForList(values, listFlavor) {
+  if (listFlavor === "stable") {
+    return mergeUniqueVersionTags(values, normalizeOfficialStableTag);
+  }
+  if (listFlavor === "tiny") {
+    return mergeUniqueVersionTags(values, normalizeTinyVersionTag);
+  }
+  return mergeSingBoxVersions(values);
+}
+function visibleSingBoxVersionTags() {
+  const flavor = currentSingBoxVersionFlavor();
+  const listFlavor = singBoxVersionListFlavor(flavor);
+  const current = rawInstalledSingBoxVersion();
+  const loaded = singBoxVersionsListFlavor === listFlavor ? singBoxAvailableVersions : [];
+  if (listFlavor === "tiny") {
+    return mergeSingBoxVersionsForList([...loaded, current], "tiny");
+  }
+  if (listFlavor === "stable") {
+    const official = mergeSingBoxVersionsForList([...loaded, current], "stable");
+    if (current && !official.includes(current) && !official.includes(normalizeOfficialStableTag(current))) {
+      return [current, ...official];
+    }
+    return official;
+  }
+  const fallback = singBoxVersionsListFlavor === listFlavor ? [] : SING_BOX_EXTENDED_FALLBACK_VERSIONS;
+  return mergeSingBoxVersions([
+    ...loaded,
+    ...fallback,
+    ...SING_BOX_EXTENDED_FALLBACK_VERSIONS,
+    current
+  ]);
 }
 function normalizeXrayVersionTag(value, allowPrerelease = false) {
   let tag = `${value || ""}`.trim();
@@ -14143,7 +14286,27 @@ function visibleXrayVersionTags() {
     (tag) => tag === currentVersion || !isXrayPrereleaseTag(tag)
   );
 }
-async function fetchSingBoxVersionsFromGitHub() {
+async function fetchSingBoxVersionsFromGitHub(flavor) {
+  if (flavor === "tiny") {
+    return [];
+  }
+  if (flavor === "stable") {
+    const response2 = await fetch(
+      "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100",
+      { headers: { Accept: "application/vnd.github+json" } }
+    );
+    if (!response2.ok) {
+      throw new Error(`github stable tags http ${response2.status}`);
+    }
+    const data2 = await response2.json();
+    if (!Array.isArray(data2)) {
+      throw new Error("github stable tags invalid");
+    }
+    return mergeSingBoxVersionsForList(
+      data2.map((item) => item && item.name),
+      "stable"
+    );
+  }
   const response = await fetch(
     "https://api.github.com/repos/shtorm-7/sing-box-extended/tags?per_page=30",
     { headers: { Accept: "application/vnd.github+json" } }
@@ -14157,7 +14320,7 @@ async function fetchSingBoxVersionsFromGitHub() {
   }
   return mergeSingBoxVersions(data.map((item) => item && item.name));
 }
-async function loadSingBoxVersionsFromRouter() {
+async function loadSingBoxVersionsFromRouter(listFlavor) {
   const startResponse = await ForkopShellMethods.componentActionStart(
     "sing_box",
     "list_versions"
@@ -14173,7 +14336,64 @@ async function loadSingBoxVersionsFromRouter() {
   if (!response.success || !Array.isArray(response.data.available_versions)) {
     return [];
   }
-  return mergeSingBoxVersions(response.data.available_versions);
+  const reported = `${response.data.variant || ""}`;
+  if (reported === "extended" || reported === "extended-compressed" || reported === "stable" || reported === "tiny") {
+    if (singBoxVersionListFlavor(reported) !== listFlavor) {
+      return [];
+    }
+  }
+  return mergeSingBoxVersionsForList(response.data.available_versions, listFlavor);
+}
+async function loadSingBoxVersionList() {
+  const flavor = currentSingBoxVersionFlavor();
+  const listFlavor = singBoxVersionListFlavor(flavor);
+  const request = ++singBoxVersionRequest;
+  if (singBoxVersionsListFlavor !== listFlavor) {
+    singBoxVersionsListFlavor = listFlavor;
+    singBoxSelectedVersion = "";
+    singBoxAvailableVersions = listFlavor === "extended" ? [...SING_BOX_EXTENDED_FALLBACK_VERSIONS] : [];
+  }
+  singBoxVersionsLoading = true;
+  renderUpdatesComponents();
+  try {
+    let versions = [];
+    if (listFlavor !== "tiny") {
+      try {
+        versions = await fetchSingBoxVersionsFromGitHub(flavor);
+      } catch (error) {
+        logger.debug(
+          "[UPDATES]",
+          "load sing-box versions from GitHub failed",
+          error
+        );
+      }
+    }
+    if (request !== singBoxVersionRequest) {
+      return;
+    }
+    if (!versions.length) {
+      try {
+        versions = await loadSingBoxVersionsFromRouter(listFlavor);
+      } catch (error) {
+        logger.debug(
+          "[UPDATES]",
+          "load sing-box versions from router failed",
+          error
+        );
+      }
+    }
+    if (request !== singBoxVersionRequest) {
+      return;
+    }
+    if (versions.length) {
+      singBoxAvailableVersions = versions;
+    }
+  } finally {
+    if (request === singBoxVersionRequest) {
+      singBoxVersionsLoading = false;
+      renderUpdatesComponents();
+    }
+  }
 }
 function xrayVersionOptionLabel(version, currentVersion) {
   const marks = [];
@@ -14272,47 +14492,24 @@ async function loadCoreVersionLists() {
   if (coreVersionsLoading) {
     return;
   }
-  if (!singBoxAvailableVersions.length) {
-    singBoxAvailableVersions = [...SING_BOX_EXTENDED_FALLBACK_VERSIONS];
-  }
   if (!xrayAvailableVersions.length) {
     xrayAvailableVersions = [...XRAY_FALLBACK_VERSIONS];
   }
   coreVersionsLoading = true;
-  singBoxVersionsLoading = true;
   xrayVersionsLoading = true;
   renderUpdatesComponents();
+  const singBoxLoad = loadSingBoxVersionList();
   try {
-    const [githubSingBox, githubXray] = await Promise.all([
-      fetchSingBoxVersionsFromGitHub().catch((error) => {
-        logger.debug("[UPDATES]", "load sing-box versions from GitHub failed", error);
-        return [];
-      }),
-      fetchXrayVersionsFromGitHub().catch((error) => {
-        logger.debug("[UPDATES]", "load xray versions from GitHub failed", error);
-        return { ordered: [], prerelease: [] };
-      })
-    ]);
-    if (githubSingBox.length) {
-      singBoxAvailableVersions = githubSingBox;
-    }
+    const githubXray = await fetchXrayVersionsFromGitHub().catch((error) => {
+      logger.debug("[UPDATES]", "load xray versions from GitHub failed", error);
+      return { ordered: [], prerelease: [] };
+    });
     if (githubXray.ordered.length || githubXray.prerelease.length) {
       xrayAvailableVersions = githubXray.ordered;
       xrayPrereleaseVersions = githubXray.prerelease;
     }
-    singBoxVersionsLoading = !githubSingBox.length;
     xrayVersionsLoading = !(githubXray.ordered.length || githubXray.prerelease.length);
     renderUpdatesComponents();
-    if (!githubSingBox.length) {
-      try {
-        const routerVersions = await loadSingBoxVersionsFromRouter();
-        if (routerVersions.length) {
-          singBoxAvailableVersions = routerVersions;
-        }
-      } catch (error) {
-        logger.debug("[UPDATES]", "load sing-box versions from router failed", error);
-      }
-    }
     if (!githubXray.ordered.length && !githubXray.prerelease.length) {
       try {
         const routerVersions = await loadXrayVersionsFromRouter();
@@ -14326,9 +14523,9 @@ async function loadCoreVersionLists() {
     }
   } finally {
     coreVersionsLoading = false;
-    singBoxVersionsLoading = false;
     xrayVersionsLoading = false;
     renderUpdatesComponents();
+    await singBoxLoad;
   }
 }
 async function applyCompletedComponentAction({
@@ -14350,9 +14547,18 @@ async function applyCompletedComponentAction({
           xraySelectedVersion = "";
         }
       } else if (result.component === "sing_box") {
-        singBoxAvailableVersions = mergeSingBoxVersions(versions);
-        if (singBoxSelectedVersion && !singBoxAvailableVersions.includes(singBoxSelectedVersion)) {
-          singBoxSelectedVersion = "";
+        const listFlavor = singBoxVersionListFlavor(currentSingBoxVersionFlavor());
+        const reported = `${result.variant || ""}`;
+        const reportedFlavor = reported === "extended" || reported === "extended-compressed" || reported === "stable" || reported === "tiny" ? singBoxVersionListFlavor(reported) : listFlavor;
+        if (reportedFlavor === listFlavor) {
+          const merged = mergeSingBoxVersionsForList(versions, listFlavor);
+          if (merged.length) {
+            singBoxVersionsListFlavor = listFlavor;
+            singBoxAvailableVersions = merged;
+          }
+          if (singBoxSelectedVersion && !visibleSingBoxVersionTags().includes(singBoxSelectedVersion)) {
+            singBoxSelectedVersion = "";
+          }
         }
       }
     }
@@ -14959,63 +15165,79 @@ function renderComponentCard(card) {
     );
   }
   if (card.component === "sing_box") {
-    const currentVersion = `${card.version || ""}`.trim();
-    const options = mergeSingBoxVersions([
-      ...singBoxAvailableVersions,
-      ...SING_BOX_EXTENDED_FALLBACK_VERSIONS,
-      currentVersion
-    ]);
-    const selected = singBoxSelectedVersion && options.includes(singBoxSelectedVersion) ? singBoxSelectedVersion : options.includes(normalizeExtendedVersionTag(currentVersion)) ? normalizeExtendedVersionTag(currentVersion) : options[0] || "";
-    const installLoading = updatesActions.singBoxInstallExtended.loading || updatesActions.singBoxInstallExtendedCompressed.loading;
-    actionElements.push(
-      E("div", { class: "fkp_updates-page__component__versions" }, [
+    const flavor = currentSingBoxVersionFlavor();
+    const currentVersion = rawInstalledSingBoxVersion();
+    const options = visibleSingBoxVersionTags();
+    const selected = singBoxSelectedVersion && options.includes(singBoxSelectedVersion) ? singBoxSelectedVersion : options.includes(currentVersion) ? currentVersion : options[0] || "";
+    const installLoading = updatesActions[singBoxSelectedInstallKey()].loading;
+    const versionNodes = [
+      E(
+        "div",
+        { class: "fkp_updates-page__component__variants-title" },
+        `${_("Install specific version:")} (${singBoxVersionFlavorLabel(flavor)})`
+      )
+    ];
+    if (flavor === "tiny") {
+      versionNodes.push(
         E(
           "div",
           { class: "fkp_updates-page__component__variants-title" },
-          _("Install specific version:")
-        ),
-        E("div", { class: "fkp_updates-page__component__versions-row" }, [
-          E(
-            "select",
-            {
-              class: "fkp_singbox-version-select",
-              change: (event) => {
-                const target = event.target;
-                singBoxSelectedVersion = target.value;
-              }
-            },
-            options.map(
-              (version) => E(
-                "option",
-                { value: version },
-                version === currentVersion || version === normalizeExtendedVersionTag(currentVersion) ? `${version} (${_("current")})` : version
-              )
-            )
-          ),
-          renderButton({
-            classNames: ["cbi-button-save"],
-            text: singBoxVersionsLoading ? _("Loading versions...") : _("Install selected"),
-            icon: renderDownloadIcon24,
-            loading: installLoading,
-            disabled: systemInfoLoading || serviceRuntimeActionLoading || anyActionLoading || singBoxVersionsLoading || !selected,
-            onClick: () => {
-              const tag = liveSelectedSingBoxVersion();
-              if (!tag) {
-                return;
-              }
-              void handleComponentAction({
-                key: store.get().diagnosticsSystemInfo.sing_box_compressed ? "singBoxInstallExtendedCompressed" : "singBoxInstallExtended",
-                text: _("Install selected"),
-                icon: renderDownloadIcon24,
-                component: "sing_box",
-                action: currentSingBoxVersionInstallAction(
-                  tag
-                )
-              });
+          _("Only the OpenWrt package version is available for tiny.")
+        )
+      );
+    }
+    versionNodes.push(
+      E("div", { class: "fkp_updates-page__component__versions-row" }, [
+        E(
+          "select",
+          {
+            class: "fkp_singbox-version-select",
+            change: (event) => {
+              const target = event.target;
+              singBoxSelectedVersion = target.value;
             }
-          })
-        ])
+          },
+          options.map(
+            (version) => E(
+              "option",
+              {
+                value: version,
+                selected: version === selected ? "selected" : null
+              },
+              version === currentVersion ? `${version} (${_("current")})` : version
+            )
+          )
+        ),
+        renderButton({
+          classNames: ["cbi-button-save"],
+          text: singBoxVersionsLoading ? _("Loading versions...") : _("Install selected"),
+          icon: renderDownloadIcon24,
+          loading: installLoading,
+          disabled: systemInfoLoading || serviceRuntimeActionLoading || anyActionLoading || singBoxVersionsLoading || !selected,
+          onClick: () => {
+            const tag = liveSelectedSingBoxVersion();
+            if (!tag) {
+              return;
+            }
+            void handleComponentAction({
+              key: singBoxSelectedInstallKey(),
+              text: _("Install selected"),
+              icon: renderDownloadIcon24,
+              component: "sing_box",
+              action: currentSingBoxVersionInstallAction(
+                tag
+              )
+            });
+          }
+        })
       ])
+    );
+    actionElements.push(
+      E(
+        "div",
+        { class: "fkp_updates-page__component__versions" },
+        versionNodes
+      )
     );
   }
   if (card.component === "xray") {
@@ -15129,6 +15351,9 @@ function renderUpdatesComponents() {
 }
 function onStoreUpdate3(_next, _prev, diff) {
   if (diff.diagnosticsSystemInfo || diff.updatesActions || diff.updatesChecks || diff.diagnosticsActions || diff.servicesInfoWidget) {
+    if (updatesMounted && diff.diagnosticsSystemInfo && singBoxVersionListFlavor(currentSingBoxVersionFlavor()) !== singBoxVersionsListFlavor) {
+      void loadSingBoxVersionList();
+    }
     renderUpdatesComponents();
   }
 }

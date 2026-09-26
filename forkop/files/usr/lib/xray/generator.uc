@@ -8,6 +8,7 @@ let runtime_subscription = require("singbox.subscription");
 let runtime_url = require("core.url");
 let xray_constants = require("xray.constants");
 let xray_outbound = require("xray.outbound");
+let xray_servers = require("xray.servers");
 let xray_geodata = require("xray.geodata");
 let engine = require("core.engine");
 let sb_constants = require("singbox.constants");
@@ -101,6 +102,26 @@ function settings_section() {
     if (!uci_core.available())
         return {};
     return object_or_empty(uci_core.get_all("forkop", "settings"));
+}
+
+function xray_log_level() {
+    let level = lc(option(settings_section(), "log_level", "warn"));
+    if (level == "debug" || level == "trace")
+        return "debug";
+    if (level == "info")
+        return "info";
+    if (level == "error" || level == "fatal" || level == "panic")
+        return "error";
+    if (level == "none")
+        return "none";
+    return "warning";
+}
+
+function output_network_interface() {
+    let settings = settings_section();
+    if (!bool_option(settings, "enable_output_network_interface", false))
+        return "";
+    return trim(option(settings, "output_network_interface", ""));
 }
 
 function global_freedom_fragment_spec() {
@@ -1501,7 +1522,56 @@ function apply_section_tproxy_sources(config, section, target) {
         push_tproxy_rule(config, target, { source: sources });
 }
 
+function tproxy_pin_inbound(tag, listen, port) {
+    let inbound = tproxy_inbound(tag, listen);
+    inbound.port = int(port);
+    return inbound;
+}
+
+function apply_section_resolved_pins(config) {
+    if (!engine.is_xray_primary())
+        return;
+    for (let spec in xray_constants.section_pin_specs()) {
+        spec = object_or_empty(spec);
+        let name = as_string(spec.name || "");
+        if (name == "")
+            continue;
+        let section = null;
+        for (let item in enabled_sections_any()) {
+            if (option(item, ".name", "") == name) {
+                section = item;
+                break;
+            }
+        }
+        if (section == null)
+            continue;
+        let target = section_policy_tproxy_target(section);
+        if (target == null)
+            target = section_tproxy_target(config, section);
+        if (target == null)
+            continue;
+        let port = int(spec.port || 0);
+        if (port <= 0)
+            continue;
+        push(config.inbounds, tproxy_pin_inbound(xray_constants.section_pin_tag(name), "0.0.0.0", port));
+        push(config.inbounds, tproxy_pin_inbound(xray_constants.section_pin6_tag(name), "::", port));
+        let rule = {
+            type: "field",
+            inboundTag: [
+                xray_constants.section_pin_tag(name),
+                xray_constants.section_pin6_tag(name)
+            ]
+        };
+        if (target.balancerTag)
+            rule.balancerTag = target.balancerTag;
+        else
+            rule.outboundTag = target.outboundTag;
+        push(config.routing.rules, rule);
+    }
+}
+
 function apply_primary_tproxy_routes(config, xray_sections) {
+    apply_section_resolved_pins(config);
     for (let section in enabled_sections_any())
         apply_section_tproxy_matchers(config, section, section_policy_tproxy_target(section));
 
@@ -1642,7 +1712,7 @@ function apply_stats_api(config) {
 
 function empty_config() {
     return {
-        log: { loglevel: "warning", access: xray_constants.XRAY_ACCESS_LOG },
+        log: { loglevel: xray_log_level(), access: xray_constants.XRAY_ACCESS_LOG },
         inbounds: [],
         outbounds: [ freedom_outbound(), blackhole_outbound() ],
         routing: {
@@ -1755,6 +1825,167 @@ function add_native_policy_outbounds(config, taken) {
     }
 }
 
+function apply_output_interface(config) {
+    let iface = output_network_interface();
+    if (iface == "")
+        return;
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) != "object")
+            continue;
+        if (lc(as_string(outbound.protocol || "")) == "blackhole")
+            continue;
+        if (type(outbound.streamSettings) != "object")
+            outbound.streamSettings = {};
+        if (type(outbound.streamSettings.sockopt) != "object")
+            outbound.streamSettings.sockopt = xray_outbound.sockopt();
+        if (trim(as_string(outbound.streamSettings.sockopt.interface || "")) != "")
+            continue;
+        outbound.streamSettings.sockopt.interface = iface;
+    }
+}
+
+function apply_bittorrent_bypass(config) {
+    if (!bool_option(settings_section(), "exclude_bittorrent", false))
+        return;
+    prepend_routing_rule(config, {
+        type: "field",
+        protocol: [ "bittorrent" ],
+        outboundTag: xray_constants.FREEDOM_TAG
+    });
+}
+
+function enabled_server_sections() {
+    let result = [];
+    if (!uci_core.available())
+        return result;
+    for (let section in uci_core.section_objects("forkop", "server")) {
+        section = object_or_empty(section);
+        if (!bool_option(section, "enabled", true))
+            continue;
+        push(result, section);
+    }
+    return result;
+}
+
+function inbound_tags_of(rule) {
+    let value = object_or_empty(rule).inboundTag;
+    if (type(value) == "array")
+        return value;
+    if (value == null || as_string(value) == "")
+        return [];
+    return [ as_string(value) ];
+}
+
+function rule_targets_tproxy(rule) {
+    let wanted = {};
+    for (let tag in tproxy_inbound_tags())
+        wanted[as_string(tag)] = true;
+    for (let tag in inbound_tags_of(rule))
+        if (wanted[as_string(tag)])
+            return true;
+    return false;
+}
+
+function clone_json(value) {
+    try {
+        return json(sprintf("%J", value));
+    }
+    catch (e) {
+        return null;
+    }
+}
+
+function apply_server_target_rule(config, tag, target) {
+    let rule = {
+        type: "field",
+        inboundTag: [ as_string(tag) ]
+    };
+    target = object_or_empty(target);
+    if (as_string(target.balancerTag || "") != "")
+        rule.balancerTag = target.balancerTag;
+    else
+        rule.outboundTag = as_string(target.outboundTag || xray_constants.FREEDOM_TAG);
+    push(config.routing.rules, rule);
+}
+
+function server_section_target(config, section_name) {
+    section_name = as_string(section_name);
+    if (section_name == "")
+        return null;
+    for (let section in enabled_sections_any()) {
+        if (option(section, ".name", "") != section_name)
+            continue;
+        let action = option(section, "action", "");
+        if (action == "bypass" || action == "block")
+            return null;
+        let target = section_policy_tproxy_target(section);
+        if (target == null)
+            target = section_tproxy_target(config, section);
+        return target;
+    }
+    return null;
+}
+
+function apply_xray_server_route(config, section, tag) {
+    let mode = option(section, "routing_mode", "rules");
+    let name = option(section, ".name", "");
+    if (mode == "direct") {
+        apply_server_target_rule(config, tag, { outboundTag: xray_constants.FREEDOM_TAG });
+        return;
+    }
+    if (mode == "section") {
+        let target = server_section_target(config, option(section, "routing_section", ""));
+        if (target == null) {
+            warn("Xray server '" + name + "' has no usable routing section; sending it direct\n");
+            apply_server_target_rule(config, tag, { outboundTag: xray_constants.FREEDOM_TAG });
+            return;
+        }
+        apply_server_target_rule(config, tag, target);
+        return;
+    }
+    let cloned = [];
+    for (let rule in array_or_empty(config.routing.rules)) {
+        if (type(rule) != "object" || as_string(rule.type || "") != "field")
+            continue;
+        if (!rule_targets_tproxy(rule))
+            continue;
+        if (rule.source != null)
+            continue;
+        let copy = clone_json(rule);
+        if (type(copy) != "object")
+            continue;
+        copy.inboundTag = [ as_string(tag) ];
+        push(cloned, copy);
+    }
+    for (let rule in cloned)
+        push(config.routing.rules, rule);
+    if (length(cloned) == 0)
+        apply_server_target_rule(config, tag, { outboundTag: plane_fallback_tag() });
+}
+
+function apply_xray_servers(config) {
+    if (!engine.is_xray_primary())
+        return;
+    for (let section in enabled_server_sections()) {
+        let name = option(section, ".name", "");
+        if (name == "")
+            continue;
+        let protocol = option(section, "protocol", "vless");
+        if (!xray_servers.supported(protocol)) {
+            warn("Xray server '" + name + "' protocol " + protocol + " is not supported on Xray; skipped\n");
+            continue;
+        }
+        let tag = sb_constants.server_inbound_tag(name);
+        let inbound = xray_servers.build_inbound(section, tag);
+        if (type(inbound) != "object") {
+            warn("Xray server '" + name + "' is incomplete; skipped\n");
+            continue;
+        }
+        push(config.inbounds, inbound);
+        apply_xray_server_route(config, section, tag);
+    }
+}
+
 function generate_config(output_path, ports_path) {
     output_path = as_string(output_path || xray_constants.XRAY_CONFIG);
     ports_path = as_string(ports_path || xray_constants.XRAY_PORTS_FILE);
@@ -1788,7 +2019,13 @@ function generate_config(output_path, ports_path) {
     if (engine.is_xray_primary())
         apply_primary_tproxy_routes(config, sections);
     if (engine.is_xray_primary())
+        apply_xray_servers(config);
+    if (engine.is_xray_primary())
+        apply_bittorrent_bypass(config);
+    if (engine.is_xray_primary())
         apply_dial_strategy(config);
+    if (engine.is_xray_primary())
+        apply_output_interface(config);
     if (engine.is_xray_primary())
         apply_stats_api(config);
 

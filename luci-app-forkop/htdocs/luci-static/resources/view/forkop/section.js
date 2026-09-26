@@ -7,6 +7,7 @@
 "require uci";
 "require view.forkop.local_devices as localDevices";
 "require view.forkop.main as main";
+"require view.forkop.settings as settings";
 
 const UCI_PACKAGE = main.FORKOP_UCI_PACKAGE;
 const ACTION_PROVIDERS_AVAILABILITY_EVENT =
@@ -1931,15 +1932,166 @@ function proxySecurityChoices() {
   ];
 }
 
+function singBoxOnly(text) {
+  return `${text} ${_("Works only with sing-box.")}`;
+}
+
+const PROXY_CORE_ACTIONS = ["connection", "proxy", "outbound", "vpn"];
+
+function sectionEngineMatches(engine, wanted) {
+  const xray = settings.isXrayRoutingEngine(engine);
+  return wanted === "xray" ? xray : !xray;
+}
+
+function trimmedUci(sectionId, key) {
+  const value = uci.get(UCI_PACKAGE, sectionId, key);
+  return value == null ? "" : `${value}`.trim();
+}
+
+function liveWidgetValue(name, sectionId) {
+  if (typeof document === "undefined" || !sectionId) {
+    return null;
+  }
+
+  const node = document.getElementById(
+    `cbid.${UCI_PACKAGE}.${sectionId}.${name}`,
+  );
+  if (!node) {
+    return settings.liveFormValue(name, sectionId);
+  }
+
+  if (node.classList && node.classList.contains("cbi-dropdown")) {
+    const hidden = node.querySelectorAll('input[type="hidden"]');
+    if (hidden.length) {
+      return `${hidden[0].value || ""}`.trim();
+    }
+
+    const selected = node.querySelector("li[data-value][selected]");
+    if (selected) {
+      return `${selected.getAttribute("data-value") || ""}`.trim();
+    }
+
+    return "";
+  }
+
+  if (node.value != null) {
+    return `${node.value}`.trim();
+  }
+
+  return settings.liveFormValue(name, sectionId);
+}
+
+function forkopSectionIdFrom(startId) {
+  let current = `${startId || ""}`.trim();
+  const seen = new Set();
+
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (trimmedUci(current, ".type") === "section") {
+      return current;
+    }
+
+    const next = trimmedUci(current, "group") || trimmedUci(current, "section");
+    if (!next || next === current) {
+      break;
+    }
+
+    current = next;
+  }
+
+  return `${startId || ""}`.trim();
+}
+
+function effectiveSectionEngine(option, section_id) {
+  const hinted =
+    option && typeof option.forkopParentSectionId === "function"
+      ? `${option.forkopParentSectionId(section_id) || ""}`.trim()
+      : "";
+  const owner = hinted || forkopSectionIdFrom(section_id);
+  if (!owner) {
+    return settings.currentRoutingEngine();
+  }
+
+  const type = trimmedUci(owner, ".type");
+  const liveAction = liveWidgetValue("action", owner);
+  const action =
+    liveAction != null && liveAction !== ""
+      ? liveAction
+      : trimmedUci(owner, "action");
+
+  if (type !== "section" && !action) {
+    return settings.currentRoutingEngine();
+  }
+
+  if (action && PROXY_CORE_ACTIONS.indexOf(action) === -1) {
+    return settings.currentRoutingEngine();
+  }
+
+  const liveCore = liveWidgetValue("proxy_core", owner);
+  const core = liveCore != null ? liveCore : trimmedUci(owner, "proxy_core");
+  return core || settings.currentRoutingEngine();
+}
+
+function restrictSectionEngine(option, engine, parentSectionId) {
+  if (!option || option.forkopEngineRestrict) {
+    return option;
+  }
+
+  option.retain = true;
+  option.forkopEngineRestrict = engine;
+  if (typeof parentSectionId === "function") {
+    option.forkopParentSectionId = parentSectionId;
+  }
+
+  const previous = option.checkDepends;
+  option.checkDepends = function (section_id) {
+    if (
+      !sectionEngineMatches(
+        effectiveSectionEngine(this, section_id),
+        this.forkopEngineRestrict,
+      )
+    ) {
+      return false;
+    }
+
+    return typeof previous === "function"
+      ? previous.call(this, section_id)
+      : true;
+  };
+
+  return option;
+}
+
+function bindSectionEngine(itemSection, engine, parentSectionId) {
+  if (!itemSection || itemSection.forkopEngineBound) {
+    return;
+  }
+
+  itemSection.forkopEngineBound = true;
+  const original = itemSection.option;
+  itemSection.option = function () {
+    return restrictSectionEngine(
+      original.apply(this, arguments),
+      engine,
+      parentSectionId,
+    );
+  };
+}
+
 function addProxyParameterFilterOptions(itemSection, options) {
   const prefix = options.prefix;
   const dependencies = options.dependencies;
+  const parentSectionId = options.parentSectionId;
 
-  let o = itemSection.option(
-    form.Flag,
-    `${prefix}_proxy_parameters`,
-    options.toggleLabel,
-    options.toggleDescription,
+  let o = restrictSectionEngine(
+    itemSection.option(
+      form.Flag,
+      `${prefix}_proxy_parameters`,
+      options.toggleLabel,
+      singBoxOnly(options.toggleDescription),
+    ),
+    "sing-box",
+    parentSectionId,
   );
   dependencies.forEach((dependency) => o.depends(dependency));
   o.default = "0";
@@ -1965,11 +2117,15 @@ function addProxyParameterFilterOptions(itemSection, options) {
       proxySecurityChoices(),
     ],
   ].forEach(([suffix, label, description, choices]) => {
-    const list = itemSection.option(
-      form.DynamicList,
-      `${prefix}_${suffix}`,
-      label,
-      description,
+    const list = restrictSectionEngine(
+      itemSection.option(
+        form.DynamicList,
+        `${prefix}_${suffix}`,
+        label,
+        singBoxOnly(description),
+      ),
+      "sing-box",
+      parentSectionId,
     );
     dependencies.forEach((dependency) =>
       list.depends(
@@ -2388,62 +2544,91 @@ function addSubscriptionUrlItemOptions(itemSection, options = {}) {
   o.depends("prefix_nodes", "1");
   o.rmempty = false;
 
-  o = itemSection.option(
-    form.Flag,
-    "include_urltest_groups",
-    _("Import subscription URLTest groups"),
-    _("Import URLTest groups returned by this subscription provider"),
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Flag,
+      "include_urltest_groups",
+      _("Import subscription URLTest groups"),
+      _("Import URLTest groups returned by this subscription provider. Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.default = "1";
   o.rmempty = false;
 
-  o = itemSection.option(
-    form.Flag,
-    "hide_urltest_group_outbounds",
-    _("Hide URLTest group nodes"),
-    _(
-      "Hide individual nodes that are already included in imported subscription URLTest groups",
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Flag,
+      "hide_urltest_group_outbounds",
+      _("Hide URLTest group nodes"),
+      _(
+        "Hide individual nodes that are already included in imported subscription URLTest groups. Works only with sing-box.",
+      ),
     ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.depends("include_urltest_groups", "1");
   o.default = "1";
   o.rmempty = false;
 
-  o = itemSection.option(
-    form.Flag,
-    "hide_detour_outbounds",
-    _("Hide cascade connection nodes"),
-    _("Hide intermediate nodes used as detours by other subscription nodes"),
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Flag,
+      "hide_detour_outbounds",
+      _("Hide cascade connection nodes"),
+      _("Hide intermediate nodes used as detours by other subscription nodes. Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.default = "1";
   o.rmempty = false;
 }
 
-function addInterfaceItemOptions(itemSection) {
-  let o = itemSection.option(
-    form.Flag,
-    "domain_resolver_enabled",
-    _("Domain Resolver"),
-    _("Enable built-in DNS resolver for domains handled by this section"),
+function addInterfaceItemOptions(itemSection, options = {}) {
+  const parentSectionForItem =
+    typeof options.parentSectionId === "function"
+      ? options.parentSectionId
+      : parentSectionIdForItem;
+
+  let o = restrictSectionEngine(
+    itemSection.option(
+      form.Flag,
+      "domain_resolver_enabled",
+      _("Domain Resolver"),
+      _("Enable built-in DNS resolver for domains handled by this section. Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.default = "0";
   o.rmempty = false;
 
-  o = itemSection.option(
-    form.ListValue,
-    "domain_resolver_dns_type",
-    _("DNS protocol"),
-    _("DNS protocol used by the resolver"),
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.ListValue,
+      "domain_resolver_dns_type",
+      _("DNS protocol"),
+      _("DNS protocol used by this interface. Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.depends("domain_resolver_enabled", "1");
   dnsTypeChoices().forEach((choice) => o.value(choice.value, choice.label));
   o.default = "udp";
 
-  o = itemSection.option(
-    form.Value,
-    "domain_resolver_dns_server",
-    _("DNS server"),
-    _("DNS server used by the resolver"),
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Value,
+      "domain_resolver_dns_server",
+      _("DNS server"),
+      _("DNS server used by this interface. Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.depends("domain_resolver_enabled", "1");
   o.default = "8.8.8.8";
@@ -2492,13 +2677,17 @@ function addUrlTestItemOptions(itemSection, options = {}) {
     return validateRequiredSingBoxDuration(value);
   };
 
-  o = itemSection.option(
-    form.Value,
-    "tolerance",
-    _("Tolerance"),
-    _(
-      "Minimum latency difference in milliseconds that triggers switching to a faster server.",
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Value,
+      "tolerance",
+      _("Tolerance"),
+      _(
+        "Minimum latency difference in milliseconds that triggers switching to a faster server. Works only with sing-box.",
+      ),
     ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.default = "50";
   o.rmempty = false;
@@ -2519,13 +2708,17 @@ function addUrlTestItemOptions(itemSection, options = {}) {
     return validateUrlTestUrl(value);
   };
 
-  o = itemSection.option(
-    form.Value,
-    "idle_timeout",
-    _("Idle timeout"),
-    _(
-      "Stop checking when URLTest group is not used. Use sing-box duration format like 1d, 12h or 30m.",
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Value,
+      "idle_timeout",
+      _("Idle timeout"),
+      _(
+        "Stop checking when URLTest group is not used. Use sing-box duration format like 1d, 12h or 30m. Works only with sing-box.",
+      ),
     ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.default = "30m";
   o.rmempty = false;
@@ -2533,13 +2726,17 @@ function addUrlTestItemOptions(itemSection, options = {}) {
     return validateRequiredSingBoxDuration(value);
   };
 
-  o = itemSection.option(
-    form.Flag,
-    "interrupt_exist_connections",
-    _("Interrupt connections"),
-    _(
-      "Interrupt connections when URLTest switches the selected server",
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.Flag,
+      "interrupt_exist_connections",
+      _("Interrupt connections"),
+      _(
+        "Interrupt connections when URLTest switches the selected server. Works only with sing-box.",
+      ),
     ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.default = "1";
   o.rmempty = false;
@@ -2553,21 +2750,30 @@ function addUrlTestItemOptions(itemSection, options = {}) {
   o.default = "1";
   o.rmempty = false;
 
-  o = itemSection.option(
-    form.ListValue,
-    "filter_mode",
-    _("Server filtering"),
-    _("Allows limiting the list of servers for URLTest"),
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.ListValue,
+      "filter_mode",
+      _("Server filtering"),
+      _("Allows limiting the list of servers for URLTest. Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   urlTestFilterModeChoices().forEach((choice) =>
     o.value(choice.value, choice.label),
   );
   o.default = "disabled";
 
-  o = itemSection.option(
-    form.ListValue,
-    "detect_server_country",
-    _("Detect server country"),
+  o = restrictSectionEngine(
+    itemSection.option(
+      form.ListValue,
+      "detect_server_country",
+      _("Detect server country"),
+      _("Works only with sing-box."),
+    ),
+    "sing-box",
+    parentSectionForItem,
   );
   o.depends("filter_mode", "exclude");
   o.depends("filter_mode", "include");
@@ -2579,6 +2785,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
 
   const includeProxyParameterOptions = {
     prefix: "include",
+    parentSectionId: parentSectionForItem,
     toggleLabel: _("Include by proxy parameters"),
     toggleDescription: _(
       "Additionally filter servers by protocol, transport, and security. Add only servers matching the specified parameters.",
@@ -2596,6 +2803,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
   };
   const excludeProxyParameterOptions = {
     prefix: "exclude",
+    parentSectionId: parentSectionForItem,
     toggleLabel: _("Exclude by proxy parameters"),
     toggleDescription: _(
       "Additionally exclude servers by protocol, transport, and security. Exclude only servers matching the specified parameters.",
@@ -2662,7 +2870,11 @@ function addUrlTestItemOptions(itemSection, options = {}) {
       ["exclude", "mixed"],
     ],
   ].forEach(([key, label, description, choices, validator, modes]) => {
-    const list = itemSection.option(form.DynamicList, key, label, description);
+    const list = restrictSectionEngine(
+      itemSection.option(form.DynamicList, key, label, singBoxOnly(description)),
+      "sing-box",
+      parentSectionForItem,
+    );
     modes.forEach((mode) => list.depends("filter_mode", mode));
     list.rmempty = true;
     if (choices) {
@@ -2738,12 +2950,13 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     typeof options.parentSectionId === "function"
       ? options.parentSectionId
       : parentSectionIdForItem;
+  bindSectionEngine(itemSection, "sing-box", parentSectionForItem);
 
   let o = itemSection.option(
     form.Value,
     "name",
     _("Level name"),
-    _("Name shown in the priority level list"),
+    _("Name shown in the priority level list. Works only with sing-box."),
   );
   o.rmempty = false;
   o.validate = function (_itemId, value) {
@@ -2754,7 +2967,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     form.Flag,
     "direct",
     _("Direct connection"),
-    _("Traffic for this level goes directly."),
+    _("Traffic for this level goes directly. Works only with sing-box."),
   );
   o.default = "0";
   o.rmempty = false;
@@ -2764,7 +2977,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     "filter_mode",
     _("Server filtering"),
     _(
-      "All remaining servers means every server not already assigned to a higher-priority level.",
+      "All remaining servers means every server not already assigned to a higher-priority level. Works only with sing-box.",
     ),
   );
   priorityLevelFilterModeChoices().forEach((choice) =>
@@ -2777,6 +2990,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     form.ListValue,
     "detect_server_country",
     _("Detect server country"),
+    _("Works only with sing-box."),
   );
   ["exclude", "include", "mixed"].forEach((mode) =>
     o.depends({ direct: "0", filter_mode: mode }),
@@ -2875,7 +3089,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
       ["exclude", "mixed"],
     ],
   ].forEach(([key, label, description, choices, validator, modes]) => {
-    const list = itemSection.option(form.DynamicList, key, label, description);
+    const list = itemSection.option(form.DynamicList, key, label, singBoxOnly(description));
     modes.forEach((mode) => list.depends({ direct: "0", filter_mode: mode }));
     list.rmempty = true;
     if (choices) {
@@ -2920,12 +3134,13 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
       : parentSectionIdForItem;
   const ownerId =
     typeof options.ownerId === "function" ? options.ownerId : () => "";
+  bindSectionEngine(itemSection, "sing-box", parentSectionForGroup);
 
   let o = itemSection.option(
     form.Value,
     "name",
     _("Display name"),
-    _("Name displayed on the dashboard"),
+    _("Name displayed on the dashboard. Works only with sing-box."),
   );
   o.rmempty = false;
   o.validate = function (_itemId, value) {
@@ -2936,7 +3151,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "health_url",
     _("Check URL"),
-    _("URL used to check whether a server is alive"),
+    _("URL used to check whether a server is alive. Works only with sing-box."),
   );
   o.default = "https://www.gstatic.com/generate_204";
   o.rmempty = false;
@@ -2949,7 +3164,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "active_check_interval",
     _("Check interval"),
-    _("How often the currently selected server is checked"),
+    _("How often the currently selected server is checked. Works only with sing-box."),
   );
   o.default = "5s";
   o.rmempty = false;
@@ -2961,7 +3176,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "check_timeout",
     _("Unavailability timeout"),
-    _("Check timeout after which the server is considered dead"),
+    _("Check timeout after which the server is considered dead. Works only with sing-box."),
   );
   o.default = "2s";
   o.rmempty = false;
@@ -2974,7 +3189,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     "recovery_check_interval",
     _("Higher-level check interval"),
     _(
-      "How often higher priority levels are checked while a lower level is active",
+      "How often higher priority levels are checked while a lower level is active. Works only with sing-box.",
     ),
   );
   o.default = "15s";
@@ -2988,7 +3203,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     "pick_fastest",
     _("Select the fastest node"),
     _(
-      "When switching to another level, test every server and select the fastest instead of the first working one.",
+      "When switching to another level, test every server and select the fastest instead of the first working one. Works only with sing-box.",
     ),
   );
   o.default = "0";
@@ -2999,7 +3214,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     "switch_to_faster_same_priority",
     _("Automatically select the fastest node in the current level"),
     _(
-      "Periodically check the current level and switch to a faster server even when the current one works.",
+      "Periodically check the current level and switch to a faster server even when the current one works. Works only with sing-box.",
     ),
   );
   o.default = "0";
@@ -3009,7 +3224,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "fastest_check_interval",
     _("Faster server search interval"),
-    _("Use sing-box duration format like 1d, 12h or 30m"),
+    _("Use sing-box duration format like 1d, 12h or 30m. Works only with sing-box."),
   );
   o.depends("switch_to_faster_same_priority", "1");
   o.default = "3m";
@@ -3025,7 +3240,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Flag,
     "interrupt_exist_connections",
     _("Interrupt connections"),
-    _("Interrupt connections when priority failover switches server"),
+    _("Interrupt connections when priority failover switches server. Works only with sing-box."),
   );
   o.default = "1";
   o.rmempty = false;
@@ -3034,7 +3249,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Flag,
     "pin_dashboard",
     _("Pin on dashboard"),
-    _("Keep Priority before latency-sorted servers"),
+    _("Keep Priority before latency-sorted servers. Works only with sing-box."),
   );
   o.default = "1";
   o.rmempty = false;
@@ -3043,7 +3258,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     ButtonAddSettingsDynamicList,
     "priority_level",
     _("Priority levels"),
-    _("Top level has the highest priority; lower levels are used as fallback"),
+    _("Top level has the highest priority; lower levels are used as fallback. Works only with sing-box."),
   );
   o.rmempty = true;
   o.modalonly = true;
@@ -3154,7 +3369,7 @@ function addDashboardServerFilterOptions(section) {
     option: (optionType, ...args) => {
       const option = section.taboption("settings", optionType, ...args);
       option.modalonly = true;
-      return option;
+      return restrictSectionEngine(option, "sing-box");
     },
   };
   let o = optionSection.option(
@@ -3173,6 +3388,7 @@ function addDashboardServerFilterOptions(section) {
     form.ListValue,
     "dashboard_detect_server_country",
     _("Detect server country"),
+    _("Works only with sing-box."),
   );
   ["exclude", "include", "mixed"].forEach((mode) =>
     o.depends({ action: "connection", dashboard_filter_mode: mode }),
@@ -3275,7 +3491,7 @@ function addDashboardServerFilterOptions(section) {
       form.DynamicList,
       key,
       label,
-      description,
+      singBoxOnly(description),
     );
     modes.forEach((mode) =>
       list.depends({ action: "connection", dashboard_filter_mode: mode }),
@@ -7462,12 +7678,15 @@ function createSectionContent(section) {
   o.onListChange = refreshDashboardFilterChoiceWidgets;
   sectionGroupSourceOptions.set("urltest", o);
 
-  o = section.taboption(
-    "settings",
-    ButtonAddSettingsDynamicList,
-    "priority_group",
-    _("Priority"),
-    _("Server group for priority failover. Works only with sing-box."),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      ButtonAddSettingsDynamicList,
+      "priority_group",
+      _("Priority"),
+      _("Server group for priority failover. Works only with sing-box."),
+    ),
+    "sing-box",
   );
   o.depends("action", "connection");
   o.rmempty = true;
@@ -7577,12 +7796,15 @@ function createSectionContent(section) {
   o.depends("action", "connection");
   o.modalonly = true;
 
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "mixed_proxy_enabled",
-    _("Enable Mixed Proxy"),
-    _("Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "mixed_proxy_enabled",
+      _("Enable Mixed Proxy"),
+      _("Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."),
+    ),
+    "sing-box",
   );
   o.default = "0";
   o.rmempty = false;
@@ -7592,12 +7814,15 @@ function createSectionContent(section) {
   o.depends("action", "zapret2");
   o.modalonly = true;
 
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "mixed_proxy_port",
-    _("Mixed Proxy Port"),
-    _("Port for the local mixed proxy of this section"),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "mixed_proxy_port",
+      _("Mixed Proxy Port"),
+      _("Port for the local mixed proxy of this section. Works only with sing-box."),
+    ),
+    "sing-box",
   );
   o.rmempty = false;
   o.depends({ action: "connection", mixed_proxy_enabled: "1" });
@@ -7618,12 +7843,15 @@ function createSectionContent(section) {
     return _("Invalid port number. Must be between 1 and 65535");
   };
 
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "mixed_proxy_auth_enabled",
-    _("Enable Mixed Proxy Authentication"),
-    _("Require a username and password for the local mixed proxy"),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "mixed_proxy_auth_enabled",
+      _("Enable Mixed Proxy Authentication"),
+      _("Require a username and password for the local mixed proxy. Works only with sing-box."),
+    ),
+    "sing-box",
   );
   o.default = "0";
   o.rmempty = false;
@@ -7633,11 +7861,15 @@ function createSectionContent(section) {
   o.depends({ action: "zapret2", mixed_proxy_enabled: "1" });
   o.modalonly = true;
 
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "mixed_proxy_username",
-    _("Mixed Proxy Username"),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "mixed_proxy_username",
+      _("Mixed Proxy Username"),
+      _("Works only with sing-box."),
+    ),
+    "sing-box",
   );
   o.rmempty = false;
   o.depends({
@@ -7669,11 +7901,15 @@ function createSectionContent(section) {
     return true;
   };
 
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "mixed_proxy_password",
-    _("Mixed Proxy Password"),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "mixed_proxy_password",
+      _("Mixed Proxy Password"),
+      _("Works only with sing-box."),
+    ),
+    "sing-box",
   );
   o.rmempty = false;
   o.depends({
@@ -7705,14 +7941,17 @@ function createSectionContent(section) {
     return true;
   };
 
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "resolve_real_ip_for_routing",
-    _("Resolve real IP for routing"),
-    _(
-      "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box.",
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "resolve_real_ip_for_routing",
+      _("Resolve real IP for routing"),
+      _(
+        "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box.",
+      ),
     ),
+    "sing-box",
   );
   o.default = "0";
   o.rmempty = false;
@@ -7731,14 +7970,17 @@ function createSectionContent(section) {
     return getRuleResolvedAction(section_id) === "byedpi" ? "1" : "0";
   };
 
-  o = section.taboption(
-    "settings",
-    form.Flag,
-    "xray_finalmask",
-    _("FinalMask"),
-    _(
-      "Split the TLS handshake toward servers in this section. The server does not need the same setting. Works only with Xray.",
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "xray_finalmask",
+      _("FinalMask"),
+      _(
+        "Split the TLS handshake toward servers in this section. The server does not need the same setting. Works only with Xray.",
+      ),
     ),
+    "xray",
   );
   o.default = "0";
   o.rmempty = false;
@@ -7748,12 +7990,15 @@ function createSectionContent(section) {
   o.depends("action", "vpn");
   o.modalonly = true;
 
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "xray_finalmask_length",
-    _("FinalMask length"),
-    _("Byte size of each piece, for example 100-200. Works only with Xray."),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_length",
+      _("FinalMask length"),
+      _("Byte size of each piece, for example 100-200. Works only with Xray."),
+    ),
+    "xray",
   );
   o.default = "100-200";
   o.rmempty = false;
@@ -7768,12 +8013,15 @@ function createSectionContent(section) {
       : _("Use a number or a range like 100-200");
   };
 
-  o = section.taboption(
-    "settings",
-    form.Value,
-    "xray_finalmask_interval",
-    _("FinalMask interval"),
-    _("Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_interval",
+      _("FinalMask interval"),
+      _("Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."),
+    ),
+    "xray",
   );
   o.default = "10-20";
   o.rmempty = false;

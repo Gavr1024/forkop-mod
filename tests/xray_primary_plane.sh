@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT_DIR/forkop/files/usr/lib"
 XRAY_GEN="$LIB/xray/generator.uc"
+XRAY_SERVERS="$LIB/xray/servers.uc"
 XRAY_CONST="$LIB/xray/constants.uc"
 XRAY_RT="$LIB/xray/runtime.uc"
 XRAY_OUT="$LIB/xray/outbound.uc"
@@ -37,6 +38,7 @@ extract_fn() {
 }
 
 require_file "$XRAY_GEN"
+require_file "$XRAY_SERVERS"
 require_file "$XRAY_CONST"
 require_file "$XRAY_RT"
 require_file "$XRAY_OUT"
@@ -187,6 +189,43 @@ extract_fn "$XRAY_GEN" "tproxy_inbound" | grep -Fq '"tls"' ||
   fail "real-IP TPROXY sniff must use TLS SNI so AdGuard youtube still matches NL"
 extract_fn "$XRAY_GEN" "tproxy_inbound" | grep -Fq 'routeOnly: true' ||
   fail "real-IP TPROXY must keep dest IP (routeOnly) so CDN subnet rules still match"
+grep -Fq 'const XRAY_SECTION_PIN_PORT_BASE = 17020' "$XRAY_CONST" ||
+  fail "resolved-domain pin must use a dedicated TPROXY port base"
+grep -Fq 'section_pin_specs' "$XRAY_CONST" ||
+  fail "Xray constants must export section pin specs"
+extract_fn "$XRAY_CONST" "section_pin_has_recorded_domains" | grep -Fq 'community_lists' ||
+  fail "youtube-style community lists must be pinned to their section"
+extract_fn "$XRAY_CONST" "section_pin_specs" | grep -Fq 'is_xray_primary' ||
+  fail "section pin specs are only for the Xray plane"
+if extract_fn "$XRAY_CONST" "section_pin_specs" | grep -Fq 'bypass'; then
+  fail "bypass sections must not pin resolved addresses onto a capture inbound"
+fi
+extract_fn "$XRAY_GEN" "apply_primary_tproxy_routes" | grep -Fq 'apply_section_resolved_pins(config)' ||
+  fail "Xray routing must hard-wire pinned inbounds to the section outbound before the final direct rule"
+awk '
+  /^function apply_section_resolved_pins\(/ { p = NR }
+  /^function apply_primary_tproxy_routes\(/ { a = NR }
+  END { if (p == 0 || a == 0 || p > a) exit 1 }
+' "$XRAY_GEN" ||
+  fail "ucode binds names at definition time; apply_section_resolved_pins must be defined before apply_primary_tproxy_routes"
+extract_fn "$XRAY_GEN" "apply_section_resolved_pins" | grep -Fq 'section_pin_tag' ||
+  fail "pin routing must match only the dedicated pin inbound"
+extract_fn "$XRAY_GEN" "tproxy_pin_inbound" | grep -Fq 'tproxy_inbound' ||
+  fail "pin inbound must keep the real CDN address (routeOnly TPROXY)"
+extract_fn "$NFT_APPLY" "nft_install_resolved_pin_tproxies" | grep -Fq '_resolved' ||
+  fail "section pin must tproxy dnsmasq-resolved addresses"
+extract_fn "$NFT_APPLY" "nft_install_resolved_pin_tproxies" | grep -Fq 'nft_insert_rule' ||
+  fail "section pin rules must be inserted ahead of generic TPROXY :1602"
+extract_fn "$NFT_APPLY" "nft_install_resolved_pin_tproxies" | grep -Fq 'accept' ||
+  fail "section pin must accept after tproxy so :1602 does not overwrite the section port"
+extract_fn "$NFT_APPLY" "nft_add_section_priority_rules_from_sections" | grep -Fq 'nft_install_resolved_pin_tproxies' ||
+  fail "nft rebuild must install section pins after resolved sets exist"
+awk '
+  /^function nft_install_resolved_pin_tproxies\(/ { p = NR }
+  /^function nft_add_section_priority_rules_from_sections\(/ { a = NR }
+  END { if (p == 0 || a == 0 || p > a) exit 1 }
+' "$NFT_APPLY" ||
+  fail "ucode binds names at definition time; nft_install_resolved_pin_tproxies must be defined before its caller"
 extract_fn "$XRAY_GEN" "tproxy_inbound" | grep -Fq '"fakedns"' ||
   fail "TPROXY must destOverride FakeIP even on :1602; Xray replaces dest when the IP is in the FakeDNS pool"
 extract_fn "$XRAY_GEN" "apply_primary_tproxy_routes" | awk '
@@ -254,8 +293,12 @@ extract_fn "$XRAY_GEN" "section_ip_matchers" | grep -Fq 'ip_cidr' ||
   fail "Xray IP rules must read LuCI ip_cidr, not the unused subnet key"
 extract_fn "$XRAY_GEN" "collect_fake_dns_domains" | grep -Fq 'section_domain_matchers' ||
   fail "Xray FakeDNS must include domains from section rules and converted lists"
-extract_fn "$XRAY_GEN" "collect_fake_dns_domains" | grep -Fq 'section_uses_interface_outbound' ||
-  fail "FakeDNS must not cover interface/VPN sections: freedom cannot dial 198.18 via vpn-oc"
+extract_fn "$XRAY_GEN" "xray_log_level" | grep -Fq 'log_level' ||
+  fail "Xray must use the settings log level"
+extract_fn "$XRAY_GEN" "output_network_interface" | grep -Fq 'enable_output_network_interface' ||
+  fail "Xray direct dials must follow the output interface setting"
+extract_fn "$XRAY_GEN" "apply_bittorrent_bypass" | grep -Fq 'bittorrent' ||
+  fail "Exclude BitTorrent must send the bittorrent protocol direct on Xray"
 extract_fn "$XRAY_GEN" "collect_fake_dns_domains" | grep -Fq 'fake_dns_domain_usable' ||
   fail "FakeDNS must drop geosite/ext matchers that are missing from dat"
 extract_fn "$NFT_APPLY" "resolve_host_ips" | grep -Fq '8.8.8.8' ||
@@ -478,7 +521,35 @@ extract_fn "$XRAY_RT" "collect_listen_ports" | grep -Fq 'XRAY_DNS_PORT' ||
   fail "Xray plane DNS :53 must be in the listen-port set"
 extract_fn "$XRAY_RT" "xray_needed" | grep -Fq 'is_xray_primary' ||
   fail "xray_needed must be true when Xray is the routing plane"
-pass "Xray plane listen ports include tproxy/DNS with zero sections"
+extract_fn "$XRAY_GEN" "apply_xray_servers" | grep -Fq 'xray_servers.build_inbound' ||
+  fail "Xray plane must build server inbounds, not only the LuCI tab"
+extract_fn "$XRAY_GEN" "apply_xray_server_route" | grep -Fq 'rule_targets_tproxy' ||
+  fail "server routing mode rules must follow the same TPROXY routes"
+extract_fn "$XRAY_GEN" "apply_xray_server_route" | grep -Fq 'routing_mode' ||
+  fail "Xray servers must honor routing_mode direct/section/rules"
+extract_fn "$XRAY_SERVERS" "apply_reality" | grep -Fq 'realitySettings' ||
+  fail "Xray VLESS Reality inbounds must emit realitySettings"
+extract_fn "$XRAY_SERVERS" "client_settings" | grep -Fq 'decryption: "none"' ||
+  fail "Xray VLESS inbounds require decryption none"
+extract_fn "$XRAY_SERVERS" "client_settings" | grep -Fq 'protocol == "hysteria2"' ||
+  fail "Hysteria2 servers must be generated for Xray"
+extract_fn "$XRAY_SERVERS" "supported" | grep -Fq 'tailscale' &&
+  fail "Tailscale servers stay on sing-box"
+extract_fn "$XRAY_SERVERS" "supported" | grep -Fq 'hysteria2' ||
+  fail "Xray servers must support hysteria2"
+awk '
+  /^function apply_xray_servers\(/ { p = NR }
+  /^function generate_config\(/ { a = NR }
+  END { if (p == 0 || a == 0 || p > a) exit 1 }
+' "$XRAY_GEN" ||
+  fail "ucode binds names at definition time; apply_xray_servers must be defined before generate_config"
+extract_fn "$SB_GEN" "generate_config" | grep -Fq 'is_xray_primary() ? [] : enabled_servers()' ||
+  fail "sing-box sidecar must not bind server ports when Xray owns them"
+extract_fn "$LIB/core/engine.uc" "need_singbox" | grep -Fq 'has_enabled_inbound_servers' &&
+  fail "Xray servers must not force the sing-box process to start"
+grep -Fq 'xrayServerEngine' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js" ||
+  fail "Servers tab must hide sing-box-only protocols when Xray is selected"
+pass "Xray servers listen on the Xray plane"
 
 extract_fn "$XRAY_GEN" "add_byedpi_outbound" | grep -Fq 'protocol: "socks"' ||
   fail "ByeDPI on the Xray plane must be a local SOCKS outbound to ciadpi"

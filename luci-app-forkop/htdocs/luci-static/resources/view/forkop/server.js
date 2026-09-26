@@ -7,6 +7,7 @@
 "require uci";
 "require ui";
 "require view.forkop.main as main";
+"require view.forkop.settings as settings";
 
 const UCI_PACKAGE = main.FORKOP_UCI_PACKAGE;
 const ROUTING_SECTION_ACTIONS = [
@@ -524,7 +525,15 @@ function normalizeServerCapabilities(capabilities) {
   };
 }
 
+function xrayServerEngine() {
+  return settings.isXrayRoutingEngine(settings.currentRoutingEngine());
+}
+
 function getDefaultProtocolForCapabilities(capabilities) {
+  if (xrayServerEngine()) {
+    return FALLBACK_SERVER_PROTOCOL;
+  }
+
   return normalizeServerCapabilities(capabilities).singBoxTailscale
     ? DEFAULT_SERVER_PROTOCOL
     : FALLBACK_SERVER_PROTOCOL;
@@ -532,10 +541,11 @@ function getDefaultProtocolForCapabilities(capabilities) {
 
 function populateProtocolValues(option, capabilities) {
   const normalized = normalizeServerCapabilities(capabilities);
+  const xray = xrayServerEngine();
 
   resetOptionValues(option);
 
-  if (normalized.singBoxTailscale) {
+  if (!xray && normalized.singBoxTailscale) {
     Object.entries(TAILSCALE_PROTOCOL_LABELS).forEach(([value, label]) => {
       addOptionValue(option, value, label);
     });
@@ -545,18 +555,20 @@ function populateProtocolValues(option, capabilities) {
     addOptionValue(option, value, label);
   });
 
-  if (normalized.singBoxExtended) {
+  if (!xray && normalized.singBoxExtended) {
     Object.entries(EXTENDED_PROTOCOL_LABELS).forEach(([value, label]) => {
       addOptionValue(option, value, label);
     });
   }
 
-  Object.entries(CUSTOM_PROTOCOL_LABELS).forEach(([value, label]) => {
-    addOptionValue(option, value, label);
-  });
+  if (!xray) {
+    Object.entries(CUSTOM_PROTOCOL_LABELS).forEach(([value, label]) => {
+      addOptionValue(option, value, label);
+    });
+  }
 }
 
-function populateTransportValues(option, singBoxExtended) {
+function populateTransportValues(option, allowXhttp) {
   resetOptionValues(option);
 
   addOptionValue(option, "tcp", "TCP");
@@ -565,7 +577,7 @@ function populateTransportValues(option, singBoxExtended) {
   addOptionValue(option, "http", "HTTP");
   addOptionValue(option, "httpupgrade", "HTTPUpgrade");
 
-  if (singBoxExtended) {
+  if (allowXhttp) {
     addOptionValue(option, "xhttp", "XHTTP");
   }
 }
@@ -586,7 +598,10 @@ function applyServerCapabilities(sectionRef, capabilities) {
   }
 
   if (options.transport) {
-    populateTransportValues(options.transport, normalized.singBoxExtended);
+    populateTransportValues(
+      options.transport,
+      normalized.singBoxExtended || xrayServerEngine(),
+    );
   }
 }
 

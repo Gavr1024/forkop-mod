@@ -4000,7 +4000,7 @@ function generate_config(output_path, service_address, mwan3_active, supports_xh
     let settings = runtime_settings_cache;
 
     let sections = enabled_sections(deferred_sections);
-    let servers = enabled_servers();
+    let servers = engine.is_xray_primary() ? [] : enabled_servers();
     if (length(sections) == 0 && length(servers) == 0 && trim(as_string(deferred_sections)) == "")
         runtime_generate_unsupported("no enabled sections");
 

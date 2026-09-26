@@ -188,8 +188,10 @@ extract_fn "$NFT_APPLY" "xray_list_catch_all_needed" | grep -Fq 'is_xray_primary
   fail "list catch-all is only for the Xray plane"
 extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'xray_list_catch_all_needed' ||
   fail "runtime nft must install the list catch-all"
-extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'port-unreachable' ||
-  fail "unmatched QUIC (UDP/443) must be rejected so YouTube falls back to TCP"
+extract_fn "$NFT_APPLY" "xray_disable_quic_needed" | grep -Fq 'disable_quic' ||
+  fail "Disable QUIC checkbox must be honored on the Xray plane"
+extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'xray_disable_quic_needed' ||
+  fail "Xray runtime nft must reject UDP/443 when Disable QUIC is on"
 extract_fn "$NFT_APPLY" "section_has_xray_domain_nft" | grep -Fq 'community_lists' ||
   fail "community list nftset lines must have matching forkop_rule_*_subnets sets"
 extract_fn "$NFT_APPLY" "section_list_nftset_domains" | grep -Fq 'catch' ||

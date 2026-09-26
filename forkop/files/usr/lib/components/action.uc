@@ -1942,9 +1942,278 @@ function install_forkop() {
     action_success("forkop", "install", "Forkop has been installed", new_version, latest_version, 1, "latest", release.release_url);
 }
 
+function sing_box_release_tag_is_official(tag) {
+    tag = normalize_sing_box_extended_tag(tag);
+    let parts = split(tag, ".");
+    if (length(parts) != 3)
+        return false;
+    for (let part in parts) {
+        part = as_string(part);
+        if (part == "")
+            return false;
+        let i = 0;
+        while (i < length(part)) {
+            let ch = substr(part, i, 1);
+            if (ch < "0" || ch > "9")
+                return false;
+            i++;
+        }
+    }
+    let lowered = lc(tag);
+    if (index(lowered, "alpha") >= 0 || index(lowered, "beta") >= 0 || index(lowered, "rc") >= 0 || index(lowered, "extended") >= 0)
+        return false;
+    return true;
+}
+
+function add_sing_box_official_tag(result, seen, value) {
+    let tag = normalize_sing_box_extended_tag(value);
+    if (!sing_box_release_tag_is_official(tag) || seen[tag])
+        return;
+    seen[tag] = true;
+    push(result, tag);
+}
+
+function list_sing_box_official_tags() {
+    let result = [];
+    let seen = {};
+    let tags = github_json("https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100");
+    if (type(tags) == "array") {
+        for (let item in tags)
+            if (type(item) == "object")
+                add_sing_box_official_tag(result, seen, item.name);
+    }
+    if (length(result) == 0) {
+        let releases = github_json("https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100");
+        if (type(releases) == "array") {
+            for (let release in releases) {
+                if (type(release) != "object" || release.draft === true || release.prerelease === true)
+                    continue;
+                add_sing_box_official_tag(result, seen, release.tag_name);
+            }
+        }
+    }
+    return result;
+}
+
+function list_sing_box_tiny_versions() {
+    let result = [];
+    let seen = {};
+    for (let value in [
+        trim(available_package_version("sing-box-tiny")),
+        trim(installed_package_version("sing-box-tiny")),
+        normalize_sing_box_version(sing_box_runtime_output("version", []))
+    ]) {
+        value = trim(as_string(value));
+        if (value == "" || seen[value])
+            continue;
+        seen[value] = true;
+        push(result, value);
+    }
+    return result;
+}
+
+function sing_box_list_variant() {
+    let variant = sing_box_runtime_output("variant", []);
+    if (variant == "extended" || variant == "extended-compressed" || variant == "stable" || variant == "tiny")
+        return variant;
+    return "extended";
+}
+
+function sing_box_versions_for_variant(variant) {
+    if (variant == "tiny")
+        return list_sing_box_tiny_versions();
+    if (variant == "stable")
+        return list_sing_box_official_tags();
+    return list_sing_box_extended_tags();
+}
+
+function sing_box_package_version_matches(package_name, tag) {
+    tag = trim(as_string(tag));
+    if (tag == "")
+        return true;
+    let available = trim(available_package_version(package_name));
+    let installed = trim(installed_package_version(package_name));
+    let raw = trim(sing_box_runtime_output("version", []));
+    let binary = normalize_sing_box_version(raw);
+    return tag == available || tag == installed || tag == raw || (binary != "" && tag == binary);
+}
+
+function sing_box_official_download_urls(tag, arch_suffix, release) {
+    let urls = [];
+    let seen = {};
+    let names = [
+        "sing-box-" + tag + "-linux-" + arch_suffix + "-musl.tar.gz",
+        "sing-box-" + tag + "-linux-" + arch_suffix + ".tar.gz"
+    ];
+    if (index(arch_suffix, "softfloat") < 0) {
+        push(names, "sing-box-" + tag + "-linux-" + arch_suffix + "-softfloat-musl.tar.gz");
+        push(names, "sing-box-" + tag + "-linux-" + arch_suffix + "-softfloat.tar.gz");
+    }
+    let assets = type(release) == "object" && type(release.assets) == "array" ? release.assets : [];
+    for (let wanted in names) {
+        for (let asset in assets) {
+            if (type(asset) != "object" || as_string(asset.name) != wanted)
+                continue;
+            let url = trim(as_string(asset.browser_download_url || ""));
+            if (url == "" || seen[url])
+                continue;
+            seen[url] = true;
+            push(urls, url);
+        }
+    }
+    if (length(urls) == 0) {
+        for (let wanted in names) {
+            let url = "https://github.com/SagerNet/sing-box/releases/download/v" + tag + "/" + wanted;
+            if (!seen[url]) {
+                seen[url] = true;
+                push(urls, url);
+            }
+        }
+    }
+    return urls;
+}
+
+function sing_box_official_release_object(tag) {
+    let release_json = fetch_github_release_json_by_tag("SagerNet", "sing-box", tag);
+    if (release_json == "")
+        return null;
+    try {
+        let parsed = json(release_json);
+        return type(parsed) == "object" ? parsed : null;
+    }
+    catch (e) {
+        return null;
+    }
+}
+
+function download_first_sing_box_archive(urls, output_path, label) {
+    let last = "";
+    for (let url in urls) {
+        url = trim(as_string(url));
+        if (url == "")
+            continue;
+        last = url;
+        updates_log("Downloading " + label + " (" + path_basename(url) + ")");
+        if (download_file_once(url, output_path) && file_nonempty(output_path))
+            return url;
+        remove_file(output_path);
+    }
+    if (last != "" && download_with_retry(last, output_path, label))
+        return last;
+    return "";
+}
+
+function sing_box_binary_version_matches_tag(version, tag) {
+    version = normalize_sing_box_version(version);
+    tag = normalize_sing_box_extended_tag(tag);
+    if (version == "" || tag == "")
+        return false;
+    return version == tag || index(version, tag + "-") == 0;
+}
+
+function install_sing_box_official(action, requested_tag) {
+    init_tmp_dir() || action_fail("sing_box", action, "Failed to create temporary directory");
+    let tag = normalize_sing_box_extended_tag(requested_tag);
+    let current_version = sing_box_runtime_output("version", []);
+    if (!sing_box_release_tag_is_official(tag))
+        action_fail("sing_box", action, "No official sing-box release for " + as_string(requested_tag), current_version);
+    let arch_suffix = resolve_sing_box_extended_arch_suffix();
+    if (arch_suffix == "")
+        action_fail("sing_box", action, "Failed to detect sing-box architecture", current_version, tag);
+    let release = sing_box_official_release_object(tag);
+    let urls = sing_box_official_download_urls(tag, arch_suffix, release);
+    let release_url = type(release) == "object" && trim(as_string(release.html_url || "")) != "" ?
+        trim(as_string(release.html_url)) :
+        "https://github.com/SagerNet/sing-box/releases/tag/v" + tag;
+    let label = "stable sing-box " + tag;
+    let archive_file = tmp_dir + "/sing-box-" + tag + ".tar.gz";
+    let downloaded = download_first_sing_box_archive(urls, archive_file, label);
+    if (downloaded == "")
+        action_fail("sing_box", action, "Failed to download " + label, current_version, tag, "", release_url);
+
+    let binary_path = select_archive_member_path(archive_file, "sing-box");
+    if (binary_path == "") {
+        remove_file(archive_file);
+        action_fail("sing_box", action, "sing-box binary was not found in the downloaded archive", current_version, tag, "", release_url);
+    }
+    let extract_error = tmp_dir + "/sing-box-extract.err";
+    let tmp_binary = tmp_dir + "/sing-box.official." + owner_pid();
+    if (!command_success(command_from_args([ "tar", "-xzf", archive_file, "-O", binary_path ]) + " >" + shell_quote(tmp_binary) + " 2>" + shell_quote(extract_error)) ||
+        !file_nonempty(tmp_binary) ||
+        !command_success_from_args([ "chmod", "0755", tmp_binary ])) {
+        for (let line in split(read_file(extract_error), "\n"))
+            if (trim(as_string(line)) != "")
+                updates_log(line);
+        remove_file(tmp_binary);
+        remove_file(archive_file);
+        action_fail("sing_box", action, "Failed to extract " + label, current_version, tag, "", release_url);
+    }
+    remove_file(archive_file);
+
+    let current_variant = sing_box_runtime_output("variant", []);
+    let previous_marker = sing_box_runtime_output("read-variant-marker", []);
+    let previous_version_state = sing_box_runtime_output("read-version-state", []);
+    stop_forkop_before_sing_box_change();
+    let new_version = read_sing_box_binary_version(tmp_binary, "");
+    if (new_version == "" || index(new_version, "extended") >= 0 || !sing_box_binary_version_matches_tag(new_version, tag)) {
+        remove_file(tmp_binary);
+        action_fail("sing_box", action, "Downloaded " + label + " failed validation", current_version, tag, "", release_url);
+    }
+
+    for (let item in [
+        [ "sing-box-extended", "Removing sing-box-extended package before " + label + " installation" ],
+        [ "sing-box-tiny", "Removing sing-box-tiny package before " + label + " installation" ],
+        [ "sing-box", "Removing sing-box package before " + label + " installation" ]
+    ]) {
+        if (!run_logged_pkg_remove_sing_box_conflict(item[0], item[1])) {
+            restore_sing_box_after_failed_extended_install(current_variant, "", "", previous_marker, previous_version_state, "", false);
+            remove_file(tmp_binary);
+            action_fail("sing_box", action, "Failed to remove " + item[0] + " before " + label + " installation", current_version, tag, "", release_url);
+        }
+    }
+
+    remove_managed_sing_box_service_script();
+    if (!install_managed_sing_box_service_script()) {
+        restore_sing_box_after_failed_extended_install(current_variant, "", "", previous_marker, previous_version_state, "", false);
+        remove_file(tmp_binary);
+        action_fail("sing_box", action, "Failed to install managed sing-box service for " + label, current_version, tag, "", release_url);
+    }
+
+    remove_file("/usr/bin/sing-box");
+    if (!install_staged_file(tmp_binary, "/usr/bin/sing-box", "0755")) {
+        remove_file("/usr/bin/sing-box");
+        restore_sing_box_after_failed_extended_install(current_variant, "", "", previous_marker, previous_version_state, "", false);
+        action_fail("sing_box", action, "Failed to install " + label + " binary", current_version, tag, "", release_url);
+    }
+
+    new_version = read_sing_box_binary_version("/usr/bin/sing-box", "");
+    if (new_version == "" || index(new_version, "extended") >= 0 || !sing_box_binary_version_matches_tag(new_version, tag)) {
+        if (restore_sing_box_after_failed_extended_install(current_variant, "", "", previous_marker, previous_version_state, "", false))
+            action_fail("sing_box", action, "Installed " + label + " failed validation; previous sing-box variant was restored", current_version, tag, "", release_url);
+        action_fail("sing_box", action, "Installed " + label + " failed validation and previous sing-box variant could not be restored", current_version, tag, "", release_url);
+    }
+
+    write_sing_box_variant_state("stable", new_version);
+    reset_sing_box_dns_cache();
+    restart_forkop_after_successful_change();
+    if (!wait_forkop_running_after_sing_box_change()) {
+        updates_log(label + " did not start cleanly; restoring previous sing-box binary", "error");
+        if (file_exists(SERVICE_INIT))
+            command_success_from_args([ SERVICE_INIT, "stop" ]);
+        if (restore_sing_box_after_failed_extended_install(current_variant, "", "", previous_marker, previous_version_state, "", false))
+            action_fail("sing_box", action, label + " was installed but Forkop did not start cleanly; previous sing-box variant was restored", current_version, tag, "", release_url);
+        action_fail("sing_box", action, label + " was installed but Forkop did not start cleanly and previous sing-box variant could not be restored", current_version, tag, "", release_url);
+    }
+
+    clear_version_caches();
+    updates_log("Installed " + label + " (" + new_version + ")");
+    action_success("sing_box", action, label + " has been installed", new_version, tag, new_version == current_version ? 0 : 1, "latest", release_url);
+}
+
 function list_sing_box_versions() {
+    let variant = sing_box_list_variant();
     let current_version = normalize_sing_box_version(sing_box_runtime_output("version", []));
-    let versions = list_sing_box_extended_tags();
+    let versions = sing_box_versions_for_variant(variant);
     let latest_version = length(versions) > 0 ? versions[0] : current_version;
     write_json({
         success: true,
@@ -1957,6 +2226,7 @@ function list_sing_box_versions() {
         changed: 0,
         status: "latest",
         release_url: "",
+        variant,
         available_versions: versions
     });
     cleanup_action();
@@ -1981,10 +2251,21 @@ function dispatch_sing_box(action) {
         return;
     }
     if (base == "install_tiny") {
+        if (tag != "" && !sing_box_package_version_matches("sing-box-tiny", tag)) {
+            let available = trim(available_package_version("sing-box-tiny"));
+            let hint = available != "" ? " (" + available + ")" : "";
+            action_fail("sing_box", action, "sing-box-tiny is only available as the OpenWrt package version" + hint, sing_box_runtime_output("version", []));
+        }
         install_package_sing_box(action, true);
         return;
     }
     if (base == "install_stable") {
+        if (tag != "" && sing_box_release_tag_is_official(tag)) {
+            install_sing_box_official(action, tag);
+            return;
+        }
+        if (tag != "" && !sing_box_package_version_matches("sing-box", tag))
+            action_fail("sing_box", action, "No official sing-box release for " + tag, sing_box_runtime_output("version", []));
         install_package_sing_box(action, false);
         return;
     }
@@ -2353,6 +2634,8 @@ function component_action(component, action) {
         action == "install_tiny" || action == "install_stable" ||
         index(action, "install_extended@") == 0 ||
         index(action, "install_extended_compressed@") == 0 ||
+        index(action, "install_stable@") == 0 ||
+        index(action, "install_tiny@") == 0 ||
         index(action, "install@") == 0))
         dispatch_sing_box(action);
     else if (component == "zapret" && (action == "check_update" || action == "install"))

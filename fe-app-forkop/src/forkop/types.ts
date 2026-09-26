@@ -621,6 +621,7 @@ export namespace Forkop {
     release_url?: string;
     available_versions?: string[];
     prerelease_versions?: string[];
+    variant?: string;
     changed: boolean;
     status?: 'latest' | 'outdated' | 'dev' | '';
     pid?: string | null;

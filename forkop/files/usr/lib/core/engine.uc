@@ -116,9 +116,7 @@ function need_xray() {
 function need_singbox() {
     if (is_singbox_primary())
         return true;
-    if (need_singbox_sidecar())
-        return true;
-    return has_enabled_inbound_servers();
+    return need_singbox_sidecar();
 }
 
 function module_exports() {

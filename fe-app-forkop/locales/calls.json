@@ -59,8 +59,8 @@
     ]
   },
   {
-    "call": "Accept external proxy connections and route them with sing-box.",
-    "key": "Accept external proxy connections and route them with sing-box.",
+    "call": "Accept external proxy connections and route them with the selected routing engine.",
+    "key": "Accept external proxy connections and route them with the selected routing engine.",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js:419"
     ]

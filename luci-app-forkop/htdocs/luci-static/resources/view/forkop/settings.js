@@ -154,6 +154,83 @@ function configureDnsDuration(
   configureDnsFailoverVisibility(option, dnsOption, bootstrapOption);
 }
 
+let routingEngineOption = null;
+
+function isXrayRoutingEngine(value) {
+  const engine = `${value || ""}`.trim().toLowerCase();
+  return engine === "xray" || engine === "xray-core";
+}
+
+function currentRoutingEngine() {
+  if (routingEngineOption) {
+    try {
+      const live = routingEngineOption.formvalue("settings");
+      if (live != null && `${live}` !== "") {
+        return `${live}`;
+      }
+    } catch (_error) {
+      /* The widget is not rendered yet. */
+    }
+  }
+
+  const node = document.getElementById(
+    "cbid." + UCI_PACKAGE + ".settings.routing_engine",
+  );
+  if (node && node.value) {
+    return `${node.value}`;
+  }
+
+  return uci.get(UCI_PACKAGE, "settings", "routing_engine") || "sing-box";
+}
+
+function routingEngineMatches(engine, wanted) {
+  const xray = isXrayRoutingEngine(engine);
+  return wanted === "xray" ? xray : !xray;
+}
+
+function restrictRoutingEngine(option, engine) {
+  if (!option || option.forkopEngineRestrict) {
+    return option;
+  }
+
+  option.retain = true;
+  option.forkopEngineRestrict = engine;
+  const previous = option.checkDepends;
+  option.checkDepends = function (section_id) {
+    if (!routingEngineMatches(currentRoutingEngine(), engine)) {
+      return false;
+    }
+
+    return typeof previous === "function"
+      ? previous.call(this, section_id)
+      : true;
+  };
+  return option;
+}
+
+function routingMap() {
+  return routingEngineOption ? routingEngineOption.map : null;
+}
+
+function liveFormValue(name, sectionId) {
+  const map = routingMap();
+  if (!map || typeof map.lookupOption !== "function" || !sectionId) {
+    return null;
+  }
+
+  const found = map.lookupOption(name, sectionId);
+  if (!found || !found[0]) {
+    return null;
+  }
+
+  try {
+    const value = found[0].formvalue(found[1] || sectionId);
+    return value == null ? "" : `${value}`.trim();
+  } catch (_error) {
+    return null;
+  }
+}
+
 function createSettingsContent(section, capabilities) {
   let o = section.option(
     form.ListValue,
@@ -167,6 +244,7 @@ function createSettingsContent(section, capabilities) {
   o.value("xray", "Xray");
   o.default = "sing-box";
   o.rmempty = false;
+  routingEngineOption = o;
 
   o = section.option(
     form.Flag,
@@ -178,6 +256,7 @@ function createSettingsContent(section, capabilities) {
   );
   o.default = "0";
   o.rmempty = false;
+  restrictRoutingEngine(o, "xray");
 
   o = section.option(
     form.Value,
@@ -193,6 +272,7 @@ function createSettingsContent(section, capabilities) {
       ? true
       : _("Use a number or a range like 100-200");
   };
+  restrictRoutingEngine(o, "xray");
 
   o = section.option(
     form.Value,
@@ -208,6 +288,7 @@ function createSettingsContent(section, capabilities) {
       ? true
       : _("Use a number or a range like 10-20");
   };
+  restrictRoutingEngine(o, "xray");
 
   o = section.option(
     form.ListValue,
@@ -249,33 +330,36 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "dns_check_interval",
     _("DNS Check Interval"),
-    _("How often to check the active DNS servers."),
+    _("How often to check the active DNS servers. Works only with sing-box."),
   );
   configureDnsDuration(o, "10s", dnsOption, bootstrapOption);
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Value,
     "dns_recovery_check_interval",
     _("Higher-priority DNS Check"),
-    _("How often to check whether a higher-priority DNS server has recovered."),
+    _("How often to check whether a higher-priority DNS server has recovered. Works only with sing-box."),
   );
   configureDnsDuration(o, "60s", dnsOption, bootstrapOption);
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Value,
     "dns_check_timeout",
     _("DNS Unavailability Timeout"),
     _(
-      "Maximum time to wait for example.com to resolve during a DNS health check.",
+      "Maximum time to wait for example.com to resolve during a DNS health check. Works only with sing-box.",
     ),
   );
   configureDnsDuration(o, "2s", dnsOption, bootstrapOption);
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Value,
     "dns_rewrite_ttl",
     _("DNS Rewrite TTL"),
-    _("Time in seconds for DNS record caching (default: 60)"),
+    _("Time in seconds for DNS record caching (default: 60). Works only with sing-box."),
   );
   o.default = "60";
   o.rmempty = false;
@@ -291,6 +375,7 @@ function createSettingsContent(section, capabilities) {
 
     return true;
   };
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(form.ListValue, "dns_strategy", _("DNS Strategy"));
   o.value("prefer_ipv4", _("Prefer IPv4"));
@@ -580,33 +665,37 @@ function createSettingsContent(section, capabilities) {
     form.Flag,
     "enable_yacd",
     _("Enable YACD"),
-    `<a href="${main.getClashUIUrl()}" target="_blank">${main.getClashUIUrl()}</a>`,
+    `<a href="${main.getClashUIUrl()}" target="_blank">${main.getClashUIUrl()}</a>. ` +
+      _("Works only with sing-box."),
   );
   o.default = "0";
   o.rmempty = false;
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Flag,
     "enable_yacd_wan_access",
     _("Enable YACD WAN Access"),
     _(
-      "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall.",
+      "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall. Works only with sing-box.",
     ),
   );
   o.depends("enable_yacd", "1");
   o.default = "0";
   o.rmempty = false;
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Value,
     "yacd_secret_key",
     _("YACD Secret Key"),
     _(
-      "Secret key for authenticating remote access to YACD when WAN access is enabled.",
+      "Secret key for authenticating remote access to YACD when WAN access is enabled. Works only with sing-box.",
     ),
   );
   o.depends("enable_yacd_wan_access", "1");
   o.rmempty = false;
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Flag,
@@ -776,20 +865,21 @@ function createSettingsContent(section, capabilities) {
     "config_path",
     _("Config File Path"),
     _(
-      "Select path for sing-box config file. Change this ONLY if you know what you are doing",
+      "Select path for sing-box config file. Change this ONLY if you know what you are doing. Works only with sing-box.",
     ),
   );
   o.value("/etc/sing-box/config.json", "Flash (/etc/sing-box/config.json)");
   o.value("/tmp/sing-box/config.json", "RAM (/tmp/sing-box/config.json)");
   o.default = "/etc/sing-box/config.json";
   o.rmempty = false;
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Value,
     "cache_path",
     _("Cache File Path"),
     _(
-      "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing",
+      "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing. Works only with sing-box.",
     ),
   );
   o.value("/tmp/sing-box/cache.db", "RAM (/tmp/sing-box/cache.db)");
@@ -819,12 +909,13 @@ function createSettingsContent(section, capabilities) {
 
     return true;
   };
+  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.ListValue,
     "log_level",
     _("Log Level"),
-    _("Select the log level for sing-box"),
+    _("Log level for sing-box and Xray"),
   );
   o.value("trace", "Trace");
   o.value("debug", "Debug");
@@ -861,6 +952,10 @@ function createSettingsContent(section, capabilities) {
 
 const EntryPoint = {
   createSettingsContent,
+  restrictRoutingEngine,
+  currentRoutingEngine,
+  isXrayRoutingEngine,
+  liveFormValue,
 };
 
 return baseclass.extend(EntryPoint);

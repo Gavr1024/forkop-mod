@@ -940,6 +940,35 @@ function nft_add_section_priority_rules(table, section, interface_set, localv4_s
     return true;
 }
 
+function nft_install_resolved_pin_tproxies(table, interface_set) {
+    if (!engine.is_xray_primary())
+        return true;
+    let specs = xray_constants.section_pin_specs();
+    if (length(specs) == 0)
+        return true;
+    let tproxy6 = "::1";
+    for (let i = length(specs) - 1; i >= 0; i--) {
+        let spec = object_or_empty(specs[i]);
+        let name = as_string(spec.name || "");
+        let port = as_string(spec.port || "");
+        if (name == "" || port == "")
+            continue;
+        let resolved = "forkop_rule_" + name + "_resolved";
+        let resolved6 = "forkop_rule_" + name + "_resolved6";
+        let v6to = core_ip.format_ipv6_tproxy_target(tproxy6, port);
+        let lan = "@" + as_string(interface_set);
+        let ok = nft_insert_rule(table, "proxy", [ "iifname", lan, "ip", "daddr", "@" + resolved, "meta", "l4proto", "udp", "tproxy", "ip", "to", ":" + port, "counter", "accept" ]) &&
+            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip", "daddr", "@" + resolved, "meta", "l4proto", "tcp", "tproxy", "ip", "to", ":" + port, "counter", "accept" ]) &&
+            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip6", "daddr", "@" + resolved6, "meta", "l4proto", "udp", "tproxy", "ip6", "to", v6to, "counter", "accept" ]) &&
+            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip6", "daddr", "@" + resolved6, "meta", "l4proto", "tcp", "tproxy", "ip6", "to", v6to, "counter", "accept" ]);
+        if (ok)
+            log_info("Section pin: " + name + " resolved addresses stay on that section via TPROXY :" + port);
+        else
+            log_debug("Section pin skipped for " + name);
+    }
+    return true;
+}
+
 function nft_add_section_priority_rules_from_sections(sections, table, interface_set, localv4_set, localv6_set, mark, fakeip_range, fakeip6_range) {
     localv6_set = default_arg(localv6_set, "localv6");
     for (let section in sections) {
@@ -949,6 +978,7 @@ function nft_add_section_priority_rules_from_sections(sections, table, interface
         if (!nft_add_section_priority_rules(table, section, interface_set, localv4_set, localv6_set, mark, fakeip_range, fakeip6_range))
             log_debug("nftables priority rules incomplete for section " + as_string(section[".name"]));
     }
+    nft_install_resolved_pin_tproxies(table, interface_set);
     return true;
 }
 
@@ -974,6 +1004,12 @@ function xray_list_catch_all_needed() {
         if (section_has_unresolved_domain_lists(section))
             return true;
     return false;
+}
+
+function xray_disable_quic_needed() {
+    if (!engine.is_xray_primary())
+        return false;
+    return bool_option(uci_settings(), "disable_quic", false);
 }
 
 function nft_create_runtime_base(table, localv4_set, common_set, port_set, ip_port_set, interface_set, source_interfaces, fakeip_mark, outbound_mark, fakeip_range, tproxy_port, exclude_ntp, localv6_set, common6_set, ip_port6_set, fakeip6_range, tproxy6_address, skip_output_tproxy) {
@@ -1020,8 +1056,16 @@ function nft_create_runtime_base(table, localv4_set, common_set, port_set, ip_po
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "saddr", "@" + EXCLUDED_SOURCE_SET, "counter", "return" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "saddr", "@" + EXCLUDED_SOURCE6_SET, "counter", "return" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "@" + as_string(localv4_set), "return" ]) ||
-        !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "daddr", "@" + as_string(localv6_set), "ip6", "daddr", "!=", fakeip6_range, "return" ]) ||
-        !nft_add_rule(table, "mangle", [ "jump", "priority_rules" ]) ||
+        !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "daddr", "@" + as_string(localv6_set), "ip6", "daddr", "!=", fakeip6_range, "return" ]))
+        return false;
+
+    if (xray_disable_quic_needed()) {
+        log_info("Disable QUIC: rejecting LAN UDP/443 so clients fall back to TCP");
+        if (!nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "udp", "dport", "443", "reject", "with", "icmpx", "port-unreachable" ]))
+            return false;
+    }
+
+    if (!nft_add_rule(table, "mangle", [ "jump", "priority_rules" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "@" + as_string(common_set), "meta", "l4proto", "tcp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "@" + as_string(common_set), "meta", "l4proto", "udp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "daddr", "@" + as_string(common6_set), "meta", "l4proto", "tcp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
@@ -1048,9 +1092,8 @@ function nft_create_runtime_base(table, localv4_set, common_set, port_set, ip_po
         return false;
 
     if (xray_list_catch_all_needed()) {
-        log_info("Xray list catch-all: LAN traffic enters TPROXY; UDP/443 QUIC is rejected so the name stays visible");
-        if (!nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "udp", "dport", "443", "reject", "with", "icmpx", "port-unreachable" ]) ||
-            !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "!=", "@" + as_string(localv4_set), "meta", "l4proto", "tcp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
+        log_info("Xray list catch-all: LAN traffic enters TPROXY so community lists match by name");
+        if (!nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "!=", "@" + as_string(localv4_set), "meta", "l4proto", "tcp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
             !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "!=", "@" + as_string(localv4_set), "meta", "l4proto", "udp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
             !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "daddr", "!=", "@" + as_string(localv6_set), "meta", "l4proto", "tcp", "meta", "mark", "set", fakeip_mark, "counter" ]) ||
             !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "daddr", "!=", "@" + as_string(localv6_set), "meta", "l4proto", "udp", "meta", "mark", "set", fakeip_mark, "counter" ]))
