@@ -1043,7 +1043,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "__COMPILED_VERSION_VARIABLE__";
+var FORKOP_LUCI_APP_VERSION = "1.0.7";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -5169,7 +5169,8 @@ function applyServiceState(uiState) {
     xray_installed: uiState.capabilities.xray_installed,
     routing_engine: uiState.capabilities.routing_engine || "sing-box",
     server_inbounds_enabled_count: uiState.capabilities.server_inbounds_enabled_count,
-    need_singbox_sidecar: uiState.capabilities.need_singbox_sidecar ? 1 : 0
+    need_singbox_sidecar: uiState.capabilities.need_singbox_sidecar ? 1 : 0,
+    need_xray_sidecar: uiState.capabilities.need_xray_sidecar ? 1 : 0
   };
   nextSystemInfo.sing_box_extended = uiState.capabilities.sing_box_extended;
   nextSystemInfo.sing_box_tiny = uiState.capabilities.sing_box_tiny;
@@ -6112,6 +6113,9 @@ function getDashboardRoutingEngine() {
 }
 function isSingBoxSidecarNeeded() {
   return Number(store.get().diagnosticsSystemInfo.need_singbox_sidecar || 0) !== 0;
+}
+function isXraySidecarNeeded() {
+  return Number(store.get().diagnosticsSystemInfo.need_xray_sidecar || 0) !== 0;
 }
 function formatEngineStatus(running, role) {
   const state = running ? _("\u2714 Running") : _("\u2718 Stopped");
@@ -7155,6 +7159,16 @@ function getDashboardCoresSummaryItems() {
   ];
 }
 function getXrayServiceRow(data) {
+  const unused = getDashboardRoutingEngine() !== "xray" && !isXraySidecarNeeded();
+  if (unused) {
+    return {
+      key: "Xray",
+      value: _("Not used"),
+      attributes: {
+        class: ""
+      }
+    };
+  }
   if (!data.xrayInstalled) {
     return {
       key: "Xray",
@@ -7164,11 +7178,12 @@ function getXrayServiceRow(data) {
       }
     };
   }
+  const running = Boolean(data.xray);
   return {
     key: "Xray",
-    value: getDashboardRoutingEngine() === "xray" ? formatEngineStatus(Boolean(data.xray)) : formatEngineStatus(Boolean(data.xray), _("sidecar")),
+    value: getDashboardRoutingEngine() === "xray" ? formatEngineStatus(running) : formatEngineStatus(running, _("sidecar")),
     attributes: {
-      class: data.xray ? "fkp_dashboard-page__widgets-section__item__row--success" : "fkp_dashboard-page__widgets-section__item__row--error"
+      class: running ? "fkp_dashboard-page__widgets-section__item__row--success" : "fkp_dashboard-page__widgets-section__item__row--error"
     }
   };
 }
@@ -9008,6 +9023,7 @@ async function ensureSystemInfo({
           providerInfoLoaded: true,
           server_inbounds_enabled_count: currentSystemInfo.server_inbounds_enabled_count,
           need_singbox_sidecar: currentSystemInfo.need_singbox_sidecar,
+          need_xray_sidecar: currentSystemInfo.need_xray_sidecar,
           ...systemInfo.data
         });
         store.set({
@@ -9030,7 +9046,8 @@ async function ensureSystemInfo({
         byedpi_installed: latestSystemInfo.byedpi_installed,
         xray_installed: latestSystemInfo.xray_installed,
         server_inbounds_enabled_count: latestSystemInfo.server_inbounds_enabled_count,
-        need_singbox_sidecar: latestSystemInfo.need_singbox_sidecar
+        need_singbox_sidecar: latestSystemInfo.need_singbox_sidecar,
+        need_xray_sidecar: latestSystemInfo.need_xray_sidecar
       };
       store.set({
         diagnosticsSystemInfo: nextSystemInfo

@@ -525,8 +525,45 @@ function normalizeServerCapabilities(capabilities) {
   };
 }
 
+const XRAY_SERVER_PROTOCOLS = {
+  vless: true,
+  vmess: true,
+  trojan: true,
+  shadowsocks: true,
+  socks: true,
+  hysteria2: true,
+};
+
 function xrayServerEngine() {
   return settings.isXrayRoutingEngine(settings.currentRoutingEngine());
+}
+
+function xraySupportsServerProtocol(protocol) {
+  return XRAY_SERVER_PROTOCOLS[`${protocol || ""}`.trim().toLowerCase()] === true;
+}
+
+function syncServerVisibility() {
+  const pane = document.getElementById(`cbi-${UCI_PACKAGE}-server`);
+  if (!pane) {
+    return;
+  }
+
+  const xray = xrayServerEngine();
+  pane.querySelectorAll("[data-sid], [data-section-id]").forEach((node) => {
+    const sectionId =
+      node.getAttribute("data-sid") || node.getAttribute("data-section-id");
+    if (!sectionId) {
+      return;
+    }
+
+    const protocol = `${
+      uci.get(UCI_PACKAGE, sectionId, "protocol") || DEFAULT_SERVER_PROTOCOL
+    }`
+      .trim()
+      .toLowerCase();
+    const row = node.closest("tr, .cbi-section-node, .tr") || node;
+    row.style.display = xray && !xraySupportsServerProtocol(protocol) ? "none" : "";
+  });
 }
 
 function getDefaultProtocolForCapabilities(capabilities) {
@@ -1229,16 +1266,24 @@ function getPublicHost(sectionId) {
 
 function getTransportParams(sectionId, params) {
   const transport = uci.get(UCI_PACKAGE, sectionId, "transport") || "tcp";
-  params.type = transport === "raw" ? "tcp" : transport;
+  const xrayHttp =
+    xrayServerEngine() &&
+    (transport === "http" || transport === "h2" || transport === "h3");
+
+  params.type = xrayHttp ? "xhttp" : transport === "raw" ? "tcp" : transport;
 
   if (transport === "ws" || transport === "httpupgrade") {
     params.path = uci.get(UCI_PACKAGE, sectionId, "transport_path") || "";
     params.host = uci.get(UCI_PACKAGE, sectionId, "transport_host") || "";
-  } else if (transport === "xhttp") {
+  } else if (transport === "xhttp" || xrayHttp) {
     params.path = uci.get(UCI_PACKAGE, sectionId, "transport_path") || "/";
-    params.host = uci.get(UCI_PACKAGE, sectionId, "transport_host") || "";
-    params.mode =
-      uci.get(UCI_PACKAGE, sectionId, "transport_xhttp_mode") || "auto";
+    params.host =
+      uci.get(UCI_PACKAGE, sectionId, "transport_host") ||
+      asList(uci.get(UCI_PACKAGE, sectionId, "transport_hosts"))[0] ||
+      "";
+    params.mode = xrayHttp
+      ? "stream-one"
+      : uci.get(UCI_PACKAGE, sectionId, "transport_xhttp_mode") || "auto";
   } else if (transport === "grpc") {
     params.serviceName =
       uci.get(UCI_PACKAGE, sectionId, "transport_service_name") || "";
@@ -1249,7 +1294,7 @@ function getTransportParams(sectionId, params) {
     ).join(",");
   }
 
-  return transport;
+  return params.type;
 }
 
 function buildVlessTrojanLink(sectionId, identity) {
@@ -2778,6 +2823,26 @@ function createServerContent(section, options = {}) {
   o.default = "tcp";
   o.rmempty = false;
   o.modalonly = true;
+  o.validate = function (sectionId, value) {
+    const transport = `${value || "tcp"}`.trim().toLowerCase();
+    if (!xrayServerEngine()) {
+      return true;
+    }
+    if (transport === "http" || transport === "h2" || transport === "quic") {
+      return _("Xray does not support this transport. Use XHTTP.");
+    }
+    const security = getEffectiveSecurity(sectionId);
+    if (
+      security === "reality" &&
+      transport !== "tcp" &&
+      transport !== "raw" &&
+      transport !== "grpc" &&
+      transport !== "xhttp"
+    ) {
+      return _("Reality on Xray supports only TCP, gRPC and XHTTP.");
+    }
+    return true;
+  };
   addStreamDepends(o);
 
   o = section.option(form.Value, "transport_path", _("Transport path"));
@@ -3153,4 +3218,5 @@ return baseclass.extend({
   configureServerSection,
   createServerContent,
   preloadServerModalData,
+  syncServerVisibility,
 });

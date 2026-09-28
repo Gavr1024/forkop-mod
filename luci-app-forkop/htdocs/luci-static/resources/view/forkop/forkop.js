@@ -539,6 +539,10 @@ const EntryPoint = {
       syncingRoutingTabs = true;
       try {
         refreshOpenModalMaps();
+        if (serverSectionRef) {
+          server.applyServerCapabilities(serverSectionRef, uiCapabilities);
+        }
+        server.syncServerVisibility();
       } finally {
         syncingRoutingTabs = false;
       }

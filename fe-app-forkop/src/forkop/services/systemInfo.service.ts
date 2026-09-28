@@ -84,6 +84,7 @@ export async function ensureSystemInfo({
             server_inbounds_enabled_count:
               currentSystemInfo.server_inbounds_enabled_count,
             need_singbox_sidecar: currentSystemInfo.need_singbox_sidecar,
+            need_xray_sidecar: currentSystemInfo.need_xray_sidecar,
             ...systemInfo.data,
           });
 
@@ -111,6 +112,7 @@ export async function ensureSystemInfo({
         server_inbounds_enabled_count:
           latestSystemInfo.server_inbounds_enabled_count,
         need_singbox_sidecar: latestSystemInfo.need_singbox_sidecar,
+        need_xray_sidecar: latestSystemInfo.need_xray_sidecar,
       };
 
       store.set({

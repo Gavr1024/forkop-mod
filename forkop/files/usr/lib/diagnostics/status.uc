@@ -1073,7 +1073,8 @@ function inbound_runtime_ok(protocol, runtime_exists, runtime_type, runtime_list
     if (protocol == "json_inbound")
         return 1;
 
-    if (runtime_type != expected_type)
+    if (runtime_type != expected_type &&
+        !(protocol == "hysteria2" && runtime_type == "hysteria" && expected_type == "hysteria2"))
         return 0;
 
     if (protocol == "tailscale")

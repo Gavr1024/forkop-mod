@@ -204,6 +204,12 @@ extract_fn "$GEO" "plain_list_parsed" | grep -Fq 'list_file_matchers' ||
   fail "custom lists must use the same parser as Xray routing rules"
 extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -Fq 'section_domain_ip_list_parsed' ||
   fail "custom list subnets must be loaded into nft on start, not only during list-update"
+extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -Fq 'nft_restore_cached_community_subnets' ||
+  fail "nft rebuild must restore cached community subnets so a reload cannot drop them"
+extract_fn "$NFT_APPLY" "nft_add_elements_resilient" | grep -Fq 'overlap' ||
+  fail "overlapping nft set elements must be inserted one by one instead of failing the batch"
+extract_fn "$GEO" "cached_subnet_files" | grep -Fq 'subnet_cache_path' ||
+  fail "community subnet cache must be readable after list-update"
 grep -Fq 'nft-write-xray-nftset-conf' "$UPD" ||
   fail "list-update must rewrite Xray nftset after fetching RAW lst"
 pass "Xray routing/FakeDNS consume converted matchers"

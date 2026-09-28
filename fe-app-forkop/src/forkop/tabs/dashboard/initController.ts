@@ -467,6 +467,10 @@ function isSingBoxSidecarNeeded() {
   return Number(store.get().diagnosticsSystemInfo.need_singbox_sidecar || 0) !== 0;
 }
 
+function isXraySidecarNeeded() {
+  return Number(store.get().diagnosticsSystemInfo.need_xray_sidecar || 0) !== 0;
+}
+
 function formatEngineStatus(running: boolean, role?: string) {
   const state = running ? _('✔ Running') : _('✘ Stopped');
   return role ? `${state} (${role})` : state;
@@ -1764,6 +1768,18 @@ function getDashboardCoresSummaryItems() {
 }
 
 function getXrayServiceRow(data: StoreType['servicesInfoWidget']['data']) {
+  const unused =
+    getDashboardRoutingEngine() !== 'xray' && !isXraySidecarNeeded();
+  if (unused) {
+    return {
+      key: 'Xray',
+      value: _('Not used'),
+      attributes: {
+        class: '',
+      },
+    };
+  }
+
   if (!data.xrayInstalled) {
     return {
       key: 'Xray',
@@ -1774,14 +1790,15 @@ function getXrayServiceRow(data: StoreType['servicesInfoWidget']['data']) {
     };
   }
 
+  const running = Boolean(data.xray);
   return {
     key: 'Xray',
     value:
       getDashboardRoutingEngine() === 'xray'
-        ? formatEngineStatus(Boolean(data.xray))
-        : formatEngineStatus(Boolean(data.xray), _('sidecar')),
+        ? formatEngineStatus(running)
+        : formatEngineStatus(running, _('sidecar')),
     attributes: {
-      class: data.xray
+      class: running
         ? 'fkp_dashboard-page__widgets-section__item__row--success'
         : 'fkp_dashboard-page__widgets-section__item__row--error',
     },

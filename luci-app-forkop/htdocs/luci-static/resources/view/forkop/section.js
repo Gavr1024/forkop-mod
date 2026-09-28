@@ -98,6 +98,91 @@ function getDefaultOutboundDetourSection(currentSectionId) {
   return targetSections.length ? getUciSectionName(targetSections[0]) : "";
 }
 
+function isXrayFallbackSection(section, currentSectionId) {
+  if (!isOutboundDetourTargetSection(section, currentSectionId)) {
+    return false;
+  }
+
+  const core = `${section.proxy_core || ""}`.trim();
+  if (core === "sing-box") {
+    return false;
+  }
+  if (core === "xray") {
+    return true;
+  }
+
+  return settings.currentRoutingEngine() === "xray";
+}
+
+function xrayBalancerStrategyText(strategy) {
+  const text = {
+    off: _(
+      "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected.",
+    ),
+    auto: _(
+      "URLTest uses least ping. Without URLTest, Xray picks a server at random.",
+    ),
+    random: _("Xray picks a server at random."),
+    roundRobin: _("Xray walks the servers in order."),
+    leastPing: _(
+      "Xray picks the server with the lowest delay. Servers are probed first.",
+    ),
+    leastLoad: _(
+      "Xray picks the most stable servers. Set how many share traffic, the maximum RTT, and how many failed probes are allowed.",
+    ),
+  };
+
+  return text[strategy] || text.auto;
+}
+
+function addXrayBalancerStrategyHint(section, strategy) {
+  const hint = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.DummyValue,
+      `_xray_balancer_hint_${strategy}`,
+    ),
+    "xray",
+  );
+  hint.depends({ action: "connection", xray_balancer_strategy: strategy });
+  if (strategy === "auto") {
+    hint.depends({ action: "connection", xray_balancer_strategy: "" });
+  }
+  hint.modalonly = true;
+  hint.rmempty = false;
+  hint.title = "";
+  hint.cfgvalue = function () {
+    return xrayBalancerStrategyText(strategy);
+  };
+  hint.write = function () {};
+  hint.remove = function () {};
+  return hint;
+}
+
+function xrayFallbackTargetChoices(sectionId) {
+  const sections = (uci.sections(UCI_PACKAGE, "section") || []).filter(
+    (section) => isXrayFallbackSection(section, sectionId),
+  );
+
+  return Promise.all(
+    sections.map((section) => {
+      const name = getUciSectionName(section);
+      const label = getUciSectionLabel(section);
+      return readOutboundMetadataFromSectionCache(name).then((metadata) =>
+        Object.entries(plainObject(metadata.names)).map(([tag, serverName]) => ({
+          value: `${name}\t${tag}`,
+          label: `${label} — ${serverName || tag}`,
+        })),
+      );
+    }),
+  ).then((groups) =>
+    groups
+      .flat()
+      .filter((item) => item.value && item.label)
+      .sort((left, right) => left.label.localeCompare(right.label)),
+  );
+}
+
 function refreshOutboundDetourSectionOptionValues(option, sectionId) {
   option.keylist = [];
   option.vallist = [];
@@ -7241,6 +7326,19 @@ function createSectionContent(section) {
     });
   };
 
+  o = section.taboption("settings", form.DummyValue, "_dns_section_hint");
+  o.depends("action", "dns");
+  o.modalonly = true;
+  o.rmempty = false;
+  o.title = "";
+  o.cfgvalue = function () {
+    return _(
+      "Domains in this section get a real address, not a FakeIP. A section below cannot take their traffic: if the site name is not visible, it follows full routing or goes direct.",
+    );
+  };
+  o.write = function () {};
+  o.remove = function () {};
+
   o = section.taboption(
     "settings",
     form.ListValue,
@@ -7549,6 +7647,9 @@ function createSectionContent(section) {
   o.childDefaults = defaultInterfaceSettings();
   o.renderItemSettingsModal = showInterfaceSettingsModal;
   o.hasItemSettings = function (section_id, value) {
+    if (effectiveSectionEngine(this, section_id) === "xray") {
+      return false;
+    }
     const normalized = `${value || ""}`.trim();
     if (isExistingChildItem(section_id, normalized, "section_interface")) {
       return true;
@@ -7719,6 +7820,138 @@ function createSectionContent(section) {
   };
   o.onListChange = refreshDashboardFilterChoiceWidgets;
   sectionGroupSourceOptions.set("priority_group", o);
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.ListValue,
+      "xray_balancer_strategy",
+      _("Balancer strategy"),
+    ),
+    "xray",
+  );
+  o.depends("action", "connection");
+  o.modalonly = true;
+  o.rmempty = true;
+  o.value("auto", _("Auto"));
+  o.value("random", "Random");
+  o.value("roundRobin", "Round robin");
+  o.value("leastPing", "Least ping");
+  o.value("leastLoad", "Least load");
+  o.value("off", _("Off"));
+  o.default = "auto";
+  ["off", "auto", "random", "roundRobin", "leastPing", "leastLoad"].forEach(
+    (strategy) => addXrayBalancerStrategyHint(section, strategy),
+  );
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_leastload_expected",
+      _("Least load group size"),
+      _("How many stable servers share new connections."),
+    ),
+    "xray",
+  );
+  o.depends({ action: "connection", xray_balancer_strategy: "leastLoad" });
+  o.modalonly = true;
+  o.rmempty = true;
+  o.default = "1";
+  o.placeholder = "1";
+  o.datatype = "uinteger";
+  o.validate = function (_section_id, value) {
+    if (value == null || `${value}`.trim() === "") {
+      return true;
+    }
+    const parsed = parseInt(value, 10);
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= 16) {
+      return true;
+    }
+    return _("Use a number from 1 to 16");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_leastload_max_rtt",
+      _("Least load max RTT"),
+      _("Slowest accepted probe, such as 1s or 500ms."),
+    ),
+    "xray",
+  );
+  o.depends({ action: "connection", xray_balancer_strategy: "leastLoad" });
+  o.modalonly = true;
+  o.rmempty = true;
+  o.default = "1s";
+  o.placeholder = "1s";
+  o.validate = function (_section_id, value) {
+    if (value == null || `${value}`.trim() === "") {
+      return true;
+    }
+    return /^[0-9]+(ms|s|m|h)$/.test(`${value}`.trim())
+      ? true
+      : _("Use a duration like 500ms or 1s");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_leastload_tolerance",
+      _("Least load tolerance"),
+      _("Accepted share of failed probes, from 0 to 1."),
+    ),
+    "xray",
+  );
+  o.depends({ action: "connection", xray_balancer_strategy: "leastLoad" });
+  o.modalonly = true;
+  o.rmempty = true;
+  o.default = "0.5";
+  o.placeholder = "0.5";
+  o.validate = function (_section_id, value) {
+    if (value == null || `${value}`.trim() === "") {
+      return true;
+    }
+    const parsed = Number(value);
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
+      return true;
+    }
+    return _("Use a number from 0 to 1");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.ListValue,
+      "xray_fallback_target",
+      _("Fallback server"),
+      _("One server from another section, used when the rest are dead."),
+    ),
+    "xray",
+  );
+  o.modalonly = true;
+  o.rmempty = true;
+  o.value("", _("None"));
+  ["", "auto", "random", "roundRobin", "leastPing", "leastLoad"].forEach(
+    (strategy) => {
+      o.depends({ action: "connection", xray_balancer_strategy: strategy });
+    },
+  );
+  o.load = function (section_id) {
+    const saved = uci.get(UCI_PACKAGE, section_id, "xray_fallback_target") || "";
+    this.keylist = [];
+    this.vallist = [];
+    this.value("", _("None"));
+    return xrayFallbackTargetChoices(section_id).then((choices) => {
+      choices.forEach((choice) => this.value(choice.value, choice.label));
+      if (saved && !this.keylist.includes(saved)) {
+        this.value(saved, saved);
+      }
+      return saved;
+    });
+  };
 
   o = section.taboption(
     "settings",

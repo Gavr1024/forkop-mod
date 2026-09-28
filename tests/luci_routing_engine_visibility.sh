@@ -5,14 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SECTION_JS="$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js"
 SETTINGS_JS="$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js"
 FORKOP_JS="$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js"
+SERVER_JS="$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js"
 
-node --input-type=module - "$SECTION_JS" "$SETTINGS_JS" "$FORKOP_JS" <<'EOF'
+node --input-type=module - "$SECTION_JS" "$SETTINGS_JS" "$FORKOP_JS" "$SERVER_JS" <<'EOF'
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import { spawnSync } from "child_process";
 
-const [sectionPath, settingsPath, forkopPath] = process.argv.slice(2);
+const [sectionPath, settingsPath, forkopPath, serverPath] = process.argv.slice(2);
 
-for (const file of [sectionPath, settingsPath, forkopPath]) {
+for (const file of [sectionPath, settingsPath, forkopPath, serverPath]) {
   const src = readFileSync(file, "utf8");
   const wrapped = "async function __forkopSyntaxCheck() {\n" + src + "\n}\n";
   const tmp = file + ".syntax-check.mjs";
@@ -98,7 +99,7 @@ for (const key of [
   }
 }
 
-for (const key of ["xray_finalmask", "xray_finalmask_length", "xray_finalmask_interval"]) {
+for (const key of ["xray_finalmask", "xray_finalmask_length", "xray_finalmask_interval", "xray_balancer_strategy", "xray_fallback_target", "xray_leastload_expected", "xray_leastload_max_rtt", "xray_leastload_tolerance"]) {
   const hidden = new RegExp(
     'restrictSectionEngine\\([\\s\\S]{0,320}"' + key + '"[\\s\\S]{0,240}"xray"',
   );
@@ -142,7 +143,6 @@ for (const [key, engine] of [
   ["dns_check_interval", "sing-box"],
   ["dns_recovery_check_interval", "sing-box"],
   ["dns_check_timeout", "sing-box"],
-  ["dns_rewrite_ttl", "sing-box"],
   ["enable_yacd", "sing-box"],
   ["config_path", "sing-box"],
   ["cache_path", "sing-box"],
@@ -155,7 +155,7 @@ for (const [key, engine] of [
   }
 }
 
-for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strategy"]) {
+for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strategy", "dns_rewrite_ttl"]) {
   const at = settings.indexOf('"' + key + '"');
   if (at < 0) throw new Error("missing settings option " + key);
   const window = settings.slice(at, at + 700);
@@ -166,9 +166,17 @@ for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strat
 
 if (!forkop.includes("function syncRoutingEngineTabs()") ||
     forkop.includes('li[data-tab="server"]') ||
+    !forkop.includes("server.syncServerVisibility()") ||
     !forkop.includes("forkopMap.checkDepends") ||
     !forkop.includes("forkopMap.render")) {
-  throw new Error("Servers tab must stay available on Xray and still refresh engine-dependent options");
+  throw new Error("Servers tab must stay available on Xray and hide unsupported server rows");
+}
+
+const server = readFileSync(serverPath, "utf8");
+if (!server.includes("function syncServerVisibility(") ||
+    !server.includes("xray && !xraySupportsServerProtocol(protocol)") ||
+    !server.includes("if (!xray && normalized.singBoxTailscale)")) {
+  throw new Error("Xray must hide Tailscale, MTProto and JSON servers until sing-box is primary");
 }
 
 const throughBind = section.slice(

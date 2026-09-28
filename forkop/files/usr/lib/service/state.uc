@@ -1368,6 +1368,11 @@ function append_sing_box_rule_signature_body(body, section, sections) {
             body = signature_add_value(body, prefix + ".xray_finalmask_length", option(section, "xray_finalmask_length", "100-200"));
             body = signature_add_value(body, prefix + ".xray_finalmask_interval", option(section, "xray_finalmask_interval", "10-20"));
         }
+        body = signature_add_value(body, prefix + ".xray_balancer_strategy", option(section, "xray_balancer_strategy", ""));
+        body = signature_add_value(body, prefix + ".xray_fallback_target", option(section, "xray_fallback_target", ""));
+        body = signature_add_value(body, prefix + ".xray_leastload_expected", option(section, "xray_leastload_expected", ""));
+        body = signature_add_value(body, prefix + ".xray_leastload_max_rtt", option(section, "xray_leastload_max_rtt", ""));
+        body = signature_add_value(body, prefix + ".xray_leastload_tolerance", option(section, "xray_leastload_tolerance", ""));
     }
     else if (action == "byedpi") {
         body = signature_add_value(body, prefix + ".byedpi_index", sing_box_signature_enabled_action_index(sections, name, "byedpi"));

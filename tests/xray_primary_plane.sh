@@ -85,14 +85,34 @@ extract_fn "$XRAY_RT" "select_outbound_json" | grep -Fq 'replace_routing_live' |
   fail "if the balancer API fails, the switch must update routing rules without a restart"
 extract_fn "$XRAY_RT" "replace_routing_live" | grep -Fq 'adrules' ||
   fail "routing fallback must use the Xray adrules API"
+extract_fn "$XRAY_RT" "replace_routing_live" | grep -Fq '"-t", "60"' ||
+  fail "routing API replace must wait long enough for a large ruleset"
+extract_fn "$XRAY_RT" "apply_saved_balancer_overrides" | grep -Fq 'section_rule_already_pinned' ||
+  fail "restoring a pinned server must not call adrules when the generated rule already matches"
+extract_fn "$XRAY_RT" "apply_saved_balancer_overrides" | grep -Fq 'pin_targets_live_node' ||
+  fail "stale dashboard pins must not be pushed into Xray routing"
 extract_fn "$XRAY_RT" "select_outbound_json" | grep -Fq 'reload_runtime' ||
   fail "manual Xray server switch must still reload if both live APIs fail"
 extract_fn "$XRAY_GEN" "apply_stats_api" | grep -Fq 'RoutingService' ||
   fail "Xray API must expose RoutingService for live balancer override"
 extract_fn "$XRAY_GEN" "read_selected_outbounds" | grep -Fq 'XRAY_SELECTED_FILE' ||
   fail "Xray config generation must honor the pinned dashboard outbound"
-extract_fn "$XRAY_GEN" "add_section" | grep -Fq 'type: "random"' ||
-  fail "manual Xray balancers must not use leastPing fallback without observatory"
+extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -Fq 'return "random"' ||
+  fail "Xray sections without URLTest must default to a random balancer"
+extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -Fq 'return "roundRobin"' ||
+  fail "Xray balancer must support round robin"
+extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -Fq 'return "off"' ||
+  fail "Xray balancer must be possible to turn off"
+extract_fn "$XRAY_GEN" "add_section" | grep -Fq 'strategy != "off"' ||
+  fail "turning the balancer off must send traffic to one server"
+extract_fn "$XRAY_GEN" "add_section" | grep -Fq 'least_load_settings' ||
+  fail "least load must pass expected, maxRTT and tolerance to Xray"
+extract_fn "$XRAY_GEN" "add_section" | grep -Fq 'strategy_needs_observatory' ||
+  fail "least ping and least load must probe servers before choosing one"
+extract_fn "$XRAY_GEN" "apply_balancer_fallbacks" | grep -Fq 'fallbackTag' ||
+  fail "fallback must be one outbound from another section, not another balancer"
+extract_fn "$XRAY_GEN" "section_fallback_request" | grep -Fq 'xray_fallback_target' ||
+  fail "fallback server must be read from xray_fallback_target"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -Fq 'protocol == "hysteria"' ||
   fail "Hysteria2 QUIC outbounds must not get TCP domainStrategy sockopt"
 extract_fn "$XRAY_OUT" "convert_hysteria2" | grep -Fq 'udphop' ||
@@ -218,6 +238,8 @@ extract_fn "$NFT_APPLY" "nft_install_resolved_pin_tproxies" | grep -Fq 'nft_inse
   fail "section pin rules must be inserted ahead of generic TPROXY :1602"
 extract_fn "$NFT_APPLY" "nft_install_resolved_pin_tproxies" | grep -Fq 'accept' ||
   fail "section pin must accept after tproxy so :1602 does not overwrite the section port"
+extract_fn "$NFT_APPLY" "nft_install_resolved_pin_tproxies" | grep -Fq 'FAKEIP_INET4_RANGE' ||
+  fail "section pin must not capture FakeIP; those flows belong to the FakeDNS inbound"
 extract_fn "$NFT_APPLY" "nft_add_section_priority_rules_from_sections" | grep -Fq 'nft_install_resolved_pin_tproxies' ||
   fail "nft rebuild must install section pins after resolved sets exist"
 awk '
@@ -235,6 +257,8 @@ extract_fn "$XRAY_GEN" "apply_primary_tproxy_routes" | awk '
 ' || fail "unmatched FakeIP must blackhole before BLESS fully_routed sources"
 extract_fn "$XRAY_GEN" "tproxy_fakeip_inbound" | grep -Fq '"fakedns"' ||
   fail "FakeIP TPROXY sniff must destOverride FakeIP to the domain"
+extract_fn "$XRAY_GEN" "tproxy_fakeip_inbound" | grep -Fq '"tls"' ||
+  fail "FakeIP TPROXY must still read SNI when the FakeDNS pool forgot the IP"
 extract_fn "$XRAY_GEN" "tproxy_fakeip_inbound" | grep -Fq 'routeOnly: false' ||
   fail "FakeIP TPROXY must replace dest so the proxy does not dial 198.18"
 grep -Fq 'XRAY_TPROXY_FAKEIP_PORT = 1605' "$XRAY_CONST" ||
@@ -245,6 +269,8 @@ extract_fn "$NFT_APPLY" "nft_install_xray_fakeip_tproxy" | grep -Fq 'XRAY_TPROXY
   fail "FakeIP TPROXY install must use XRAY_TPROXY_FAKEIP_PORT"
 extract_fn "$NFT_APPLY" "nft_install_xray_fakeip_tproxy" | grep -Fq 'nft_insert_rule' ||
   fail "FakeIP TPROXY rules must be inserted first so 198.18 does not fall through to :1602"
+extract_fn "$NFT_APPLY" "nft_install_xray_fakeip_tproxy" | grep -Fq '"counter", "accept"' ||
+  fail "FakeIP TPROXY must accept so the generic :1602 rule does not override it"
 extract_fn "$NFT_APPLY" "section_has_xray_domain_nft" | grep -Fq 'community_lists' ||
   fail "community list sections must create nft priority sets so dnsmasq nftset= has a target"
 extract_fn "$NFT_APPLY" "nft_create_full_runtime_from_uci" | grep -Fq 'nftables failed: runtime base' ||
@@ -293,6 +319,9 @@ extract_fn "$XRAY_GEN" "section_ip_matchers" | grep -Fq 'ip_cidr' ||
   fail "Xray IP rules must read LuCI ip_cidr, not the unused subnet key"
 extract_fn "$XRAY_GEN" "collect_fake_dns_domains" | grep -Fq 'section_domain_matchers' ||
   fail "Xray FakeDNS must include domains from section rules and converted lists"
+if extract_fn "$XRAY_GEN" "collect_fake_dns_domains" | grep -Fq 'section_uses_interface_outbound'; then
+  fail "OpenConnect and other interface sections must use FakeDNS; real CDN IPs let YouTube QUIC leave via WAN"
+fi
 extract_fn "$XRAY_GEN" "xray_log_level" | grep -Fq 'log_level' ||
   fail "Xray must use the settings log level"
 extract_fn "$XRAY_GEN" "output_network_interface" | grep -Fq 'enable_output_network_interface' ||
@@ -350,6 +379,12 @@ extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'xray_dns_server_address(
   fail "DoT must keep a DoH twin for the same resolver (tls-in-tls on 853 dies after a few queries)"
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'serveStale' ||
   fail "Xray DNS must serve stale answers when the DoT session drops"
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'disableCache: true' ||
+  fail "FakeIP must not be stored in the shared DNS cache; outbound dials would reuse 198.18"
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'serveExpiredTTL' ||
+  fail "real DNS cache must follow DNS Rewrite TTL via serveExpiredTTL"
+extract_fn "$XRAY_GEN" "dns_cache_ttl" | grep -Fq 'dns_rewrite_ttl' ||
+  fail "Xray DNS cache TTL must read dns_rewrite_ttl"
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'XRAY_DNS_REMOTE_TAG' ||
   fail "Xray DNS servers must be tagged so DoH can be routed through the proxy section"
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'bootstrap_dns_server' ||
@@ -435,6 +470,10 @@ extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -Fq 'SINGBOX_SIDECAR_TAG' ||
   fail "sidecar SOCKS must keep AsIs so the domain is passed through"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -Fq '"AsIs"' ||
   fail "Xray-primary proxy outbounds must dial AsIs; UseIPv4v6 re-resolves FakeIP and 2ip.io times out"
+extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -Fq 'explicit == "UseIP"' ||
+  fail "interface freedom must set sockopt.domainStrategy so it dials a real IP, not 198.18"
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'push_interface_dial_dns' ||
+  fail "interface dial must have a real DNS match after FakeDNS; otherwise UseIPv4v6 gets an empty answer"
 extract_fn "$XRAY_GEN" "dns_outbound" | grep -Fq 'blockTypes' ||
   fail "dns-out must block HTTPS/SVCB query types (64/65) like sing-box reject"
 extract_fn "$XRAY_GEN" "dns_outbound" | grep -Fq '64' ||
@@ -537,6 +576,20 @@ extract_fn "$XRAY_SERVERS" "supported" | grep -Fq 'tailscale' &&
   fail "Tailscale servers stay on sing-box"
 extract_fn "$XRAY_SERVERS" "supported" | grep -Fq 'hysteria2' ||
   fail "Xray servers must support hysteria2"
+extract_fn "$XRAY_SERVERS" "transport_spec" | grep -Fq 'method: "raw"' ||
+  fail "Xray 26 server inbounds must set streamSettings.method raw, not only network"
+extract_fn "$XRAY_SERVERS" "transport_spec" | grep -Fq 'kind: "http"' ||
+  fail "removed HTTP transport must be rewritten to XHTTP or xray -test rejects the whole config"
+extract_fn "$XRAY_SERVERS" "build_inbound" | grep -Fq 'REALITY only supports' ||
+  fail "REALITY on WebSocket/HTTPUpgrade must be skipped instead of failing xray -test"
+extract_fn "$XRAY_GEN" "apply_xray_servers" | grep -Fq 'already in use' ||
+  fail "a server port that collides with TPROXY/API must be skipped, not take down Xray"
+grep -Fq 'xray x25519' "$LIB/server/service.uc" ||
+  fail "Reality keys must be generated by xray x25519 when sing-box is not installed"
+grep -Fq 'openssl req -x509' "$LIB/server/service.uc" ||
+  fail "TLS certificates for Trojan/Hysteria2 must not require sing-box"
+grep -Fq 'runtime_config_path' "$LIB/diagnostics/runtime.uc" ||
+  fail "inbound diagnostics must read the Xray config when Xray is primary"
 awk '
   /^function apply_xray_servers\(/ { p = NR }
   /^function generate_config\(/ { a = NR }

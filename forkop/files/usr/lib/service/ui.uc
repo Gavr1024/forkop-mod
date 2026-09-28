@@ -1094,6 +1094,7 @@ function capability_flags() {
     result.server_inbounds_enabled_count = server_inbounds_enabled_count();
     result.routing_engine = engine.routing_engine();
     result.need_singbox_sidecar = engine.need_singbox_sidecar() ? 1 : 0;
+    result.need_xray_sidecar = engine.need_xray_sidecar() ? 1 : 0;
     return result;
 }
 

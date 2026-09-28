@@ -610,16 +610,47 @@ function command_first_nonempty_line(command) {
     return "";
 }
 
+function line_value_after_label(data, label) {
+    label = as_string(label);
+    let prefix = label + ":";
+    for (let line in split(as_string(data), "\n")) {
+        line = str_remove_suffix(as_string(line), "\r");
+        if (substr(line, 0, length(prefix)) != prefix)
+            continue;
+        return replace(substr(line, length(prefix)), /^[ \t\r]*/, "");
+    }
+    return null;
+}
+
+function urandom_hex(nbytes) {
+    nbytes = int(nbytes);
+    if (nbytes <= 0)
+        nbytes = 16;
+    return replace(output("head -c " + nbytes + " /dev/urandom | hexdump -ve '1/1 \"%02x\"' 2>/dev/null"), /\n/g, "");
+}
+
 function server_generate_uuid() {
-    return command_first_nonempty_line("sing-box generate uuid 2>/dev/null");
+    let uuid = command_first_nonempty_line("sing-box generate uuid 2>/dev/null");
+    if (uuid != "")
+        return uuid;
+    return command_first_nonempty_line("cat /proc/sys/kernel/random/uuid 2>/dev/null");
 }
 
 function server_generate_password() {
-    return replace(output("sing-box generate rand --base64 18 2>/dev/null"), /\n/g, "");
+    let value = replace(output("sing-box generate rand --base64 18 2>/dev/null"), /\n/g, "");
+    if (value != "")
+        return value;
+    value = replace(output("head -c 18 /dev/urandom 2>/dev/null | openssl base64 -A 2>/dev/null"), /\n/g, "");
+    if (value != "")
+        return value;
+    return urandom_hex(18);
 }
 
 function server_generate_short_id() {
-    return replace(output("sing-box generate rand --hex 4 2>/dev/null"), /\n/g, "");
+    let value = replace(output("sing-box generate rand --hex 4 2>/dev/null"), /\n/g, "");
+    if (value != "")
+        return value;
+    return urandom_hex(4);
 }
 
 function server_generate_mtproto_secret() {
@@ -664,6 +695,17 @@ function generate_reality_keypair_values() {
     let data = output("sing-box generate reality-keypair 2>/dev/null");
     let private_key = first_key_value_line_value(data, "PrivateKey");
     let public_key = first_key_value_line_value(data, "PublicKey");
+    if (private_key == null || public_key == null || private_key == "" || public_key == "") {
+        data = output("xray x25519 2>/dev/null");
+        private_key = line_value_after_label(data, "PrivateKey");
+        if (private_key == null || private_key == "")
+            private_key = line_value_after_label(data, "Private key");
+        public_key = line_value_after_label(data, "PublicKey");
+        if (public_key == null || public_key == "")
+            public_key = line_value_after_label(data, "Password (PublicKey)");
+        if (public_key == null || public_key == "")
+            public_key = line_value_after_label(data, "Public key");
+    }
 
     if (private_key == null || public_key == null || private_key == "" || public_key == "")
         return null;
@@ -684,8 +726,18 @@ function generate_reality_keypair_cli() {
     reality_keypair_response(pair.private_key, pair.public_key);
 }
 
-function write_tls_keypair_data(data, key_path, certificate_path) {
+function private_key_pem(data) {
     let key = pem_block(data, "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----");
+    if (key != "")
+        return key;
+    key = pem_block(data, "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----");
+    if (key != "")
+        return key;
+    return pem_block(data, "-----BEGIN EC PRIVATE KEY-----", "-----END EC PRIVATE KEY-----");
+}
+
+function write_tls_keypair_data(data, key_path, certificate_path) {
+    let key = private_key_pem(data);
     let cert = pem_block(data, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
 
     if (key == "" || cert == "")
@@ -694,8 +746,28 @@ function write_tls_keypair_data(data, key_path, certificate_path) {
     return fs.writefile(key_path, key + "\n") && fs.writefile(certificate_path, cert + "\n");
 }
 
+function openssl_self_signed_pem(server_name) {
+    let cn = replace(as_string(server_name), /[^A-Za-z0-9.-]/g, "");
+    if (cn == "")
+        cn = "forkop";
+    let key_tmp = "/tmp/forkop-tls-" + cn + ".key";
+    let cert_tmp = "/tmp/forkop-tls-" + cn + ".crt";
+    if (!run("openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -keyout " +
+        shell_quote(key_tmp) + " -out " + shell_quote(cert_tmp) +
+        " -subj " + shell_quote("/CN=" + cn) + " >/dev/null 2>&1"))
+        return "";
+    let key = fs.readfile(key_tmp);
+    let cert = fs.readfile(cert_tmp);
+    run("rm -f " + shell_quote(key_tmp) + " " + shell_quote(cert_tmp) + " >/dev/null 2>&1");
+    if (key == null || cert == null)
+        return "";
+    return as_string(key) + "\n" + as_string(cert);
+}
+
 function server_generate_tls_keypair_files(server_name, certificate_path, key_path) {
     let data = output("sing-box generate tls-keypair " + shell_quote(server_name) + " 2>/dev/null");
+    if (data == "")
+        data = openssl_self_signed_pem(server_name);
     if (data == "")
         return false;
 

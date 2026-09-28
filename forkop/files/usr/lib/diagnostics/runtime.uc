@@ -627,6 +627,11 @@ function check_inbounds_config() {
 function check_inbounds() {
     let cfg = settings();
     let sing_box_config_path = option(cfg, "config_path", "");
+    let runtime_config_path = sing_box_config_path;
+    if (engine.is_xray_primary()) {
+        let xray_constants = require("xray.constants");
+        runtime_config_path = xray_constants.XRAY_CONFIG;
+    }
     let wan_ip = get_wan_ip_addresses();
     let wan_public = 0;
     for (let ip in words(wan_ip)) {
@@ -654,8 +659,8 @@ function check_inbounds() {
         let expected_type = server_runtime_type_for_protocol(protocol);
         let required_proto = server_required_inbound_proto(protocol);
         let runtime_json = protocol == "tailscale"
-            ? module_output(PROVIDERS_STATUS_UC, [ "endpoint-summary", sing_box_config_path, inbound_tag ])
-            : module_output(PROVIDERS_STATUS_UC, [ "inbound-summary", sing_box_config_path, inbound_tag ]);
+            ? module_output(PROVIDERS_STATUS_UC, [ "endpoint-summary", runtime_config_path, inbound_tag ])
+            : module_output(PROVIDERS_STATUS_UC, [ "inbound-summary", runtime_config_path, inbound_tag ]);
 
         let listening = -1;
         let firewall_required = 0;
@@ -674,7 +679,7 @@ function check_inbounds() {
         }
 
         let routes_configured = module_success(PROVIDERS_STATUS_UC, [
-            "has-route-rule-for-inbound", sing_box_config_path, inbound_tag
+            "has-route-rule-for-inbound", runtime_config_path, inbound_tag
         ]) ? 1 : 0;
 
         let public_host_ips = protocol == "json_inbound" ? "" : resolve_public_host_ips(public_host);
@@ -712,7 +717,7 @@ function check_inbounds() {
 
     write_json({
         enabled_count,
-        config_path: sing_box_config_path,
+        config_path: runtime_config_path,
         wan_ip,
         wan_public,
         items

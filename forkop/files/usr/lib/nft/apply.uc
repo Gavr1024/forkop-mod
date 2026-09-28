@@ -474,8 +474,91 @@ function nft_create_ifname_set(table, name) {
     return nft_create_set(table, name, "{ type ifname; flags interval; }");
 }
 
+function nft_sleep_seconds(seconds) {
+    seconds = int(seconds || 1);
+    if (seconds < 1)
+        seconds = 1;
+    system("sleep " + as_string(seconds) + " >/dev/null 2>&1");
+}
+
+function nft_capture(args) {
+    let pipe = fs.popen(command_from_args(args) + " 2>&1", "r");
+    if (!pipe)
+        return { ok: false, output: "" };
+    let data = pipe.read("all");
+    let status = pipe.close();
+    return {
+        ok: status == 0,
+        output: data == null ? "" : as_string(data)
+    };
+}
+
+function nft_add_error_kind(output) {
+    output = lc(as_string(output));
+    if (index(output, "no such file") >= 0 || index(output, "does not exist") >= 0 ||
+        index(output, "resource busy") >= 0 || index(output, "device or resource busy") >= 0)
+        return "transient";
+    if (index(output, "overlap") >= 0 || index(output, "file exists") >= 0 || index(output, "exists") >= 0)
+        return "overlap";
+    if (trim(output) == "")
+        return "transient";
+    return "fatal";
+}
+
+function nft_split_elements(elements) {
+    let items = [];
+    for (let item in split(as_string(elements), ",")) {
+        item = trim(item);
+        if (item != "")
+            push(items, item);
+    }
+    return items;
+}
+
+function nft_add_elements_resilient(table, set_name, elements) {
+    elements = as_string(elements);
+    if (elements == "")
+        return true;
+    let tries = 0;
+    while (tries < 5) {
+        let result = nft_capture([ "nft", "add", "element", "inet", table, set_name, "{ " + elements + " }" ]);
+        if (result.ok)
+            return true;
+        let kind = nft_add_error_kind(result.output);
+        if (kind == "transient") {
+            tries++;
+            if (tries < 5)
+                nft_sleep_seconds(1);
+            continue;
+        }
+        let items = nft_split_elements(elements);
+        if (length(items) <= 1)
+            return kind == "overlap";
+        let mid = int(length(items) / 2);
+        if (mid < 1)
+            mid = 1;
+        let left = [];
+        let right = [];
+        let i = 0;
+        for (let item in items) {
+            if (i < mid)
+                push(left, item);
+            else
+                push(right, item);
+            i++;
+        }
+        let ok_left = nft_add_elements_resilient(table, set_name, join(",", left));
+        let ok_right = nft_add_elements_resilient(table, set_name, join(",", right));
+        return ok_left && ok_right;
+    }
+    return false;
+}
+
 function nft_add_set_elements(table, set_name, elements) {
-    return run_nft([ "nft", "add", "element", "inet", table, set_name, "{ " + as_string(elements) + " }" ], "add element " + as_string(set_name));
+    if (nft_add_elements_resilient(table, set_name, elements))
+        return true;
+    log_debug("nftables failed (add element " + as_string(set_name) + ")");
+    return false;
 }
 
 function whitespace_values(value) {
@@ -515,19 +598,19 @@ function nft_install_xray_fakeip_tproxy(table, interface_set, fakeip_range, fake
     let port = as_string(xray_constants.XRAY_TPROXY_FAKEIP_PORT);
     let ok = nft_insert_rule(table, "proxy", [
             "meta", "mark", "&", fakeip_mark, "==", fakeip_mark, "ip6", "daddr", fakeip6_range, "meta", "l4proto", "udp",
-            "tproxy", "ip6", "to", core_ip.format_ipv6_tproxy_target(tproxy6_address, port), "counter"
+            "tproxy", "ip6", "to", core_ip.format_ipv6_tproxy_target(tproxy6_address, port), "counter", "accept"
         ]) &&
         nft_insert_rule(table, "proxy", [
             "meta", "mark", "&", fakeip_mark, "==", fakeip_mark, "ip6", "daddr", fakeip6_range, "meta", "l4proto", "tcp",
-            "tproxy", "ip6", "to", core_ip.format_ipv6_tproxy_target(tproxy6_address, port), "counter"
+            "tproxy", "ip6", "to", core_ip.format_ipv6_tproxy_target(tproxy6_address, port), "counter", "accept"
         ]) &&
         nft_insert_rule(table, "proxy", [
             "meta", "mark", "&", fakeip_mark, "==", fakeip_mark, "ip", "daddr", fakeip_range, "meta", "l4proto", "udp",
-            "tproxy", "ip", "to", ":" + port, "counter"
+            "tproxy", "ip", "to", ":" + port, "counter", "accept"
         ]) &&
         nft_insert_rule(table, "proxy", [
             "meta", "mark", "&", fakeip_mark, "==", fakeip_mark, "ip", "daddr", fakeip_range, "meta", "l4proto", "tcp",
-            "tproxy", "ip", "to", ":" + port, "counter"
+            "tproxy", "ip", "to", ":" + port, "counter", "accept"
         ]);
     if (ok)
         log_debug("Xray FakeIP TPROXY :" + port);
@@ -957,10 +1040,12 @@ function nft_install_resolved_pin_tproxies(table, interface_set) {
         let resolved6 = "forkop_rule_" + name + "_resolved6";
         let v6to = core_ip.format_ipv6_tproxy_target(tproxy6, port);
         let lan = "@" + as_string(interface_set);
-        let ok = nft_insert_rule(table, "proxy", [ "iifname", lan, "ip", "daddr", "@" + resolved, "meta", "l4proto", "udp", "tproxy", "ip", "to", ":" + port, "counter", "accept" ]) &&
-            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip", "daddr", "@" + resolved, "meta", "l4proto", "tcp", "tproxy", "ip", "to", ":" + port, "counter", "accept" ]) &&
-            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip6", "daddr", "@" + resolved6, "meta", "l4proto", "udp", "tproxy", "ip6", "to", v6to, "counter", "accept" ]) &&
-            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip6", "daddr", "@" + resolved6, "meta", "l4proto", "tcp", "tproxy", "ip6", "to", v6to, "counter", "accept" ]);
+        let fake4 = xray_constants.FAKEIP_INET4_RANGE;
+        let fake6 = xray_constants.FAKEIP_INET6_RANGE;
+        let ok = nft_insert_rule(table, "proxy", [ "iifname", lan, "ip", "daddr", "@" + resolved, "ip", "daddr", "!=", fake4, "meta", "l4proto", "udp", "tproxy", "ip", "to", ":" + port, "counter", "accept" ]) &&
+            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip", "daddr", "@" + resolved, "ip", "daddr", "!=", fake4, "meta", "l4proto", "tcp", "tproxy", "ip", "to", ":" + port, "counter", "accept" ]) &&
+            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip6", "daddr", "@" + resolved6, "ip6", "daddr", "!=", fake6, "meta", "l4proto", "udp", "tproxy", "ip6", "to", v6to, "counter", "accept" ]) &&
+            nft_insert_rule(table, "proxy", [ "iifname", lan, "ip6", "daddr", "@" + resolved6, "ip6", "daddr", "!=", fake6, "meta", "l4proto", "tcp", "tproxy", "ip6", "to", v6to, "counter", "accept" ]);
         if (ok)
             log_info("Section pin: " + name + " resolved addresses stay on that section via TPROXY :" + port);
         else
@@ -2375,6 +2460,42 @@ function nft_resolve_xray_domains_from_uci(table) {
     return true;
 }
 
+function nft_restore_cached_community_subnets(section, table) {
+    if (!section_needs_priority_sets(section))
+        return true;
+    let geodata;
+    try {
+        geodata = require("xray.geodata");
+    }
+    catch (e) {
+        return true;
+    }
+    let ports = section_rule_ports_csv(section);
+    let sets = section_priority_sets(section);
+    for (let service in connections.community_lists(section)) {
+        let files = [];
+        try {
+            files = geodata.cached_subnet_files(service);
+        }
+        catch (e2) {
+            files = [];
+        }
+        if (type(files) != "array")
+            continue;
+        for (let path in files) {
+            path = as_string(path);
+            if (path == "")
+                continue;
+            let added = ports != ""
+                ? nft_add_file_chunks_to_family_sets(path, table, sets.ip_ports, sets.ip6_ports, "ip-port-from-ip", ports, 5000)
+                : nft_add_file_chunks_to_family_sets(path, table, sets.subnets, sets.subnets6, "ips", "", 5000);
+            if (!added)
+                return false;
+        }
+    }
+    return true;
+}
+
 function nft_populate_runtime_set_for_section(section, deferred_sections, table, common_set, port_set, ip_port_set, common6_set, ip_port6_set) {
     if (!bool_option(section, "enabled", true))
         return true;
@@ -2395,6 +2516,9 @@ function nft_populate_runtime_set_for_section(section, deferred_sections, table,
 
     if (section_needs_priority_sets(section)) {
         if (!nft_add_section_fully_routed_sources(section, table, 5000))
+            return false;
+
+        if (!nft_restore_cached_community_subnets(section, table))
             return false;
 
         if (!nft_add_resolved_section_domains(section, table))

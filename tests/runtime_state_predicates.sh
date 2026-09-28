@@ -670,6 +670,18 @@ user
 pass
 [rule.proxy1.resolve_real_ip_for_routing]
 1
+[rule.proxy1.xray_finalmask]
+0
+[rule.proxy1.xray_balancer_strategy]
+
+[rule.proxy1.xray_fallback_target]
+
+[rule.proxy1.xray_leastload_expected]
+
+[rule.proxy1.xray_leastload_max_rtt]
+
+[rule.proxy1.xray_leastload_tolerance]
+
 [rule.proxy1.domain]
 full.example,legacy.example
 [rule.proxy1.domain_suffix]
@@ -746,6 +758,18 @@ disabled
 0
 [rule.out1.resolve_real_ip_for_routing]
 0
+[rule.out1.xray_finalmask]
+0
+[rule.out1.xray_balancer_strategy]
+
+[rule.out1.xray_fallback_target]
+
+[rule.out1.xray_leastload_expected]
+
+[rule.out1.xray_leastload_max_rtt]
+
+[rule.out1.xray_leastload_tolerance]
+
 [rule.out1.domain]
 
 [rule.out1.domain_suffix]
@@ -854,6 +878,18 @@ disabled
 0
 [rule.vpn1.resolve_real_ip_for_routing]
 1
+[rule.vpn1.xray_finalmask]
+0
+[rule.vpn1.xray_balancer_strategy]
+
+[rule.vpn1.xray_fallback_target]
+
+[rule.vpn1.xray_leastload_expected]
+
+[rule.vpn1.xray_leastload_max_rtt]
+
+[rule.vpn1.xray_leastload_tolerance]
+
 [rule.vpn1.domain]
 
 [rule.vpn1.domain_suffix]

@@ -539,6 +539,7 @@ export namespace Forkop {
     routing_engine?: 'sing-box' | 'xray' | string;
     server_inbounds_enabled_count: number;
     need_singbox_sidecar?: 0 | 1;
+    need_xray_sidecar?: 0 | 1;
   }
 
   export type ServiceAction = 'start' | 'stop' | 'restart' | 'reload';

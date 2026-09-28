@@ -2315,8 +2315,8 @@ msgstr "Отметьте все нужные готовые списки. Выб
 msgid "Time"
 msgstr "Время"
 
-msgid "Time in seconds for DNS record caching (default: 60). Works only with sing-box."
-msgstr "Время в секундах для кэширования DNS записей (по умолчанию: 60). Работает только с sing-box."
+msgid "How long to keep cached real DNS answers, in seconds (default: 60). FakeIP stays in its own pool and is not stored in this cache. On sing-box this is also the TTL sent to clients."
+msgstr "Сколько секунд хранить кэш обычных DNS-ответов (по умолчанию: 60). FakeIP остаётся в своём пуле и в этот кэш не пишется. На sing-box это ещё и TTL, который видит клиент."
 
 msgid "Time skew tolerance"
 msgstr "Допуск расхождения времени"
@@ -2476,6 +2476,72 @@ msgstr "Настройки URLTest"
 
 msgid "Use 32 hex characters"
 msgstr "Укажите 32 hex-символа"
+
+msgid "Accepted share of failed probes, from 0 to 1."
+msgstr "Допустимая доля неудачных проверок, от 0 до 1."
+
+msgid "Auto"
+msgstr "Авто"
+
+msgid "Balancer strategy"
+msgstr "Стратегия балансировщика"
+
+msgid "Off"
+msgstr "Выключен"
+
+msgid "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected."
+msgstr "Балансировщик выключен. Трафик идёт на выбранный сервер, а если он не выбран — на первый."
+
+msgid "URLTest uses least ping. Without URLTest, Xray picks a server at random."
+msgstr "URLTest выбирает сервер с наименьшей задержкой. Без URLTest Xray берёт сервер случайно."
+
+msgid "Xray picks a server at random."
+msgstr "Xray выбирает сервер случайно."
+
+msgid "Xray walks the servers in order."
+msgstr "Xray идёт по серверам по очереди."
+
+msgid "Xray picks the server with the lowest delay. Servers are probed first."
+msgstr "Xray берёт сервер с наименьшей задержкой. Серверы сначала проверяются."
+
+msgid "Xray picks the most stable servers. Set how many share traffic, the maximum RTT, and how many failed probes are allowed."
+msgstr "Xray берёт самые стабильные серверы. Ниже задаются число серверов, которые делят трафик, максимальный RTT и доля допустимых неудачных проверок."
+
+msgid "Fallback server"
+msgstr "Запасной сервер"
+
+msgid "How many stable servers share new connections."
+msgstr "Сколько стабильных серверов делят новые соединения."
+
+msgid "Domains in this section get a real address, not a FakeIP. A section below cannot take their traffic: if the site name is not visible, it follows full routing or goes direct."
+msgstr "Домены этой секции получают настоящий адрес, а не FakeIP. Секция ниже не заберёт их трафик: если имя сайта не видно, он уйдёт в полную маршрутизацию или напрямую."
+
+msgid "How Xray picks a server in this section."
+msgstr "Как Xray выбирает сервер в этой секции."
+
+msgid "Least load group size"
+msgstr "Размер группы least load"
+
+msgid "Least load max RTT"
+msgstr "Максимальный RTT least load"
+
+msgid "Least load tolerance"
+msgstr "Допуск least load"
+
+msgid "One server from another section, used when the rest are dead."
+msgstr "Один сервер из другой секции, если остальные не отвечают."
+
+msgid "Slowest accepted probe, such as 1s or 500ms."
+msgstr "Самая медленная допустимая проверка, например 1s или 500ms."
+
+msgid "Use a duration like 500ms or 1s"
+msgstr "Укажите длительность, например 500ms или 1s"
+
+msgid "Use a number from 0 to 1"
+msgstr "Укажите число от 0 до 1"
+
+msgid "Use a number from 1 to 16"
+msgstr "Укажите число от 1 до 16"
 
 msgid "Use a domain name or IP address"
 msgstr "Используйте доменное имя или IP-адрес"

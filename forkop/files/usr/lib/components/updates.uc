@@ -2501,20 +2501,30 @@ function list_update() {
     }
 
     for (let section in sections)
-        if (!rebuild_domain_ip_lists_from_rule(section, settings))
+        if (!rebuild_domain_ip_lists_from_rule(section, settings)) {
+            log_message("List update failed while rebuilding domain/IP lists for '" + section_name(section) + "'", "warn");
             ok = false;
+        }
     for (let section in sections)
-        if (!import_builtin_subnets_from_rule(section, settings))
+        if (!import_builtin_subnets_from_rule(section, settings)) {
+            log_message("List update failed while importing built-in subnets for '" + section_name(section) + "'", "warn");
             ok = false;
+        }
     for (let section in sections)
-        if (!import_domains_from_remote_domain_lists(section, settings))
+        if (!import_domains_from_remote_domain_lists(section, settings)) {
+            log_message("List update failed while importing remote domains for '" + section_name(section) + "'", "warn");
             ok = false;
+        }
     for (let section in sections)
-        if (!import_subnets_from_remote_subnet_lists(section, settings))
+        if (!import_subnets_from_remote_subnet_lists(section, settings)) {
+            log_message("List update failed while importing remote subnets for '" + section_name(section) + "'", "warn");
             ok = false;
+        }
     for (let section in sections)
-        if (!import_rule_sets_with_subnets_from_rule(section, settings))
+        if (!import_rule_sets_with_subnets_from_rule(section, settings)) {
+            log_message("List update failed while importing rule-set subnets for '" + section_name(section) + "'", "warn");
             ok = false;
+        }
 
     if (list_cache.persist_enabled(settings)) {
         let persist_result = list_cache.persist_selected_lists(settings, proxy_address);

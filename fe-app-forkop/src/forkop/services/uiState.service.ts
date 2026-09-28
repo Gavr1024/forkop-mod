@@ -81,6 +81,7 @@ function applyServiceState(uiState: Forkop.UiState) {
     server_inbounds_enabled_count:
       uiState.capabilities.server_inbounds_enabled_count,
     need_singbox_sidecar: uiState.capabilities.need_singbox_sidecar ? 1 : 0,
+    need_xray_sidecar: uiState.capabilities.need_xray_sidecar ? 1 : 0,
   };
 
   nextSystemInfo.sing_box_extended = uiState.capabilities.sing_box_extended;

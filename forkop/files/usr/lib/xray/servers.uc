@@ -81,6 +81,37 @@ function duration_ms(value) {
     return int(value, 10) * mult;
 }
 
+function transport_spec(kind) {
+    kind = lc(trim(kind));
+    if (kind == "" || kind == "tcp" || kind == "raw")
+        return { network: "tcp", method: "raw", kind: "raw" };
+    if (kind == "ws" || kind == "websocket")
+        return { network: "ws", method: "websocket", kind: "ws" };
+    if (kind == "grpc")
+        return { network: "grpc", method: "grpc", kind: "grpc" };
+    if (kind == "httpupgrade")
+        return { network: "httpupgrade", method: "httpupgrade", kind: "httpupgrade" };
+    if (kind == "xhttp" || kind == "splithttp")
+        return { network: "xhttp", method: "xhttp", kind: "xhttp" };
+    // HTTP/h2/h3 were removed in Xray 26. Emitting network "http" fails xray -test.
+    if (kind == "http" || kind == "h2" || kind == "h3")
+        return { network: "xhttp", method: "xhttp", kind: "http" };
+    if (kind == "hysteria" || kind == "hysteria2" || kind == "hy2")
+        return { network: "hysteria", method: "hysteria", kind: "hysteria" };
+    return { network: "tcp", method: "raw", kind: "raw" };
+}
+
+function apply_transport_names(stream, kind) {
+    let spec = transport_spec(kind);
+    stream.network = spec.network;
+    stream.method = spec.method;
+    return spec;
+}
+
+function reality_transport_ok(kind) {
+    return kind == "raw" || kind == "xhttp" || kind == "grpc";
+}
+
 function client_settings(section, protocol) {
     let name = user_name(section);
     if (protocol == "vless") {
@@ -90,7 +121,11 @@ function client_settings(section, protocol) {
         let client = { id: uuid, email: name };
         let flow = option(section, "vless_flow", "");
         let transport = option(section, "transport", "tcp");
-        if (flow != "" && flow != "none" && (transport == "" || transport == "tcp" || transport == "raw"))
+        let security = effective_security(section, protocol);
+        // Vision is only valid on RAW with TLS or REALITY. Other combos fail xray -test.
+        if (flow != "" && flow != "none" &&
+            (transport == "" || transport == "tcp" || transport == "raw") &&
+            (security == "tls" || security == "reality"))
             client.flow = flow;
         return { clients: [ client ], decryption: "none" };
     }
@@ -206,34 +241,32 @@ function apply_tls(stream, section, protocol) {
 
 function apply_transport(stream, section, protocol) {
     if (protocol == "hysteria2") {
-        stream.network = "hysteria";
+        apply_transport_names(stream, "hysteria");
         let hy = { version: 2 };
         let up = option(section, "hysteria2_up_mbps", "");
         let down = option(section, "hysteria2_down_mbps", "");
-        if (up != "")
-            hy.up = up + " mbps";
-        if (down != "")
-            hy.down = down + " mbps";
+        if (match(trim(up), /^[0-9]+$/) != null && int(up, 10) > 0)
+            hy.up = trim(up) + "mbps";
+        if (match(trim(down), /^[0-9]+$/) != null && int(down, 10) > 0)
+            hy.down = trim(down) + "mbps";
         stream.hysteriaSettings = hy;
         let obfs = option(section, "hysteria2_obfs_type", "");
         let obfs_password = option(section, "hysteria2_obfs_password", "");
         if (obfs == "salamander" && obfs_password != "")
             stream.finalmask = { udp: [{ type: "salamander", settings: { password: obfs_password } }] };
-        return;
+        return "hysteria";
     }
     if (protocol != "vless" && protocol != "vmess" && protocol != "trojan") {
-        stream.network = "raw";
-        return;
+        apply_transport_names(stream, "tcp");
+        return "raw";
     }
     let transport = option(section, "transport", "tcp");
-    if (transport == "" || transport == "tcp" || transport == "raw") {
-        stream.network = "raw";
-        return;
-    }
+    let spec = apply_transport_names(stream, transport);
+    if (spec.kind == "raw")
+        return "raw";
     let path = option(section, "transport_path", "");
     let host = option(section, "transport_host", "");
-    if (transport == "ws") {
-        stream.network = "ws";
+    if (spec.kind == "ws") {
         let ws = {};
         if (path != "")
             ws.path = path;
@@ -242,48 +275,44 @@ function apply_transport(stream, section, protocol) {
             ws.headers = { Host: host };
         }
         stream.wsSettings = ws;
-        return;
+        return spec.kind;
     }
-    if (transport == "grpc") {
-        stream.network = "grpc";
+    if (spec.kind == "grpc") {
         let grpc = {};
         let service = option(section, "transport_service_name", "");
         if (service != "")
             grpc.serviceName = service;
         stream.grpcSettings = grpc;
-        return;
+        return spec.kind;
     }
-    if (transport == "http") {
-        stream.network = "http";
-        let http = { path: path != "" ? path : "/" };
-        let hosts = nonempty_list(section, "transport_hosts");
-        if (length(hosts) > 0)
-            http.host = hosts;
-        stream.httpSettings = http;
-        return;
-    }
-    if (transport == "httpupgrade") {
-        stream.network = "httpupgrade";
+    if (spec.kind == "httpupgrade") {
         let upgrade = {};
         if (path != "")
             upgrade.path = path;
         if (host != "")
             upgrade.host = host;
         stream.httpupgradeSettings = upgrade;
-        return;
+        return spec.kind;
     }
-    if (transport == "xhttp") {
-        stream.network = "xhttp";
+    if (spec.kind == "xhttp" || spec.kind == "http") {
+        let mode = spec.kind == "http" ? "stream-one" : option(section, "transport_xhttp_mode", "auto");
+        if (mode == "")
+            mode = "auto";
+        if (host == "" && spec.kind == "http") {
+            let hosts = nonempty_list(section, "transport_hosts");
+            if (length(hosts) > 0)
+                host = hosts[0];
+        }
         let xhttp = {
             path: path != "" ? path : "/",
-            mode: option(section, "transport_xhttp_mode", "auto")
+            mode: mode
         };
         if (host != "")
             xhttp.host = host;
         stream.xhttpSettings = xhttp;
-        return;
+        return "xhttp";
     }
-    stream.network = "raw";
+    return spec.kind;
 }
 
 function build_inbound(section, tag) {
@@ -298,8 +327,13 @@ function build_inbound(section, tag) {
         return null;
     let xray_protocol = protocol == "hysteria2" ? "hysteria" : protocol;
     let stream = { security: "none" };
-    apply_transport(stream, section, protocol);
+    let transport_kind = apply_transport(stream, section, protocol);
     let security = effective_security(section, protocol);
+    if (security == "reality" && !reality_transport_ok(transport_kind)) {
+        warn("Xray server '" + option(section, ".name", "") +
+            "' REALITY only supports TCP, XHTTP and gRPC; skipped\n");
+        return null;
+    }
     if (security == "reality") {
         if (!apply_reality(stream, section))
             return null;

@@ -462,7 +462,145 @@ function chosen_section_outbound(section_name, tags) {
     return "";
 }
 
-function add_section(config, taken, section, ports, index, xray_sections, connection_sections, cascade, deferred, nodes_map, node_seq) {
+function xray_balancer_strategy(section) {
+    let raw = lc(trim(option(section, "xray_balancer_strategy", "")));
+    if (raw == "off" || raw == "disabled" || raw == "none")
+        return "off";
+    if (raw == "roundrobin" || raw == "round_robin")
+        return "roundRobin";
+    if (raw == "leastping" || raw == "least_ping")
+        return "leastPing";
+    if (raw == "leastload" || raw == "least_load")
+        return "leastLoad";
+    if (raw == "random")
+        return "random";
+    if (section_uses_urltest(section))
+        return "leastPing";
+    return "random";
+}
+
+function xray_probe_url(section) {
+    if (section_uses_urltest(section))
+        return urltest_probe_url(section);
+    return "https://www.gstatic.com/generate_204";
+}
+
+function xray_probe_interval(section) {
+    if (section_uses_urltest(section))
+        return urltest_interval(section);
+    return "3m";
+}
+
+function parse_unit_fraction(value, fallback) {
+    value = trim(as_string(value));
+    if (match(value, /^[0-9]+(\.[0-9]+)?$/) == null)
+        return fallback;
+    let parsed = null;
+    try {
+        parsed = json(value);
+    }
+    catch (e) {
+        return fallback;
+    }
+    if (type(parsed) != "int" && type(parsed) != "double")
+        return fallback;
+    if (parsed < 0)
+        return 0;
+    if (parsed > 1)
+        return 1;
+    return parsed;
+}
+
+function least_load_settings(section) {
+    let expected = int(option(section, "xray_leastload_expected", "1"));
+    if (expected == null || expected < 1)
+        expected = 1;
+    if (expected > 16)
+        expected = 16;
+    let max_rtt = trim(option(section, "xray_leastload_max_rtt", "1s"));
+    if (match(max_rtt, /^[0-9]+(ms|s|m|h)$/) == null)
+        max_rtt = "1s";
+    return {
+        expected: expected,
+        maxRTT: max_rtt,
+        tolerance: parse_unit_fraction(option(section, "xray_leastload_tolerance", "0.5"), 0.5),
+        baselines: [ max_rtt ]
+    };
+}
+
+function section_fallback_request(section) {
+    let raw = trim(option(section, "xray_fallback_target", ""));
+    let tab = index(raw, "\t");
+    if (tab <= 0)
+        return null;
+    let other = trim(substr(raw, 0, tab));
+    let server = trim(substr(raw, tab + 1));
+    if (other == "" || server == "" || other == as_string(section[".name"]))
+        return null;
+    return { section: other, server: server };
+}
+
+function strategy_needs_observatory(strategy, fallback) {
+    return strategy == "leastPing" || strategy == "leastLoad" || fallback != null;
+}
+
+function ensure_observatory(config, section, tags) {
+    if (type(config.observatory) != "object")
+        config.observatory = {
+            subjectSelector: [],
+            probeUrl: xray_probe_url(section),
+            probeInterval: xray_probe_interval(section),
+            enableConcurrency: true
+        };
+    let seen = {};
+    for (let existing in array_or_empty(config.observatory.subjectSelector))
+        seen[as_string(existing)] = true;
+    for (let tag in tags) {
+        tag = as_string(tag);
+        if (tag == "" || seen[tag])
+            continue;
+        seen[tag] = true;
+        push(config.observatory.subjectSelector, tag);
+    }
+}
+
+function resolve_fallback_tag(nodes_map, request) {
+    request = object_or_empty(request);
+    let nodes = array_or_empty(nodes_map[as_string(request.section)]);
+    let wanted = as_string(request.server);
+    for (let node in nodes) {
+        node = object_or_empty(node);
+        if (as_string(node.tag) == wanted || as_string(node.name) == wanted)
+            return as_string(node.tag);
+    }
+    return "";
+}
+
+function apply_balancer_fallbacks(config, nodes_map, requests) {
+    for (let item in array_or_empty(requests)) {
+        item = object_or_empty(item);
+        let tag = resolve_fallback_tag(nodes_map, item);
+        if (tag == "") {
+            warn("Xray fallback server for section '" + as_string(item.owner) + "' was not found\n");
+            continue;
+        }
+        for (let balancer in array_or_empty(object_or_empty(config.routing).balancers)) {
+            if (type(balancer) != "object")
+                continue;
+            if (as_string(balancer.tag) != as_string(item.balancer))
+                continue;
+            let inside = false;
+            for (let selected in array_or_empty(balancer.selector))
+                if (as_string(selected) == tag)
+                    inside = true;
+            if (inside)
+                continue;
+            balancer.fallbackTag = tag;
+        }
+    }
+}
+
+function add_section(config, taken, section, ports, index, xray_sections, connection_sections, cascade, deferred, nodes_map, node_seq, fallback_requests) {
     let section_name = as_string(section[".name"]);
     let tags = [];
     let display_names = {};
@@ -487,38 +625,38 @@ function add_section(config, taken, section, ports, index, xray_sections, connec
 
     let inbound = xray_constants.inbound_tag(section_name);
     let pinned = chosen_section_outbound(section_name, tags);
-    if (length(tags) > 1 && pinned == "") {
+    let strategy = xray_balancer_strategy(section);
+    let fallback_req = strategy == "off" ? null : section_fallback_request(section);
+    let use_balancer = strategy != "off" && pinned == "" && (length(tags) > 1 || fallback_req != null);
+    if (use_balancer) {
         let balancer = xray_constants.balancer_tag(section_name);
         let selector = [];
         for (let tag in tags)
             push(selector, tag);
         let balancer_cfg = {
             tag: balancer,
-            selector: selector
+            selector: selector,
+            strategy: { type: strategy }
         };
-        if (section_uses_urltest(section)) {
+        if (strategy == "leastLoad")
+            balancer_cfg.strategy.settings = least_load_settings(section);
+        if (strategy == "leastPing" || strategy == "leastLoad")
             balancer_cfg.fallbackTag = tags[0];
-            balancer_cfg.strategy = { type: "leastPing" };
-        }
-        else
-            balancer_cfg.strategy = { type: "random" };
         push(config.routing.balancers, balancer_cfg);
         push(config.routing.rules, {
             type: "field",
             inboundTag: [ inbound ],
             balancerTag: balancer
         });
-        if (section_uses_urltest(section)) {
-            if (type(config.observatory) != "object")
-                config.observatory = {
-                    subjectSelector: [],
-                    probeUrl: urltest_probe_url(section),
-                    probeInterval: urltest_interval(section),
-                    enableConcurrency: true
-                };
-            for (let tag in tags)
-                push(config.observatory.subjectSelector, tag);
-        }
+        if (strategy_needs_observatory(strategy, fallback_req))
+            ensure_observatory(config, section, tags);
+        if (fallback_req != null && type(fallback_requests) == "array")
+            push(fallback_requests, {
+                owner: section_name,
+                balancer: balancer,
+                section: fallback_req.section,
+                server: fallback_req.server
+            });
     }
     else {
         push(config.routing.rules, {
@@ -926,7 +1064,7 @@ function tproxy_fakeip_inbound(tag, listen) {
         },
         sniffing: {
             enabled: true,
-            destOverride: [ "fakedns" ],
+            destOverride: [ "fakedns", "http", "tls", "quic" ],
             metadataOnly: false,
             routeOnly: false
         }
@@ -1082,8 +1220,15 @@ function apply_dial_strategy(config) {
         }
         if (protocol == "freedom" &&
             type(outbound.settings) == "object" &&
-            as_string(outbound.settings.domainStrategy || "") != "")
+            as_string(outbound.settings.domainStrategy || "") != "") {
+            // settings.domainStrategy is not what DialSystem reads. Without sockopt.domainStrategy
+            // the router resolver answers FakeIP and the interface dials 198.18.
+            let explicit = as_string(outbound.settings.domainStrategy);
+            if (explicit == "UseIP")
+                explicit = strategy;
+            outbound.streamSettings.sockopt.domainStrategy = explicit;
             continue;
+        }
         outbound.streamSettings.sockopt.domainStrategy = strategy;
         if (protocol == "freedom") {
             if (type(outbound.settings) != "object")
@@ -1251,21 +1396,6 @@ function collect_byedpi_real_dns_domains(sections) {
     return domains;
 }
 
-function section_uses_interface_outbound(section) {
-    let items = [];
-    try {
-        items = connections.interfaces(section);
-    }
-    catch (e) {
-        items = [];
-    }
-    for (let item in array_or_empty(items)) {
-        if (trim(as_string(item)) != "")
-            return true;
-    }
-    return false;
-}
-
 function collect_fake_dns_domains(sections) {
     let domains = [];
     let unmapped = false;
@@ -1289,8 +1419,6 @@ function collect_fake_dns_domains(sections) {
             continue;
         if (action != "block" && !connections.is_connections_action(action))
             continue;
-        if (section_uses_interface_outbound(section))
-            continue;
         if (section_has_unmapped_domain_list(section))
             unmapped = true;
         for (let value in section_domain_matchers(section)) {
@@ -1301,6 +1429,50 @@ function collect_fake_dns_domains(sections) {
         }
     }
     return { domains, unmapped };
+}
+
+function push_interface_dial_dns(servers, domains, dns_type) {
+    if (length(domains) == 0)
+        return;
+    let pinned = false;
+    for (let value in settings_list("dns_server", "8.8.8.8")) {
+        let address = xray_dns_server_address(dns_type, value);
+        if (address == "")
+            continue;
+        push(servers, {
+            address: address,
+            tag: xray_constants.XRAY_DNS_REMOTE_TAG,
+            domains: domains,
+            skipFallback: true,
+            disableCache: true,
+            serveStale: false,
+            timeoutMs: 2000
+        });
+        pinned = true;
+        break;
+    }
+    if (!pinned)
+        push(servers, {
+            address: "8.8.8.8",
+            tag: xray_constants.XRAY_DNS_REMOTE_TAG,
+            domains: domains,
+            skipFallback: true,
+            disableCache: true,
+            serveStale: false,
+            timeoutMs: 2000
+        });
+}
+
+function dns_cache_ttl() {
+    let value = trim(option(settings_section(), "dns_rewrite_ttl", "60"));
+    if (match(value, /^[0-9]+$/) == null)
+        return 60;
+    let ttl = int(value, 10);
+    if (ttl == null || ttl < 0)
+        return 60;
+    if (ttl > 86400)
+        return 86400;
+    return ttl;
 }
 
 function primary_dns_config(sections) {
@@ -1335,10 +1507,19 @@ function primary_dns_config(sections) {
                 timeoutMs: 2000
             });
     }
-    let fake_server = { address: "fakedns", skipFallback: true };
+    let fake_server = {
+        address: "fakedns",
+        skipFallback: true,
+        disableCache: true,
+        serveStale: false
+    };
     if (length(fake.domains) > 0)
         fake_server.domains = fake.domains;
     push(servers, fake_server);
+    // Freedom dials with FakeEnable off, so FakeDNS is skipped. disableFallbackIfMatch
+    // would then return nothing. A second match on the real resolver supplies the IP
+    // that an interface outbound sends out. disableCache keeps that IP away from clients.
+    push_interface_dial_dns(servers, fake.domains, dns_type);
 
     let hosts = {
         "use-application-dns.net": "127.0.0.1",
@@ -1402,9 +1583,11 @@ function primary_dns_config(sections) {
         hosts,
         servers,
         queryStrategy: xray_query_strategy(),
+        disableCache: false,
         disableFallbackIfMatch: true,
         enableParallelQuery: true,
         serveStale: true,
+        serveExpiredTTL: dns_cache_ttl(),
         timeoutMs: 2000,
         fakedns: [
             { ipPool: xray_constants.FAKEIP_INET4_RANGE, poolSize: 65535 },
@@ -1963,6 +2146,21 @@ function apply_xray_server_route(config, section, tag) {
         apply_server_target_rule(config, tag, { outboundTag: plane_fallback_tag() });
 }
 
+function listen_port_taken(config, port) {
+    port = int(port);
+    if (port <= 0)
+        return true;
+    if (port == int(xray_constants.XRAY_API_PORT))
+        return true;
+    for (let inbound in array_or_empty(config.inbounds)) {
+        if (type(inbound) != "object")
+            continue;
+        if (int(inbound.port || 0) == port)
+            return true;
+    }
+    return false;
+}
+
 function apply_xray_servers(config) {
     if (!engine.is_xray_primary())
         return;
@@ -1979,6 +2177,10 @@ function apply_xray_servers(config) {
         let inbound = xray_servers.build_inbound(section, tag);
         if (type(inbound) != "object") {
             warn("Xray server '" + name + "' is incomplete; skipped\n");
+            continue;
+        }
+        if (listen_port_taken(config, inbound.port)) {
+            warn("Xray server '" + name + "' port " + inbound.port + " is already in use; skipped\n");
             continue;
         }
         push(config.inbounds, inbound);
@@ -1999,6 +2201,7 @@ function generate_config(output_path, ports_path) {
     let node_seq = { next: xray_constants.XRAY_NODE_PORT_BASE };
     let cascade = {};
     let deferred = [];
+    let fallback_requests = [];
     let taken = {};
     taken[xray_constants.FREEDOM_TAG] = true;
     taken[xray_constants.BLACKHOLE_TAG] = true;
@@ -2007,8 +2210,9 @@ function generate_config(output_path, ports_path) {
         apply_primary_plane(config, taken);
 
     for (let i = 0; i < length(sections); i++)
-        add_section(config, taken, sections[i], ports, i, sections, connection_sections, cascade, deferred, nodes_map, node_seq);
+        add_section(config, taken, sections[i], ports, i, sections, connection_sections, cascade, deferred, nodes_map, node_seq, fallback_requests);
     resolve_deferred_xray_detours(config, taken, deferred);
+    apply_balancer_fallbacks(config, nodes_map, fallback_requests);
 
     if (engine.is_xray_primary())
         add_native_policy_outbounds(config, taken);

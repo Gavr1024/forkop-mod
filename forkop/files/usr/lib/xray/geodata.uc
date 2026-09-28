@@ -709,6 +709,16 @@ function subnet_rel_from_url(url) {
     return substr(url, at + 1);
 }
 
+function cached_subnet_files(service) {
+    let files = [];
+    for (let rel in subnet_relpaths(service)) {
+        let path = subnet_cache_path(rel);
+        if (file_size(path) > 0)
+            push(files, path);
+    }
+    return files;
+}
+
 function remember_subnet_file(service, url, src_path) {
     src_path = as_string(src_path);
     if (src_path == "" || file_size(src_path) == 0)
@@ -1531,6 +1541,7 @@ return {
     decompile_srs,
     ensure_from_uci,
     remember_subnet_file,
+    cached_subnet_files,
     stage_geosite_dat,
     restore_flash_dat,
     assets_present_for_uci,

@@ -1331,7 +1331,7 @@ function apply_migrations(ctx) {
         set_list_option(ctx, ctx.model.settings, APPLIED_MIGRATIONS_OPTION, applied);
 
     if (release_at_most(ctx, "1.0.4"))
-        set_option(ctx, ctx.model.settings, CONFIG_VERSION_OPTION, "1.0.5");
+        set_option(ctx, ctx.model.settings, CONFIG_VERSION_OPTION, "1.0.7");
 }
 
 function migrate_podkop_model(model, constants) {

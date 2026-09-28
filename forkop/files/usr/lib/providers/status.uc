@@ -172,11 +172,13 @@ function tagged_runtime_summary(config_path, section_name, tag) {
         return;
     }
 
+    let type_name = as_string(item.type || item.protocol || "");
+    let listen_port = item.listen_port != null ? item.listen_port : item.port;
     write_json({
         exists: 1,
-        type: as_string(item.type),
+        type: type_name,
         listen: as_string(item.listen),
-        listen_port: int_arg(item.listen_port)
+        listen_port: int_arg(listen_port)
     });
 }
 
@@ -186,6 +188,10 @@ function has_route_rule_for_inbound(config_path, inbound) {
         if (type(rule) == "object" &&
             (rule.action == "route" || rule.action == "reject") &&
             value_contains(rule.inbound, inbound))
+            return true;
+    }
+    for (let rule in array_or_empty(config && config.routing && config.routing.rules)) {
+        if (type(rule) == "object" && value_contains(rule.inboundTag, inbound))
             return true;
     }
 

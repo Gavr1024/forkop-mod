@@ -670,13 +670,74 @@ function replace_routing_live(config) {
     let path = "/tmp/forkop-xray-routing.json";
     if (write_file(path, sprintf("%J\n", { routing: config.routing })) == null)
         return false;
+    let server = "127.0.0.1:" + as_string(xray_constants.XRAY_API_PORT);
+    // Default adrules timeout is 3s. A full routing object with community
+    // lists does not apply in that window, so the call always failed.
     let ok = command_success_from_args([
         xray_constants.XRAY_BIN, "api", "adrules",
-        "-s", "127.0.0.1:" + as_string(xray_constants.XRAY_API_PORT),
+        "-s", server,
+        "-t", "60",
         path
     ]);
+    if (!ok)
+        ok = command_success_from_args([
+            xray_constants.XRAY_BIN, "api", "adrules",
+            "-s", server,
+            path
+        ]);
     remove_file(path);
     return ok;
+}
+
+function section_main_inbound_rule(config, section_name) {
+    let inbound = "socks-in-" + as_string(section_name);
+    let probe_prefix = inbound + "-";
+    for (let rule in array_or_empty(object_or_empty(config.routing).rules)) {
+        rule = object_or_empty(rule);
+        let probe_rule = false;
+        let matches_inbound = false;
+        for (let item in array_or_empty(rule.inboundTag)) {
+            item = as_string(item);
+            if (index(item, probe_prefix) == 0)
+                probe_rule = true;
+            if (item == inbound)
+                matches_inbound = true;
+        }
+        if (probe_rule || !matches_inbound)
+            continue;
+        return rule;
+    }
+    return null;
+}
+
+function section_rule_already_pinned(config, section_name, tag) {
+    let rule = section_main_inbound_rule(config, section_name);
+    if (type(rule) != "object")
+        return false;
+    return as_string(rule.outboundTag || "") == as_string(tag) && as_string(rule.balancerTag || "") == "";
+}
+
+function pin_targets_live_node(section_name, tag) {
+    tag = as_string(tag);
+    if (tag == "")
+        return false;
+    for (let node_tag in node_tags_of(section_name))
+        if (as_string(node_tag) == tag)
+            return true;
+    return false;
+}
+
+function override_balancer_ready(balancer_tag, target) {
+    let tries = 0;
+    while (tries < 5) {
+        if (override_balancer_tag(balancer_tag, target, false))
+            return true;
+        if (!process_running())
+            return false;
+        command_status("sleep 1");
+        tries++;
+    }
+    return false;
 }
 
 function apply_saved_balancer_overrides() {
@@ -694,7 +755,11 @@ function apply_saved_balancer_overrides() {
         let pin = as_string(selected[section_name] || "");
         if (pin == "" || pin == xray_constants.XRAY_URLTEST_TAG)
             continue;
-        if (override_balancer_tag(btag, pin, false))
+        if (!pin_targets_live_node(section_name, pin))
+            continue;
+        if (section_rule_already_pinned(config, section_name, pin))
+            continue;
+        if (override_balancer_ready(btag, pin))
             continue;
         log_message("Xray balancer override failed for " + section_name + "; updating rules", "warn");
         retarget_section_rules(config, section_name, pin);
@@ -705,6 +770,12 @@ function apply_saved_balancer_overrides() {
             continue;
         let pin = as_string(selected[section_name] || "");
         if (pin == "" || pin == xray_constants.XRAY_URLTEST_TAG)
+            continue;
+        if (!pin_targets_live_node(section_name, pin))
+            continue;
+        if (section_rule_already_pinned(config, section_name, pin))
+            continue;
+        if (section_main_inbound_rule(config, section_name) == null)
             continue;
         retarget_section_rules(config, section_name, pin);
         dirty = true;

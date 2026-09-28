@@ -359,7 +359,9 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "dns_rewrite_ttl",
     _("DNS Rewrite TTL"),
-    _("Time in seconds for DNS record caching (default: 60). Works only with sing-box."),
+    _(
+      "How long to keep cached real DNS answers, in seconds (default: 60). FakeIP stays in its own pool and is not stored in this cache. On sing-box this is also the TTL sent to clients.",
+    ),
   );
   o.default = "60";
   o.rmempty = false;
@@ -375,7 +377,6 @@ function createSettingsContent(section, capabilities) {
 
     return true;
   };
-  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(form.ListValue, "dns_strategy", _("DNS Strategy"));
   o.value("prefer_ipv4", _("Prefer IPv4"));

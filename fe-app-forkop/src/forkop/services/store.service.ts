@@ -212,6 +212,7 @@ export interface StoreType {
     routing_engine: string;
     server_inbounds_enabled_count: number;
     need_singbox_sidecar?: number;
+    need_xray_sidecar?: number;
     openwrt_version: string;
     device_model: string;
   };

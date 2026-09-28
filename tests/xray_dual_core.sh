@@ -267,6 +267,10 @@ require_contains "$FORKOP_LIB/xray/runtime.uc" 'latency-test' \
   "dashboard latency must probe Xray SOCKS when Clash is absent"
 require_contains "$FORKOP_LIB/service/ui.uc" 'need_singbox_sidecar' \
   "latency worker must not call Clash when the sidecar is not running"
+require_contains "$FORKOP_LIB/service/ui.uc" 'need_xray_sidecar' \
+  "dashboard must know when the Xray sidecar is unused"
+require_contains "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" 'isXraySidecarNeeded' \
+  "unused Xray must show Not used, not Stopped sidecar"
 require_contains "$FORKOP_LIB/subscription/parser.uc" 'query.ech' \
   "hysteria2/vless share-links must parse the ech query parameter"
 

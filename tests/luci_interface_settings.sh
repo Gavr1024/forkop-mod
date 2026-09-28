@@ -15,5 +15,12 @@ grep -Fq 'dnsTypeChoices().forEach((choice) => o.value(choice.value, choice.labe
   fail "network interface settings must populate the DNS protocol field"
 grep -Fq 'o.renderItemSettingsModal = showInterfaceSettingsModal;' "$SECTION_JS" ||
   fail "network interfaces must keep their settings modal handler"
+awk '
+  /InterfaceSettingsDynamicList,/ { iface = 1 }
+  iface && /"outbound_jsons"/ { exit }
+  iface && /effectiveSectionEngine\(this, section_id\) === "xray"/ { found = 1 }
+  END { exit found ? 0 : 1 }
+' "$SECTION_JS" ||
+  fail "network interface settings button must be hidden when the section core is Xray"
 
 printf 'LuCI network interface settings checks passed\n'
