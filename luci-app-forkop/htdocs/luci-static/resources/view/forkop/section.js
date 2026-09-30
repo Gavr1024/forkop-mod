@@ -114,13 +114,408 @@ function isXrayFallbackSection(section, currentSectionId) {
   return settings.currentRoutingEngine() === "xray";
 }
 
+function xrayPlaneSection(option, sectionId) {
+  return (
+    settings.isXrayRoutingEngine(settings.currentRoutingEngine()) &&
+    settings.isXrayRoutingEngine(effectiveSectionEngine(option, sectionId))
+  );
+}
+
+const SHARED_CHECK_STYLE_ID = "fkp-shared-check-styles";
+const sharedCheckBuckets = new Map();
+
+function ensureSharedCheckStyles() {
+  if (document.getElementById(SHARED_CHECK_STYLE_ID)) {
+    return;
+  }
+
+  document.head.appendChild(
+    E(
+      "style",
+      { id: SHARED_CHECK_STYLE_ID },
+      `
+.fkp-shared-check {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0.85rem 0 0.35rem;
+  padding: 0.85rem 1rem 0.45rem;
+  border: 1px solid #3e8f46;
+  border-left: 4px solid #3cae4a;
+  border-radius: 8px;
+  background: rgba(60, 174, 74, 0.06);
+}
+.fkp-shared-check > .cbi-value:not(.hidden) {
+  display: block !important;
+  float: none !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0.75rem 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--border-color-medium, rgba(127, 127, 127, .35)) !important;
+}
+.fkp-shared-check > .cbi-value.hidden {
+  display: none !important;
+}
+.fkp-shared-check > .cbi-value > .cbi-value-title {
+  display: block !important;
+  float: none !important;
+  flex: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 0 0.4rem !important;
+  text-align: left !important;
+  font-weight: 700;
+}
+.fkp-shared-check > .cbi-value > .cbi-value-field {
+  display: block !important;
+  float: none !important;
+  flex: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: left !important;
+}
+.fkp-shared-check > .fkp-shared-check__head > .cbi-value-title {
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+.fkp-shared-check .fkp-shared-check__text {
+  line-height: 1.45;
+  text-align: left;
+}
+.fkp-shared-check .fkp-shared-check__strategy select,
+.fkp-shared-check .fkp-shared-check__strategy .cbi-input-select,
+.fkp-shared-check .fkp-shared-check__strategy .cbi-dropdown {
+  width: var(--fkp-strategy-width, 100%) !important;
+  max-width: 100% !important;
+}
+.fkp-shared-check > .fkp-shared-check__strategy > .cbi-value-field > .cbi-value-description {
+  display: none;
+}
+.fkp-shared-check > .fkp-shared-check__hint {
+  border-bottom: 0 !important;
+  padding-top: 0.35rem !important;
+  padding-bottom: 0.15rem !important;
+}
+.fkp-shared-check > .fkp-shared-check__hint > .cbi-value-title {
+  display: none !important;
+}
+.fkp-shared-check.fkp-shared-check--off {
+  display: none !important;
+}
+`,
+    ),
+  );
+}
+
+function sharedCheckBucket(sectionId) {
+  const key = `${sectionId || ""}`;
+  let bucket = sharedCheckBuckets.get(key);
+  if (!bucket) {
+    bucket = { head: null, urltest: null, strategy: null, hints: [], probes: [] };
+    sharedCheckBuckets.set(key, bucket);
+  }
+  return bucket;
+}
+
+function rememberSharedCheckNode(sectionId, role, node) {
+  const bucket = sharedCheckBucket(sectionId);
+  if (role === "hint" || role === "probe") {
+    const list = role === "hint" ? "hints" : "probes";
+    const id = node.id || "";
+    bucket[list] = bucket[list].filter(
+      (item) => item !== node && item.isConnected && (!id || item.id !== id),
+    );
+    bucket[list].push(node);
+    return;
+  }
+  bucket[role] = node;
+}
+
+function sharedCheckNodes(sectionId) {
+  const key = `${sectionId || ""}`;
+  const connected = Array.from(
+    document.querySelectorAll("[data-fkp-shared-section]"),
+  ).filter(
+    (node) =>
+      node.isConnected && node.getAttribute("data-fkp-shared-section") === key,
+  );
+  const bucket = sharedCheckBuckets.get(key) || {
+    head: null,
+    urltest: null,
+    strategy: null,
+    hints: [],
+    probes: [],
+  };
+  const pick = (role) =>
+    connected.find(
+      (node) => node.getAttribute("data-fkp-shared-option") === role,
+    ) ||
+    (bucket[role] && bucket[role].parentNode ? bucket[role] : null);
+  const pickList = (role) => {
+    const live = connected.filter(
+      (node) => node.getAttribute("data-fkp-shared-option") === role,
+    );
+    if (live.length > 0) {
+      return live;
+    }
+    return (bucket[role === "hint" ? "hints" : "probes"] || []).filter(
+      (node) => node && node.parentNode,
+    );
+  };
+  return {
+    head: pick("head"),
+    urltest: pick("urltest"),
+    strategy: pick("strategy"),
+    hints: pickList("hint"),
+    probes: pickList("probe"),
+  };
+}
+
+function scheduleSharedCheckGroup(sectionId) {
+  const key = `${sectionId || ""}`;
+  if (!key) {
+    return;
+  }
+  const previous = scheduleSharedCheckGroup.timers.get(key);
+  if (previous) {
+    clearTimeout(previous.timer);
+  }
+  let tries = 0;
+  const attempt = () => {
+    tries += 1;
+    if (mountSharedCheckGroup(key) || tries >= 30) {
+      scheduleSharedCheckGroup.timers.delete(key);
+      return;
+    }
+    const timer = setTimeout(attempt, tries < 4 ? 0 : 50);
+    scheduleSharedCheckGroup.timers.set(key, { timer });
+  };
+  const timer = setTimeout(attempt, 0);
+  scheduleSharedCheckGroup.timers.set(key, { timer });
+}
+scheduleSharedCheckGroup.timers = new Map();
+
+function mountSharedCheckGroup(sectionId) {
+  const group = sharedCheckNodes(sectionId);
+  const head = group.head;
+  const strategy = group.strategy;
+  const hints = group.hints;
+  const probes = group.probes;
+  const anchor = strategy && strategy.parentNode ? strategy : null;
+  if (!anchor) {
+    return false;
+  }
+
+  ensureSharedCheckStyles();
+  const currentParent = anchor.parentNode;
+  const parent = currentParent.classList.contains("fkp-shared-check")
+    ? currentParent.parentNode
+    : currentParent;
+  if (!parent) {
+    return false;
+  }
+
+  let box = currentParent.classList.contains("fkp-shared-check")
+    ? currentParent
+    : null;
+  if (!box) {
+    Array.from(parent.children).forEach((node) => {
+      if (
+        node.classList &&
+        node.classList.contains("fkp-shared-check") &&
+        node.getAttribute("data-section") === sectionId
+      ) {
+        box = node;
+      }
+    });
+  }
+
+  if (!sectionShowsSharedCheck(sectionId)) {
+    if (box) {
+      box.classList.add("fkp-shared-check--off");
+    }
+    return true;
+  }
+
+  if (!head) {
+    return false;
+  }
+
+  if (strategy.parentNode === parent) {
+    ensureSharedAnchor(parent, sectionId, strategy);
+  }
+  if (!box) {
+    box = E("div", {
+      class: "fkp-shared-check",
+      "data-section": sectionId,
+    });
+    parent.appendChild(box);
+  }
+  box.classList.remove("fkp-shared-check--off");
+
+  [head, strategy].concat(hints, probes).forEach((node) => {
+    if (node && node.parentNode) {
+      box.appendChild(node);
+    }
+  });
+  placeSharedCheckCard(box, parent);
+  return head.parentNode === box && strategy.parentNode === box;
+}
+
+function sharedAnchorMark(sectionId) {
+  return `fkp-shared-anchor-${sectionId}`;
+}
+
+function findSharedAnchor(parent, sectionId) {
+  const mark = sharedAnchorMark(sectionId);
+  for (let node = parent.firstChild; node; node = node.nextSibling) {
+    if (node.nodeType === 8 && node.nodeValue === mark) {
+      return node;
+    }
+  }
+  return null;
+}
+
+function ensureSharedAnchor(parent, sectionId, beforeNode) {
+  const existing = findSharedAnchor(parent, sectionId);
+  if (existing) {
+    return existing;
+  }
+
+  const anchor = document.createComment(sharedAnchorMark(sectionId));
+  if (beforeNode && beforeNode.parentNode === parent) {
+    parent.insertBefore(anchor, beforeNode);
+  } else {
+    parent.appendChild(anchor);
+  }
+  return anchor;
+}
+
+function sectionShowsSharedCheck(sectionId) {
+  return settings.isXrayRoutingEngine(effectiveSectionEngine(null, sectionId));
+}
+
+function releaseSharedUrlTest(sectionId, urltest, box, parent) {
+  if (urltest.parentNode !== parent) {
+    const anchor = findSharedAnchor(parent, sectionId);
+    if (anchor && anchor.parentNode === parent) {
+      parent.insertBefore(urltest, anchor.nextSibling);
+    } else if (box && box.parentNode === parent) {
+      parent.insertBefore(urltest, box);
+    } else {
+      parent.appendChild(urltest);
+    }
+  }
+
+  const liveAction = liveWidgetValue("action", sectionId);
+  const action =
+    liveAction != null && liveAction !== ""
+      ? liveAction
+      : trimmedUci(sectionId, "action");
+  if (!action || action === "connection") {
+    urltest.classList.remove("hidden");
+  }
+  if (box) {
+    box.classList.add("fkp-shared-check--off");
+  }
+}
+
+function placeSharedCheckCard(box, parent) {
+  parent.appendChild(box);
+
+  const apply = () => {
+    const row = Array.from(parent.children).find(
+      (node) =>
+        node !== box &&
+        node.classList &&
+        node.classList.contains("cbi-value") &&
+        !node.classList.contains("hidden") &&
+        node.querySelector(".cbi-value-title") &&
+        node.querySelector(".cbi-value-field"),
+    );
+    const title = row && row.querySelector(".cbi-value-title");
+    const field = row && row.querySelector(".cbi-value-field");
+    const titleBox = title ? title.getBoundingClientRect() : null;
+    const fieldBox = field ? field.getBoundingClientRect() : null;
+    const sideBySide = Boolean(
+      titleBox &&
+        fieldBox &&
+        fieldBox.width > 40 &&
+        fieldBox.left >= titleBox.right - 8 &&
+        fieldBox.top < titleBox.bottom,
+    );
+
+    if (sideBySide) {
+      const parentBox = parent.getBoundingClientRect();
+      const offset = Math.max(0, Math.round(fieldBox.left - parentBox.left));
+      const fieldWidth = Math.round(fieldBox.width);
+      box.style.marginLeft = `${offset}px`;
+      box.style.width = `${fieldWidth}px`;
+      box.style.maxWidth = `${fieldWidth}px`;
+    } else {
+      box.style.marginLeft = "0px";
+      box.style.width = "100%";
+      box.style.maxWidth = "100%";
+    }
+
+    const sample = Array.from(
+      parent.querySelectorAll("select, .cbi-dropdown"),
+    ).find(
+      (node) => !box.contains(node) && node.getBoundingClientRect().width > 40,
+    );
+    if (sideBySide && sample) {
+      const width = Math.round(sample.getBoundingClientRect().width);
+      if (width > 40) {
+        box.style.setProperty("--fkp-strategy-width", `${width}px`);
+      }
+    } else {
+      box.style.setProperty("--fkp-strategy-width", "100%");
+    }
+  };
+
+  apply();
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(apply);
+  }
+  if (!box.dataset.fkpAlignBound) {
+    box.dataset.fkpAlignBound = "1";
+    window.addEventListener("resize", () => apply());
+  }
+  box._fkpAlign = apply;
+}
+
+function tagSharedCheckNode(option, role) {
+  const render = option.render;
+  option.render = function () {
+    const section_id = arguments.length >= 2 ? arguments[1] : arguments[0];
+    return Promise.resolve(render.apply(this, arguments)).then((node) => {
+      if (node && node.classList) {
+        node.classList.add(`fkp-shared-check__${role}`);
+        node.setAttribute("data-fkp-shared-option", role);
+        node.setAttribute("data-fkp-shared-section", `${section_id || ""}`);
+        rememberSharedCheckNode(section_id, role, node);
+        scheduleSharedCheckGroup(section_id);
+      }
+      return node;
+    });
+  };
+  return option;
+}
+
 function xrayBalancerStrategyText(strategy) {
   const text = {
     off: _(
       "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected.",
     ),
     auto: _(
-      "URLTest uses least ping. Without URLTest, Xray picks a server at random.",
+      "Xray picks a server at random. Choose Least ping or Least load to test servers first.",
     ),
     random: _("Xray picks a server at random."),
     roundRobin: _("Xray walks the servers in order."),
@@ -149,14 +544,25 @@ function addXrayBalancerStrategyHint(section, strategy) {
     hint.depends({ action: "connection", xray_balancer_strategy: "" });
   }
   hint.modalonly = true;
-  hint.rmempty = false;
+  hint.optional = true;
+  hint.rmempty = true;
   hint.title = "";
   hint.cfgvalue = function () {
     return xrayBalancerStrategyText(strategy);
   };
+  hint.validate = function () {
+    return true;
+  };
   hint.write = function () {};
   hint.remove = function () {};
+  tagSharedCheckNode(hint, "hint");
   return hint;
+}
+
+function dependOnObservatoryStrategy(option) {
+  ["leastPing", "leastLoad"].forEach((strategy) => {
+    option.depends({ action: "connection", xray_balancer_strategy: strategy });
+  });
 }
 
 function xrayFallbackTargetChoices(sectionId) {
@@ -2018,7 +2424,7 @@ function proxySecurityChoices() {
 }
 
 function singBoxOnly(text) {
-  return `${text} ${_("Works only with sing-box.")}`;
+  return text;
 }
 
 const PROXY_CORE_ACTIONS = ["connection", "proxy", "outbound", "vpn"];
@@ -2045,15 +2451,42 @@ function liveWidgetValue(name, sectionId) {
     return settings.liveFormValue(name, sectionId);
   }
 
+  const select =
+    (typeof node.querySelector === "function" && node.querySelector("select")) ||
+    document.getElementById(
+      `widget.cbid.${UCI_PACKAGE}.${sectionId}.${name}`,
+    );
+  if (select && `${select.tagName || ""}`.toUpperCase() === "SELECT") {
+    return `${select.value || ""}`.trim();
+  }
+
   if (node.classList && node.classList.contains("cbi-dropdown")) {
-    const hidden = node.querySelectorAll('input[type="hidden"]');
-    if (hidden.length) {
-      return `${hidden[0].value || ""}`.trim();
+    const explicit = node.value != null ? `${node.value}`.trim() : "";
+    if (explicit) {
+      return explicit;
     }
 
-    const selected = node.querySelector("li[data-value][selected]");
+    const selected =
+      typeof node.querySelector === "function"
+        ? node.querySelector("li[data-value][selected]")
+        : null;
     if (selected) {
       return `${selected.getAttribute("data-value") || ""}`.trim();
+    }
+
+    const hidden =
+      typeof node.querySelectorAll === "function"
+        ? node.querySelectorAll('input[type="hidden"]')
+        : [];
+    for (let i = 0; i < hidden.length; i++) {
+      const value = `${hidden[i].value || ""}`.trim();
+      if (value) {
+        return value;
+      }
+    }
+
+    if (hidden.length) {
+      return "";
     }
 
     return "";
@@ -2145,6 +2578,57 @@ function restrictSectionEngine(option, engine, parentSectionId) {
   };
 
   return option;
+}
+
+function refreshSectionEngineFields(option, sectionId) {
+  const section = option && option.section;
+  if (!section || !section.children) {
+    return;
+  }
+
+  const owner = forkopSectionIdFrom(sectionId) || `${sectionId || ""}`;
+  section.children.forEach((child) => {
+    if (
+      !child ||
+      child.forkopEngineRestrict == null ||
+      typeof child.checkDepends !== "function" ||
+      typeof child.cbid !== "function"
+    ) {
+      return;
+    }
+
+    let show = false;
+    try {
+      show = child.checkDepends(owner) !== false;
+    } catch (_error) {
+      return;
+    }
+
+    const fieldId = child.cbid(owner);
+    if (!fieldId || typeof document.querySelectorAll !== "function") {
+      return;
+    }
+
+    document.querySelectorAll(`[data-field="${fieldId}"]`).forEach((field) => {
+      field.classList.toggle("hidden", !show);
+    });
+  });
+
+  mountSharedCheckGroup(owner);
+  scheduleSharedCheckGroup(owner);
+  window.setTimeout(() => {
+    mountSharedCheckGroup(owner);
+    const group = sharedCheckNodes(owner);
+    const box =
+      group.strategy &&
+      group.strategy.parentNode &&
+      group.strategy.parentNode.classList.contains("fkp-shared-check")
+        ? group.strategy.parentNode
+        : null;
+    if (box && box.parentNode) {
+      placeSharedCheckCard(box, box.parentNode);
+    }
+  }, 50);
 }
 
 function bindSectionEngine(itemSection, engine, parentSectionId) {
@@ -2515,6 +2999,13 @@ function addSubscriptionUrlItemOptions(itemSection, options = {}) {
       ? validateRequiredSingBoxDuration(value)
       : validateOptionalSingBoxDuration(value);
   };
+  const subscriptionIntervalRender = o.render;
+  o.render = function () {
+    this.description = settings.isXrayRoutingEngine(settings.currentRoutingEngine())
+      ? _("Duration like 1d, 12h or 30m")
+      : _("Use sing-box duration format like 1d, 12h or 30m");
+    return subscriptionIntervalRender.apply(this, arguments);
+  };
 
   o = itemSection.option(
     form.Flag,
@@ -2634,7 +3125,7 @@ function addSubscriptionUrlItemOptions(itemSection, options = {}) {
       form.Flag,
       "include_urltest_groups",
       _("Import subscription URLTest groups"),
-      _("Import URLTest groups returned by this subscription provider. Works only with sing-box."),
+      _("Import URLTest groups returned by this subscription provider."),
     ),
     "sing-box",
     parentSectionForItem,
@@ -2648,7 +3139,7 @@ function addSubscriptionUrlItemOptions(itemSection, options = {}) {
       "hide_urltest_group_outbounds",
       _("Hide URLTest group nodes"),
       _(
-        "Hide individual nodes that are already included in imported subscription URLTest groups. Works only with sing-box.",
+        "Hide individual nodes that are already included in imported subscription URLTest groups.",
       ),
     ),
     "sing-box",
@@ -2663,7 +3154,7 @@ function addSubscriptionUrlItemOptions(itemSection, options = {}) {
       form.Flag,
       "hide_detour_outbounds",
       _("Hide cascade connection nodes"),
-      _("Hide intermediate nodes used as detours by other subscription nodes. Works only with sing-box."),
+      _("Hide intermediate nodes used as detours by other subscription nodes."),
     ),
     "sing-box",
     parentSectionForItem,
@@ -2683,7 +3174,7 @@ function addInterfaceItemOptions(itemSection, options = {}) {
       form.Flag,
       "domain_resolver_enabled",
       _("Domain Resolver"),
-      _("Enable built-in DNS resolver for domains handled by this section. Works only with sing-box."),
+      _("Enable built-in DNS resolver for domains handled by this section."),
     ),
     "sing-box",
     parentSectionForItem,
@@ -2696,7 +3187,7 @@ function addInterfaceItemOptions(itemSection, options = {}) {
       form.ListValue,
       "domain_resolver_dns_type",
       _("DNS protocol"),
-      _("DNS protocol used by this interface. Works only with sing-box."),
+      _("DNS protocol used by this interface."),
     ),
     "sing-box",
     parentSectionForItem,
@@ -2710,7 +3201,7 @@ function addInterfaceItemOptions(itemSection, options = {}) {
       form.Value,
       "domain_resolver_dns_server",
       _("DNS server"),
-      _("DNS server used by this interface. Works only with sing-box."),
+      _("DNS server used by this interface."),
     ),
     "sing-box",
     parentSectionForItem,
@@ -2761,6 +3252,15 @@ function addUrlTestItemOptions(itemSection, options = {}) {
   o.validate = function (_itemId, value) {
     return validateRequiredSingBoxDuration(value);
   };
+  const intervalRender = o.render;
+  o.render = function () {
+    const owner = parentSectionForItem("settings");
+    const engine = effectiveSectionEngine(null, owner);
+    this.description = settings.isXrayRoutingEngine(engine)
+      ? _("Duration like 1d, 12h or 30m")
+      : _("Use sing-box duration format like 1d, 12h or 30m");
+    return intervalRender.apply(this, arguments);
+  };
 
   o = restrictSectionEngine(
     itemSection.option(
@@ -2768,7 +3268,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
       "tolerance",
       _("Tolerance"),
       _(
-        "Minimum latency difference in milliseconds that triggers switching to a faster server. Works only with sing-box.",
+        "Minimum latency difference in milliseconds that triggers switching to a faster server.",
       ),
     ),
     "sing-box",
@@ -2799,7 +3299,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
       "idle_timeout",
       _("Idle timeout"),
       _(
-        "Stop checking when URLTest group is not used. Use sing-box duration format like 1d, 12h or 30m. Works only with sing-box.",
+        "Stop checking when URLTest group is not used. Use sing-box duration format like 1d, 12h or 30m.",
       ),
     ),
     "sing-box",
@@ -2817,7 +3317,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
       "interrupt_exist_connections",
       _("Interrupt connections"),
       _(
-        "Interrupt connections when URLTest switches the selected server. Works only with sing-box.",
+        "Interrupt connections when URLTest switches the selected server.",
       ),
     ),
     "sing-box",
@@ -2840,7 +3340,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
       form.ListValue,
       "filter_mode",
       _("Server filtering"),
-      _("Allows limiting the list of servers for URLTest. Works only with sing-box."),
+      _("Allows limiting the list of servers for URLTest."),
     ),
     "sing-box",
     parentSectionForItem,
@@ -2855,7 +3355,7 @@ function addUrlTestItemOptions(itemSection, options = {}) {
       form.ListValue,
       "detect_server_country",
       _("Detect server country"),
-      _("Works only with sing-box."),
+      null,
     ),
     "sing-box",
     parentSectionForItem,
@@ -3041,7 +3541,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     form.Value,
     "name",
     _("Level name"),
-    _("Name shown in the priority level list. Works only with sing-box."),
+    _("Name shown in the priority level list."),
   );
   o.rmempty = false;
   o.validate = function (_itemId, value) {
@@ -3052,7 +3552,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     form.Flag,
     "direct",
     _("Direct connection"),
-    _("Traffic for this level goes directly. Works only with sing-box."),
+    _("Traffic for this level goes directly."),
   );
   o.default = "0";
   o.rmempty = false;
@@ -3062,7 +3562,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     "filter_mode",
     _("Server filtering"),
     _(
-      "All remaining servers means every server not already assigned to a higher-priority level. Works only with sing-box.",
+      "All remaining servers means every server not already assigned to a higher-priority level.",
     ),
   );
   priorityLevelFilterModeChoices().forEach((choice) =>
@@ -3075,7 +3575,7 @@ function addPriorityLevelItemOptions(itemSection, options = {}) {
     form.ListValue,
     "detect_server_country",
     _("Detect server country"),
-    _("Works only with sing-box."),
+    null,
   );
   ["exclude", "include", "mixed"].forEach((mode) =>
     o.depends({ direct: "0", filter_mode: mode }),
@@ -3225,7 +3725,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "name",
     _("Display name"),
-    _("Name displayed on the dashboard. Works only with sing-box."),
+    _("Name displayed on the dashboard."),
   );
   o.rmempty = false;
   o.validate = function (_itemId, value) {
@@ -3236,7 +3736,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "health_url",
     _("Check URL"),
-    _("URL used to check whether a server is alive. Works only with sing-box."),
+    _("URL used to check whether a server is alive."),
   );
   o.default = "https://www.gstatic.com/generate_204";
   o.rmempty = false;
@@ -3249,7 +3749,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "active_check_interval",
     _("Check interval"),
-    _("How often the currently selected server is checked. Works only with sing-box."),
+    _("How often the currently selected server is checked."),
   );
   o.default = "5s";
   o.rmempty = false;
@@ -3261,7 +3761,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "check_timeout",
     _("Unavailability timeout"),
-    _("Check timeout after which the server is considered dead. Works only with sing-box."),
+    _("Check timeout after which the server is considered dead."),
   );
   o.default = "2s";
   o.rmempty = false;
@@ -3274,7 +3774,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     "recovery_check_interval",
     _("Higher-level check interval"),
     _(
-      "How often higher priority levels are checked while a lower level is active. Works only with sing-box.",
+      "How often higher priority levels are checked while a lower level is active.",
     ),
   );
   o.default = "15s";
@@ -3288,7 +3788,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     "pick_fastest",
     _("Select the fastest node"),
     _(
-      "When switching to another level, test every server and select the fastest instead of the first working one. Works only with sing-box.",
+      "When switching to another level, test every server and select the fastest instead of the first working one.",
     ),
   );
   o.default = "0";
@@ -3299,7 +3799,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     "switch_to_faster_same_priority",
     _("Automatically select the fastest node in the current level"),
     _(
-      "Periodically check the current level and switch to a faster server even when the current one works. Works only with sing-box.",
+      "Periodically check the current level and switch to a faster server even when the current one works.",
     ),
   );
   o.default = "0";
@@ -3309,7 +3809,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Value,
     "fastest_check_interval",
     _("Faster server search interval"),
-    _("Use sing-box duration format like 1d, 12h or 30m. Works only with sing-box."),
+    _("Use sing-box duration format like 1d, 12h or 30m."),
   );
   o.depends("switch_to_faster_same_priority", "1");
   o.default = "3m";
@@ -3325,7 +3825,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Flag,
     "interrupt_exist_connections",
     _("Interrupt connections"),
-    _("Interrupt connections when priority failover switches server. Works only with sing-box."),
+    _("Interrupt connections when priority failover switches server."),
   );
   o.default = "1";
   o.rmempty = false;
@@ -3334,7 +3834,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     form.Flag,
     "pin_dashboard",
     _("Pin on dashboard"),
-    _("Keep Priority before latency-sorted servers. Works only with sing-box."),
+    _("Keep Priority before latency-sorted servers."),
   );
   o.default = "1";
   o.rmempty = false;
@@ -3343,7 +3843,7 @@ function addPriorityGroupItemOptions(itemSection, options = {}) {
     ButtonAddSettingsDynamicList,
     "priority_level",
     _("Priority levels"),
-    _("Top level has the highest priority; lower levels are used as fallback. Works only with sing-box."),
+    _("Top level has the highest priority; lower levels are used as fallback."),
   );
   o.rmempty = true;
   o.modalonly = true;
@@ -3461,7 +3961,7 @@ function addDashboardServerFilterOptions(section) {
     form.ListValue,
     "dashboard_filter_mode",
     _("Servers on dashboard"),
-    _("Filter the servers that will be displayed on the dashboard. Works only with sing-box."),
+    _("Filter the servers that will be displayed on the dashboard."),
   );
   urlTestFilterModeChoices().forEach((choice) =>
     o.value(choice.value, choice.label),
@@ -3473,7 +3973,7 @@ function addDashboardServerFilterOptions(section) {
     form.ListValue,
     "dashboard_detect_server_country",
     _("Detect server country"),
-    _("Works only with sing-box."),
+    null,
   );
   ["exclude", "include", "mixed"].forEach((mode) =>
     o.depends({ action: "connection", dashboard_filter_mode: mode }),
@@ -7356,6 +7856,27 @@ function createSectionContent(section) {
   o.depends("action", "proxy");
   o.depends("action", "outbound");
   o.depends("action", "vpn");
+  o.onchange = function (_event, section_id) {
+    refreshSectionEngineFields(this, section_id);
+    window.setTimeout(() => refreshSectionEngineFields(this, section_id), 0);
+  };
+  const proxyCoreRender = o.render;
+  o.render = function () {
+    const section_id = arguments.length >= 2 ? arguments[1] : arguments[0];
+    return Promise.resolve(proxyCoreRender.apply(this, arguments)).then((node) => {
+      if (node && node.addEventListener && !node.dataset.fkpEngineRefresh) {
+        node.dataset.fkpEngineRefresh = "1";
+        node.addEventListener("widget-change", () => {
+          refreshSectionEngineFields(this, section_id);
+          window.setTimeout(
+            () => refreshSectionEngineFields(this, section_id),
+            0,
+          );
+        });
+      }
+      return node;
+    });
+  };
 
   o = section.taboption(
     "settings",
@@ -7720,12 +8241,15 @@ function createSectionContent(section) {
   o.onListChange = refreshDashboardFilterChoiceWidgets;
   outboundNameSourceOptions.set("outbound_jsons", o);
 
-  o = section.taboption(
-    "settings",
-    ButtonAddSettingsDynamicList,
-    "urltest",
-    _("URLTest"),
-    _("Server group for automatic lowest-latency selection"),
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      ButtonAddSettingsDynamicList,
+      "urltest",
+      _("URLTest"),
+      _("Server group for automatic lowest-latency selection"),
+    ),
+    "sing-box",
   );
   o.depends("action", "connection");
   o.rmempty = true;
@@ -7785,7 +8309,7 @@ function createSectionContent(section) {
       ButtonAddSettingsDynamicList,
       "priority_group",
       _("Priority"),
-      _("Server group for priority failover. Works only with sing-box."),
+      _("Server group for priority failover."),
     ),
     "sing-box",
   );
@@ -7821,12 +8345,43 @@ function createSectionContent(section) {
   o.onListChange = refreshDashboardFilterChoiceWidgets;
   sectionGroupSourceOptions.set("priority_group", o);
 
+  o = settings.restrictRoutingEngine(
+    restrictSectionEngine(
+      section.taboption("settings", form.DummyValue, "_xray_shared_check"),
+      "xray",
+    ),
+    "xray",
+  );
+  o.depends("action", "connection");
+  o.modalonly = true;
+  o.optional = true;
+  o.rmempty = true;
+  o.title = _("One server check");
+  o.cfgvalue = function () {
+    return _(
+      "Least ping and Least load test servers with one observatory check. The address and interval below are that check. Auto, Random and Round robin do not test servers.",
+    );
+  };
+  o.validate = function () {
+    return true;
+  };
+  o.formvalue = function () {
+    return "";
+  };
+  o.write = function () {};
+  o.remove = function () {};
+  o.renderWidget = function (section_id, _option_index, cfgvalue) {
+    return E("div", { class: "fkp-shared-check__text", id: this.cbid(section_id) }, cfgvalue);
+  };
+  tagSharedCheckNode(o, "head");
+
   o = restrictSectionEngine(
     section.taboption(
       "settings",
       form.ListValue,
       "xray_balancer_strategy",
       _("Balancer strategy"),
+      _("How Xray picks a server in this section."),
     ),
     "xray",
   );
@@ -7843,6 +8398,71 @@ function createSectionContent(section) {
   ["off", "auto", "random", "roundRobin", "leastPing", "leastLoad"].forEach(
     (strategy) => addXrayBalancerStrategyHint(section, strategy),
   );
+  tagSharedCheckNode(o, "strategy");
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_probe_url",
+      _("Probe address"),
+      _("URL Xray uses to test servers."),
+    ),
+    "xray",
+  );
+  dependOnObservatoryStrategy(o);
+  o.modalonly = true;
+  o.rmempty = true;
+  o.default = "https://www.gstatic.com/generate_204";
+  urlTestUrlChoices().forEach((value) => o.value(value));
+  o.validate = function (_section_id, value) {
+    if (value == null || `${value}`.trim() === "") {
+      return true;
+    }
+    return validateUrlTestUrl(value);
+  };
+  tagSharedCheckNode(o, "probe");
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_probe_interval",
+      _("Probe interval"),
+      _("How often Xray tests servers, for example 10s, 3m or 1h."),
+    ),
+    "xray",
+  );
+  dependOnObservatoryStrategy(o);
+  o.modalonly = true;
+  o.rmempty = true;
+  o.default = "3m";
+  o.placeholder = "3m";
+  o.validate = function (_section_id, value) {
+    if (value == null || `${value}`.trim() === "") {
+      return true;
+    }
+    return /^[0-9]+(ms|s|m|h)$/.test(`${value}`.trim())
+      ? true
+      : _("Use a duration like 10s, 3m or 1h");
+  };
+  tagSharedCheckNode(o, "probe");
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "xray_probe_concurrency",
+      _("Probe in parallel"),
+      _("Test servers at the same time instead of one after another."),
+    ),
+    "xray",
+  );
+  dependOnObservatoryStrategy(o);
+  o.modalonly = true;
+  o.default = "1";
+  o.rmempty = false;
+  tagSharedCheckNode(o, "probe");
 
   o = restrictSectionEngine(
     section.taboption(
@@ -7870,6 +8490,7 @@ function createSectionContent(section) {
     }
     return _("Use a number from 1 to 16");
   };
+  tagSharedCheckNode(o, "probe");
 
   o = restrictSectionEngine(
     section.taboption(
@@ -7894,6 +8515,7 @@ function createSectionContent(section) {
       ? true
       : _("Use a duration like 500ms or 1s");
   };
+  tagSharedCheckNode(o, "probe");
 
   o = restrictSectionEngine(
     section.taboption(
@@ -7920,6 +8542,7 @@ function createSectionContent(section) {
     }
     return _("Use a number from 0 to 1");
   };
+  tagSharedCheckNode(o, "probe");
 
   o = restrictSectionEngine(
     section.taboption(
@@ -7952,6 +8575,83 @@ function createSectionContent(section) {
       return saved;
     });
   };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "xray_mux_enabled",
+      _("Mux"),
+      _(
+        "Pack many site connections into one TCP channel. VLESS Vision and Hysteria2 stay unchanged.",
+      ),
+    ),
+    "xray",
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends("action", "connection");
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_mux_concurrency",
+      _("Connections per channel"),
+      _("How many connections share one channel. From 1 to 128."),
+    ),
+    "xray",
+  );
+  o.default = "8";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.datatype = "uinteger";
+  o.depends({ action: "connection", xray_mux_enabled: "1" });
+  o.validate = function (_section_id, value) {
+    const count = Number.parseInt(value, 10);
+    if (!Number.isFinite(count) || count < 1 || count > 128) {
+      return _("Use a number from 1 to 128");
+    }
+    return true;
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "xray_mux_xudp",
+      _("XUDP"),
+      _("Carry UDP inside the same channel."),
+    ),
+    "xray",
+  );
+  o.default = "1";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_mux_enabled: "1" });
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.ListValue,
+      "xray_mux_udp443",
+      _("UDP/443 through Mux"),
+      _("QUIC and some video traffic use UDP on port 443."),
+    ),
+    "xray",
+  );
+  o.default = "reject";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.value("reject", _("Do not send"));
+  o.value("allow", _("Send"));
+  o.value("skip", _("Bypass Mux"));
+  o.depends({
+    action: "connection",
+    xray_mux_enabled: "1",
+    xray_mux_xudp: "1",
+  });
 
   o = section.taboption(
     "settings",
@@ -8035,7 +8735,7 @@ function createSectionContent(section) {
       form.Flag,
       "mixed_proxy_enabled",
       _("Enable Mixed Proxy"),
-      _("Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."),
+      _("Expose this section as a local HTTP+SOCKS proxy."),
     ),
     "sing-box",
   );
@@ -8053,7 +8753,7 @@ function createSectionContent(section) {
       form.Value,
       "mixed_proxy_port",
       _("Mixed Proxy Port"),
-      _("Port for the local mixed proxy of this section. Works only with sing-box."),
+      _("Port for the local mixed proxy of this section."),
     ),
     "sing-box",
   );
@@ -8082,7 +8782,7 @@ function createSectionContent(section) {
       form.Flag,
       "mixed_proxy_auth_enabled",
       _("Enable Mixed Proxy Authentication"),
-      _("Require a username and password for the local mixed proxy. Works only with sing-box."),
+      _("Require a username and password for the local mixed proxy."),
     ),
     "sing-box",
   );
@@ -8100,7 +8800,7 @@ function createSectionContent(section) {
       form.Value,
       "mixed_proxy_username",
       _("Mixed Proxy Username"),
-      _("Works only with sing-box."),
+      null,
     ),
     "sing-box",
   );
@@ -8140,7 +8840,7 @@ function createSectionContent(section) {
       form.Value,
       "mixed_proxy_password",
       _("Mixed Proxy Password"),
-      _("Works only with sing-box."),
+      null,
     ),
     "sing-box",
   );
@@ -8181,7 +8881,7 @@ function createSectionContent(section) {
       "resolve_real_ip_for_routing",
       _("Resolve real IP for routing"),
       _(
-        "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box.",
+        "Resolve domain names before routing so sing-box can use real destination IPs.",
       ),
     ),
     "sing-box",
@@ -8210,7 +8910,7 @@ function createSectionContent(section) {
       "xray_finalmask",
       _("FinalMask"),
       _(
-        "Split the TLS handshake toward servers in this section. The server does not need the same setting. Works only with Xray.",
+        "Split the TLS handshake toward servers in this section. The server does not need the same setting.",
       ),
     ),
     "xray",
@@ -8229,7 +8929,7 @@ function createSectionContent(section) {
       form.Value,
       "xray_finalmask_length",
       _("FinalMask length"),
-      _("Byte size of each piece, for example 100-200. Works only with Xray."),
+      _("Byte size of each piece, for example 100-200."),
     ),
     "xray",
   );
@@ -8252,7 +8952,7 @@ function createSectionContent(section) {
       form.Value,
       "xray_finalmask_interval",
       _("FinalMask interval"),
-      _("Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."),
+      _("Pause between pieces, in milliseconds, for example 10-20."),
     ),
     "xray",
   );

@@ -9,6 +9,7 @@ GEN="$LIB/xray/generator.uc"
 RT="$LIB/xray/runtime.uc"
 UPD="$LIB/components/updates.uc"
 NFT_APPLY="$LIB/nft/apply.uc"
+LIST_CACHE="$LIB/routing/list_cache.uc"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -73,8 +74,12 @@ extract_fn "$GEN" "generate_config" | grep -Fq 'sanitize_generated_config' ||
   fail "generated Xray JSON must be sanitized before write/test"
 extract_fn "$GEO" "community_matchers" | grep -Fq 'community_subnet_ips' ||
   fail "itdog IP lists (discord/telegram) must stay RAW CIDRs, not geosite"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'community_lst_path' ||
+extract_fn "$GEO" "community_matchers" | grep -Fq 'community_lst_readable' ||
   fail "itdog RAW .lst remains a fallback when allow-domains.dat is missing"
+extract_fn "$GEO" "community_lst_path" | grep -Fq 'cache_dir() + "/" + rel' ||
+  fail "domain lists must keep Categories/ and Services/ so they do not overwrite subnet files"
+extract_fn "$GEO" "subnet_relpaths" | grep -Fq 'Subnets/IPv6/' ||
+  fail "IPv6 subnet lists must stay in their own directory"
 extract_fn "$GEO" "community_matchers" | grep -Fq 'dat_matcher_usable' ||
   fail "community geosite:/ext: fallback must use the global tag check"
 extract_fn "$GEO" "stage_geosite_dat_inner" | grep -Fq 'looks_like_itdog_dat' ||
@@ -151,6 +156,20 @@ extract_fn "$UPD" "list_update_if_missing" | grep -Fq 'persist_enabled' ||
   fail "start must download lists every boot when persist_lists_locally is off"
 extract_fn "$GEO" "assets_present_for_uci" | grep -Fq 'allow_domains_dat_present' ||
   fail "start must force list-update when required DAT is missing"
+extract_fn "$GEO" "assets_present_for_uci" | grep -Fq 'community_subnets_ready' ||
+  fail "start must treat a community list without its subnet file as missing"
+extract_fn "$GEO" "community_subnet_ips" | grep -Fq 'readable_cache_file' ||
+  fail "subnet lists must be unpacked from the saved gzip after reboot"
+extract_fn "$GEO" "community_lst_readable" | grep -Fq 'readable_cache_file' ||
+  fail "domain lists must be unpacked from the saved gzip after reboot"
+extract_fn "$LIST_CACHE" "module_exports" | grep -Fq 'ensure_cached_alias' ||
+  fail "list cache must export the reboot restore helper"
+extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'subnet file was not downloaded' ||
+  fail "list conversion must not accept a community list that has domains but no subnets"
+extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'return ok' ||
+  fail "list conversion must report a failed subnet download"
+grep -Fq 'remember_subnet_file' "$UPD" ||
+  fail "list-update must store built-in subnet files for Xray routing"
 extract_fn "$GEO" "restore_flash_dat" | grep -Fq 'persist_dat_to_flash' ||
   fail "existing DAT in /usr/share/xray must be copied onto flash cache"
 grep -Fq 'list-update-if-missing' "$ROOT_DIR/forkop/files/usr/lib/service/lifecycle.uc" ||
@@ -159,6 +178,8 @@ grep -Fq '/etc/forkop/list-update.timestamp' "$UPD" ||
   fail "list-update timestamp must live on flash so reboot does not re-download"
 extract_fn "$UPD" "list_update_if_missing" | grep -Fq 'list_update_if_due' ||
   fail "start must download lists only when the configured interval has elapsed"
+extract_fn "$UPD" "list_update_if_missing" | grep -Fq 'selected_lists_ready' ||
+  fail "start must download selected lists and subnets when the cache is empty"
 extract_fn "$UPD" "list_update" | grep -Fq 'skip reload' ||
   fail "list-update must not reload Xray when config.json did not change"
 
@@ -208,8 +229,12 @@ extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -Fq 'nft_r
   fail "nft rebuild must restore cached community subnets so a reload cannot drop them"
 extract_fn "$NFT_APPLY" "nft_add_elements_resilient" | grep -Fq 'overlap' ||
   fail "overlapping nft set elements must be inserted one by one instead of failing the batch"
-extract_fn "$GEO" "cached_subnet_files" | grep -Fq 'subnet_cache_path' ||
-  fail "community subnet cache must be readable after list-update"
+extract_fn "$GEO" "subnet_cache_path" | grep -Fq '/etc/forkop/list-cache/' ||
+  fail "shared subnet lists must live in /etc/forkop/list-cache/Subnets"
+extract_fn "$GEO" "ensure_shared_subnets" | grep -Fq 'subnet_cache_path' ||
+  fail "both engines must download shared subnet lists"
+grep -Fq 'ensure_shared_subnets' "$UPD" ||
+  fail "the dashboard download must fetch shared subnet lists"
 grep -Fq 'nft-write-xray-nftset-conf' "$UPD" ||
   fail "list-update must rewrite Xray nftset after fetching RAW lst"
 pass "Xray routing/FakeDNS consume converted matchers"

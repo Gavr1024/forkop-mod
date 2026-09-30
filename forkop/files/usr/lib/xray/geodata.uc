@@ -151,6 +151,23 @@ function file_size(path) {
     return int(st.size || st.length || 0);
 }
 
+function readable_cache_file(path) {
+    path = as_string(path);
+    if (path == "")
+        return "";
+    let restored = "";
+    try {
+        restored = list_cache.ensure_cached_alias(path);
+    }
+    catch (e) {
+        restored = "";
+    }
+    restored = as_string(restored);
+    if (restored != "" && file_size(restored) > 0)
+        return restored;
+    return file_size(path) > 0 ? path : "";
+}
+
 function file_mtime(path) {
     let st = fs.stat(as_string(path));
     if (st == null)
@@ -661,9 +678,21 @@ function community_lst_path(name) {
     let rel = community_lst_relpath(name);
     if (rel == "")
         return "";
+    return cache_dir() + "/" + rel;
+}
+
+function community_lst_readable(name) {
+    let path = readable_cache_file(community_lst_path(name));
+    if (path != "")
+        return path;
+    let rel = community_lst_relpath(name);
     let slash = rindex(rel, "/");
-    let basename = slash >= 0 ? substr(rel, slash + 1) : rel;
-    return cache_dir() + "/" + basename;
+    if (slash < 0)
+        return community_lst_path(name);
+    let legacy = readable_cache_file(cache_dir() + "/" + substr(rel, slash + 1));
+    if (legacy != "")
+        return legacy;
+    return community_lst_path(name);
 }
 
 function native_xray_list_name(name) {
@@ -697,7 +726,40 @@ function subnet_cache_path(rel) {
     rel = trim(as_string(rel));
     if (rel == "")
         return "";
+    return "/etc/forkop/list-cache/" + rel;
+}
+
+function legacy_subnet_cache_path(rel) {
+    rel = trim(as_string(rel));
+    if (rel == "")
+        return "";
     return cache_dir() + "/" + rel;
+}
+
+function move_subnet_file(src, dest) {
+    src = as_string(src);
+    dest = as_string(dest);
+    if (src == "" || dest == "" || src == dest || file_size(src) == 0)
+        return false;
+    return system("mv -f " + shell_quote(src) + " " + shell_quote(dest)) == 0;
+}
+
+function adopt_legacy_subnet(rel) {
+    let path = subnet_cache_path(rel);
+    let legacy = legacy_subnet_cache_path(rel);
+    if (path == "" || legacy == "" || path == legacy)
+        return;
+    if (file_size(path) > 0 || file_size(path + ".gz") > 0)
+        return;
+    let slash = rindex(path, "/");
+    if (slash > 0 && !ensure_dir(substr(path, 0, slash)))
+        return;
+    if (file_size(legacy + ".gz") > 0)
+        move_subnet_file(legacy + ".gz", path + ".gz");
+    if (file_size(legacy + ".gz.size") > 0)
+        move_subnet_file(legacy + ".gz.size", path + ".gz.size");
+    if (file_size(path + ".gz") == 0 && file_size(legacy) > 0)
+        move_subnet_file(legacy, path);
 }
 
 function subnet_rel_from_url(url) {
@@ -712,11 +774,23 @@ function subnet_rel_from_url(url) {
 function cached_subnet_files(service) {
     let files = [];
     for (let rel in subnet_relpaths(service)) {
-        let path = subnet_cache_path(rel);
-        if (file_size(path) > 0)
+        adopt_legacy_subnet(rel);
+        let path = readable_cache_file(subnet_cache_path(rel));
+        if (path != "")
             push(files, path);
     }
     return files;
+}
+
+function community_subnets_ready(name) {
+    if (!community_has_subnets(name))
+        return true;
+    for (let rel in subnet_relpaths(name)) {
+        adopt_legacy_subnet(rel);
+        if (readable_cache_file(subnet_cache_path(rel)) == "")
+            return false;
+    }
+    return true;
 }
 
 function remember_subnet_file(service, url, src_path) {
@@ -724,8 +798,13 @@ function remember_subnet_file(service, url, src_path) {
     if (src_path == "" || file_size(src_path) == 0)
         return false;
     let rel = subnet_rel_from_url(url);
-    if (rel == "" && community_has_subnets(service))
-        rel = "Subnets/IPv4/" + trim(as_string(service)) + ".lst";
+    if (rel == "") {
+        let slash = rindex(as_string(url), "/");
+        let leaf = slash >= 0 ? substr(as_string(url), slash + 1) : "list.lst";
+        if (leaf == "")
+            leaf = "list.lst";
+        rel = "Subnets/" + trim(as_string(service)) + "/" + leaf;
+    }
     let dest = subnet_cache_path(rel);
     if (dest == "")
         return false;
@@ -1016,7 +1095,7 @@ function fetch_url(url, path, proxy_address, force) {
         parent = substr(path, 0, slash);
     if (parent != "" && !ensure_dir(parent))
         return false;
-    if (!force && file_size(path) > 0)
+    if (!force && readable_cache_file(path) != "")
         return true;
     return list_cache.download_to_file(url, path, proxy_address);
 }
@@ -1098,7 +1177,7 @@ function fetch_url_quick(url, path) {
     path = as_string(path);
     if (url == "" || path == "")
         return false;
-    if (file_size(path) > 0)
+    if (readable_cache_file(path) != "")
         return true;
     let parent = "";
     let slash = rindex(path, "/");
@@ -1108,8 +1187,8 @@ function fetch_url_quick(url, path) {
         return false;
     if (!ensure_dir("/tmp/forkop-stage"))
         return false;
-    let name = slash >= 0 ? substr(path, slash + 1) : "fetch";
-    let tmp = "/tmp/forkop-stage/" + name + ".quick." + as_string(clock()[0]);
+    let token = replace(path, /[^A-Za-z0-9._-]+/g, "_");
+    let tmp = "/tmp/forkop-stage/" + token + ".quick." + as_string(clock()[0]);
     log_message("quick-fetch " + url + " (" + QUICK_FETCH_SECONDS + "s)", "info");
     let status = system(
         command_from_args([
@@ -1153,7 +1232,7 @@ function list_option_values(section, key) {
 }
 
 function lst_nftset_hosts(name) {
-    let path = community_lst_path(name);
+    let path = community_lst_readable(name);
     if (file_size(path) == 0)
         return [];
     let data = fs.readfile(path);
@@ -1166,8 +1245,9 @@ function community_subnet_ips(name) {
     let ips = [];
     let seen = {};
     for (let rel in subnet_relpaths(name)) {
-        let path = subnet_cache_path(rel);
-        if (file_size(path) == 0)
+        adopt_legacy_subnet(rel);
+        let path = readable_cache_file(subnet_cache_path(rel));
+        if (path == "")
             continue;
         let data = fs.readfile(path);
         if (data == null)
@@ -1198,7 +1278,7 @@ function community_matchers(name) {
     }
 
     if (length(domains) == 0) {
-        let lst_path = community_lst_path(name);
+        let lst_path = community_lst_readable(name);
         if (file_size(lst_path) > 0) {
             let from_lst = lst_to_matchers(lst_path);
             if (from_lst.ok) {
@@ -1214,8 +1294,8 @@ function community_matchers(name) {
         push_unique(domains, "ext:adlist.dat:" + ADLIST_CODE, seen_domains);
 
     if (length(domains) == 0 && name == "supercell") {
-        let json_path = supercell_json_path();
-        if (file_size(json_path) > 0) {
+        let json_path = readable_cache_file(supercell_json_path());
+        if (json_path != "") {
             let from_json = source_json_to_matchers(json_decode_text(fs.readfile(json_path)));
             if (from_json.ok) {
                 for (let value in array_or_empty(from_json.domains))
@@ -1236,8 +1316,8 @@ function community_matchers(name) {
     }
 
     if (length(domains) == 0 && name == "github") {
-        let list_path = github_list_path();
-        if (file_size(list_path) > 0) {
+        let list_path = readable_cache_file(github_list_path());
+        if (list_path != "") {
             let from_lst = lst_to_matchers(list_path);
             if (from_lst.ok) {
                 for (let value in array_or_empty(from_lst.domains))
@@ -1276,6 +1356,8 @@ function list_file_matchers(reference) {
         path = cached_srs_path(reference);
     }
     if (file_size(path) == 0)
+        path = readable_cache_file(path);
+    if (path == "")
         return empty_matchers();
     let ext = singbox_rulesets.file_extension(path);
     if (ext == "srs")
@@ -1375,6 +1457,8 @@ function assets_present_for_uci() {
             need_v2fly = true;
         if (name == "ads_hagezi_pro")
             need_adlist = true;
+        if (!community_subnets_ready(name))
+            return false;
     }
     if (need_itdog && !allow_domains_dat_present())
         return false;
@@ -1396,6 +1480,21 @@ function ensure_reference(reference, proxy_address, force) {
     if (ext == "srs" || ext == "")
         decompile_srs(path);
     return file_size(path) > 0;
+}
+
+function ensure_shared_subnets(proxy_address, force) {
+    force = force === true;
+    let ok = true;
+    for (let name in needed_from_sections(uci_sections())) {
+        for (let rel in subnet_relpaths(name)) {
+            adopt_legacy_subnet(rel);
+            let path = subnet_cache_path(rel);
+            let url = ITDOG_RAW_BASE + "/" + rel;
+            if (!fetch_url(url, path, proxy_address, force) && readable_cache_file(path) == "")
+                ok = false;
+        }
+    }
+    return ok;
 }
 
 function ensure_from_uci(settings, proxy_address, force) {
@@ -1427,6 +1526,8 @@ function ensure_from_uci(settings, proxy_address, force) {
     );
 
     let ok = true;
+    if (allow_network && !ensure_shared_subnets(proxy_address, force))
+        ok = false;
     if (need_dat && (force || !allow_domains_dat_present())) {
         if (allow_network) {
             log_message(
@@ -1478,21 +1579,15 @@ function ensure_from_uci(settings, proxy_address, force) {
 
     for (let name in names) {
         if (allow_network) {
-            for (let rel in subnet_relpaths(name)) {
-                let url = ITDOG_RAW_BASE + "/" + rel;
-                let path = subnet_cache_path(rel);
-                if (!fetch_url(url, path, proxy_address, force) && file_size(path) == 0)
-                    ok = false;
-            }
             if (community_lst_url(name) != "") {
                 let lst_url = community_lst_url(name);
                 if (!fetch_url(lst_url, community_lst_path(name), proxy_address, force) &&
-                    file_size(community_lst_path(name)) == 0)
+                    readable_cache_file(community_lst_path(name)) == "")
                     ok = false;
             }
             if (name == "supercell") {
                 if (!fetch_url(SUPERCELL_JSON_URL, supercell_json_path(), proxy_address, force) &&
-                    file_size(supercell_json_path()) == 0)
+                    readable_cache_file(supercell_json_path()) == "")
                     ok = false;
             }
             if (name == "github") {
@@ -1504,6 +1599,10 @@ function ensure_from_uci(settings, proxy_address, force) {
                 if (srs_url != "")
                     fetch_url(srs_url, cached_srs_path(srs_url), proxy_address, force);
             }
+        }
+        if (!community_subnets_ready(name)) {
+            log_message("community list " + name + " is incomplete: subnet file was not downloaded", "warn");
+            ok = false;
         }
         if (!community_matchers(name).ok && community_ext_tag(name) == "")
             ok = false;
@@ -1525,7 +1624,7 @@ function ensure_from_uci(settings, proxy_address, force) {
         }
     }
 
-    return true;
+    return ok;
 }
 
 return {
@@ -1540,8 +1639,10 @@ return {
     lst_to_matchers,
     decompile_srs,
     ensure_from_uci,
+    ensure_shared_subnets,
     remember_subnet_file,
     cached_subnet_files,
+    community_subnets_ready,
     stage_geosite_dat,
     restore_flash_dat,
     assets_present_for_uci,

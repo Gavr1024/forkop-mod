@@ -1647,9 +1647,157 @@ function clash_api_url() {
 
 function clash_auth_args() {
     let cfg = settings();
-    if (!bool_option(cfg, "enable_yacd_wan_access", false))
+    let secret = option(cfg, "yacd_secret_key", "");
+    if (secret == "")
         return [];
-    return [ "--header", "Authorization: Bearer " + option(cfg, "yacd_secret_key", "") ];
+    return [ "--header", "Authorization: Bearer " + secret ];
+}
+
+function as_array(value) {
+    return type(value) == "array" ? value : [];
+}
+
+function singbox_pid() {
+    let pids = trim(command_output_from_args([ "pidof", "sing-box" ]));
+    if (pids == "")
+        return "";
+    return as_string(split(pids, " ")[0]);
+}
+
+function connection_section_names() {
+    let names = [];
+    for (let section in uci_core.section_objects(CONFIG_NAME, "section")) {
+        section = object_or_empty(section);
+        let name = as_string(section[".name"] || "");
+        let action = as_string(section.action || "");
+        if (name == "" || as_string(section.enabled || "1") == "0")
+            continue;
+        if (action != "connection" && action != "proxy" && action != "outbound" && action != "vpn")
+            continue;
+        push(names, name);
+    }
+    return names;
+}
+
+function connection_chains(conn) {
+    conn = object_or_empty(conn);
+    let chains = [];
+    for (let item in as_array(conn.chains || conn.Chains)) {
+        item = trim(as_string(item));
+        if (item != "")
+            push(chains, item);
+    }
+    let meta = object_or_empty(conn.metadata || conn.Metadata);
+    let outbound = trim(as_string(meta.outbound || meta.Outbound || ""));
+    if (outbound != "")
+        push(chains, outbound);
+    let routed = match(as_string(conn.rule || conn.Rule || ""), /route\(([^)]+)\)/);
+    if (routed != null) {
+        let tag = trim(replace(as_string(routed[1]), /^['"]|['"]$/g, ""));
+        if (tag != "")
+            push(chains, tag);
+    }
+    return chains;
+}
+
+function matching_sections(chains, names) {
+    let found = [];
+    let seen = {};
+    for (let name in names) {
+        name = as_string(name);
+        if (name == "" || seen[name])
+            continue;
+        let prefix = name + "-";
+        let tag = prefix + "out";
+        let matched = false;
+        for (let chain in chains) {
+            chain = as_string(chain);
+            if (chain == tag || index(chain, prefix) == 0) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched)
+            continue;
+        seen[name] = true;
+        push(found, name);
+    }
+    return found;
+}
+
+function empty_section_traffic(names) {
+    let sections = {};
+    for (let name in names)
+        sections[as_string(name)] = { uplink: 0, downlink: 0 };
+    return sections;
+}
+
+function singbox_section_traffic_json() {
+    let traffic_file = RUNTIME_STATE_DIR + "/singbox-section-traffic.json";
+    let names = connection_section_names();
+    let pid = singbox_pid();
+    let state = read_json_file(traffic_file);
+    if (type(state) != "object" || as_string(state.pid || "") != pid)
+        state = { pid: pid, seen: {}, sections: empty_section_traffic(names) };
+    if (type(state.seen) != "object")
+        state.seen = {};
+    if (type(state.sections) != "object")
+        state.sections = {};
+    for (let name in names) {
+        if (type(state.sections[name]) != "object")
+            state.sections[name] = { uplink: 0, downlink: 0 };
+    }
+
+    let args = [ "curl", "-sS", "--max-time", "3" ];
+    for (let item in clash_auth_args())
+        push(args, item);
+    push(args, "http://" + clash_api_url() + "/connections");
+    let parsed = parse_json_or_null(command_output_from_args(args));
+    if (type(parsed) != "object" || (parsed.connections == null && parsed.Connections == null)) {
+        write_json({ success: false, sections: state.sections });
+        return 0;
+    }
+    let live = {};
+    for (let conn in as_array(parsed.connections || parsed.Connections)) {
+        conn = object_or_empty(conn);
+        let id = trim(as_string(conn.id || conn.ID || ""));
+        if (id == "")
+            continue;
+        let matched = matching_sections(connection_chains(conn), names);
+        if (length(matched) == 0)
+            continue;
+        let upload = int(conn.upload || conn.Upload || 0);
+        let download = int(conn.download || conn.Download || 0);
+        if (upload < 0)
+            upload = 0;
+        if (download < 0)
+            download = 0;
+        let previous = object_or_empty(state.seen[id]);
+        let had_previous = type(state.seen[id]) == "object";
+        let uplink_delta = upload;
+        let downlink_delta = download;
+        if (had_previous) {
+            uplink_delta = upload - int(previous.upload || 0);
+            downlink_delta = download - int(previous.download || 0);
+            if (uplink_delta < 0)
+                uplink_delta = upload;
+            if (downlink_delta < 0)
+                downlink_delta = download;
+        }
+        for (let section_name in matched) {
+            let bucket = object_or_empty(state.sections[section_name]);
+            bucket.uplink = int(bucket.uplink || 0) + uplink_delta;
+            bucket.downlink = int(bucket.downlink || 0) + downlink_delta;
+            state.sections[section_name] = bucket;
+        }
+        live[id] = { upload: upload, download: download };
+    }
+    state.seen = live;
+    state.pid = pid;
+    if (ensure_dir(RUNTIME_STATE_DIR))
+        fs.writefile(traffic_file, sprintf("%J\n", state));
+    write_json({ success: true, sections: state.sections });
+    return 0;
 }
 
 function clash_urlencode(value) {
@@ -2090,6 +2238,8 @@ else if (mode == "neutralize-zapret-defaults")
     exit(neutralize_zapret_defaults());
 else if (mode == "clash-api")
     exit(clash_api(ARGV[1], ARGV[2], ARGV[3], ARGV[4]));
+else if (mode == "section-traffic")
+    exit(singbox_section_traffic_json());
 else if (mode == "show-config")
     exit(show_config(ARGV[1] || "masked"));
 else if (mode == "show-version")

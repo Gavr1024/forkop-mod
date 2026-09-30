@@ -1373,6 +1373,13 @@ function append_sing_box_rule_signature_body(body, section, sections) {
         body = signature_add_value(body, prefix + ".xray_leastload_expected", option(section, "xray_leastload_expected", ""));
         body = signature_add_value(body, prefix + ".xray_leastload_max_rtt", option(section, "xray_leastload_max_rtt", ""));
         body = signature_add_value(body, prefix + ".xray_leastload_tolerance", option(section, "xray_leastload_tolerance", ""));
+        body = signature_add_value(body, prefix + ".xray_mux_enabled", bool_option_value(section, "xray_mux_enabled", false));
+        if (bool_option(section, "xray_mux_enabled", false)) {
+            body = signature_add_value(body, prefix + ".xray_mux_concurrency", option(section, "xray_mux_concurrency", "8"));
+            body = signature_add_value(body, prefix + ".xray_mux_xudp", bool_option_value(section, "xray_mux_xudp", true));
+            if (bool_option(section, "xray_mux_xudp", true))
+                body = signature_add_value(body, prefix + ".xray_mux_udp443", option(section, "xray_mux_udp443", "reject"));
+        }
     }
     else if (action == "byedpi") {
         body = signature_add_value(body, prefix + ".byedpi_index", sing_box_signature_enabled_action_index(sections, name, "byedpi"));

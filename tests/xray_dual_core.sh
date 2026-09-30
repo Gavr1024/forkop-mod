@@ -100,6 +100,8 @@ require_contains "$FORKOP_LIB/xray/runtime.uc" 'urltest-worker' \
   "xray URLTest auto-switch must run without sing-box Clash API"
 require_contains "$FORKOP_LIB/xray/runtime.uc" 'XRAY_URLTEST_TAG' \
   "xray dashboard Fastest must clear the pinned outbound and restore URLTest"
+require_contains "$FORKOP_LIB/xray/runtime.uc" 'function section_balancer_active' \
+  "xray dashboard must offer Auto so a pinned server can be released back to the balancer"
 require_contains "$FORKOP_LIB/xray/runtime.uc" 'function section_inbound_tag' \
   "URLTest worker must not call xray_constants.inbound_tag (LHS is not a function on some ucode builds)"
 require_contains "$FORKOP_LIB/xray/runtime.uc" 'function section_is_connection' \

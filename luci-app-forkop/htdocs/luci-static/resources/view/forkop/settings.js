@@ -251,7 +251,7 @@ function createSettingsContent(section, capabilities) {
     "xray_freedom_fragment",
     _("Fragment direct connections"),
     _(
-      "Split the TLS handshake on direct Xray connections so filters do not see the site name in one packet. Works only with Xray.",
+      "Split the TLS handshake on direct Xray connections so filters do not see the site name in one packet.",
     ),
   );
   o.default = "0";
@@ -262,7 +262,7 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "xray_freedom_fragment_length",
     _("Fragment length"),
-    _("Byte size of each piece, for example 100-200. Works only with Xray."),
+    _("Byte size of each piece, for example 100-200."),
   );
   o.default = "100-200";
   o.rmempty = false;
@@ -278,7 +278,7 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "xray_freedom_fragment_interval",
     _("Fragment interval"),
-    _("Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."),
+    _("Pause between pieces, in milliseconds, for example 10-20."),
   );
   o.default = "10-20";
   o.rmempty = false;
@@ -330,7 +330,7 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "dns_check_interval",
     _("DNS Check Interval"),
-    _("How often to check the active DNS servers. Works only with sing-box."),
+    _("How often to check the active DNS servers."),
   );
   configureDnsDuration(o, "10s", dnsOption, bootstrapOption);
   restrictRoutingEngine(o, "sing-box");
@@ -339,7 +339,7 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "dns_recovery_check_interval",
     _("Higher-priority DNS Check"),
-    _("How often to check whether a higher-priority DNS server has recovered. Works only with sing-box."),
+    _("How often to check whether a higher-priority DNS server has recovered."),
   );
   configureDnsDuration(o, "60s", dnsOption, bootstrapOption);
   restrictRoutingEngine(o, "sing-box");
@@ -349,7 +349,7 @@ function createSettingsContent(section, capabilities) {
     "dns_check_timeout",
     _("DNS Unavailability Timeout"),
     _(
-      "Maximum time to wait for example.com to resolve during a DNS health check. Works only with sing-box.",
+      "Maximum time to wait for example.com to resolve during a DNS health check.",
     ),
   );
   configureDnsDuration(o, "2s", dnsOption, bootstrapOption);
@@ -666,8 +666,7 @@ function createSettingsContent(section, capabilities) {
     form.Flag,
     "enable_yacd",
     _("Enable YACD"),
-    `<a href="${main.getClashUIUrl()}" target="_blank">${main.getClashUIUrl()}</a>. ` +
-      _("Works only with sing-box."),
+    `<a href="${main.getClashUIUrl()}" target="_blank">${main.getClashUIUrl()}</a>`,
   );
   o.default = "0";
   o.rmempty = false;
@@ -678,7 +677,7 @@ function createSettingsContent(section, capabilities) {
     "enable_yacd_wan_access",
     _("Enable YACD WAN Access"),
     _(
-      "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall. Works only with sing-box.",
+      "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall.",
     ),
   );
   o.depends("enable_yacd", "1");
@@ -691,7 +690,7 @@ function createSettingsContent(section, capabilities) {
     "yacd_secret_key",
     _("YACD Secret Key"),
     _(
-      "Secret key for authenticating remote access to YACD when WAN access is enabled. Works only with sing-box.",
+      "Secret key for authenticating remote access to YACD when WAN access is enabled.",
     ),
   );
   o.depends("enable_yacd_wan_access", "1");
@@ -866,7 +865,7 @@ function createSettingsContent(section, capabilities) {
     "config_path",
     _("Config File Path"),
     _(
-      "Select path for sing-box config file. Change this ONLY if you know what you are doing. Works only with sing-box.",
+      "Select path for sing-box config file. Change this ONLY if you know what you are doing.",
     ),
   );
   o.value("/etc/sing-box/config.json", "Flash (/etc/sing-box/config.json)");
@@ -880,7 +879,7 @@ function createSettingsContent(section, capabilities) {
     "cache_path",
     _("Cache File Path"),
     _(
-      "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing. Works only with sing-box.",
+      "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing.",
     ),
   );
   o.value("/tmp/sing-box/cache.db", "RAM (/tmp/sing-box/cache.db)");

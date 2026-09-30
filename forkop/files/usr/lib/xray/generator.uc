@@ -195,11 +195,31 @@ function share_link_scheme(link) {
     return marker > 0 ? lc(substr(link, 0, marker)) : "unknown";
 }
 
-function add_converted(config, taken, ir, tag_base, display_names, display_name) {
+function section_mux_spec(section) {
+    if (!bool_option(section, "xray_mux_enabled", false))
+        return { enabled: false };
+    let concurrency = int(option(section, "xray_mux_concurrency", "8"), 10);
+    if (concurrency == null || concurrency < 1)
+        concurrency = 8;
+    if (concurrency > 128)
+        concurrency = 128;
+    let udp443 = lc(trim(option(section, "xray_mux_udp443", "reject")));
+    if (udp443 != "allow" && udp443 != "skip")
+        udp443 = "reject";
+    return {
+        enabled: true,
+        concurrency: concurrency,
+        xudp: bool_option(section, "xray_mux_xudp", true),
+        udp443: udp443
+    };
+}
+
+function add_converted(config, taken, ir, tag_base, display_names, display_name, mux_spec) {
     let tag = unique_tag(tag_base, taken);
     let converted = xray_outbound.convert_ir(ir, tag);
     if (converted == null)
         return "";
+    xray_outbound.apply_mux(converted, mux_spec);
     taken[tag] = true;
     push(config.outbounds, converted);
     if (type(display_names) == "object") {
@@ -226,7 +246,7 @@ function add_manual_links(config, taken, section, tags, display_names) {
         if (lc(as_string(ir.type || "")) == "hysteria2" && type(ir.obfs) == "object" && as_string(object_or_empty(ir.obfs).type || "") != "" && as_string(ir.obfs.type) != "none")
             warn("xray: Hysteria2 '" + as_string(ir.tag || "") + "' in section '" + section_name + "' uses " + as_string(ir.obfs.type) + " via FinalMask\n");
         let tag_base = as_string(ir.tag || (section_name + "-" + (i + 1)));
-        let tag = add_converted(config, taken, ir, tag_base, display_names, ir.tag || ir.remark);
+        let tag = add_converted(config, taken, ir, tag_base, display_names, ir.tag || ir.remark, section_mux_spec(section));
         if (tag != "")
             push(tags, tag);
         else
@@ -243,7 +263,7 @@ function add_json_outbounds(config, taken, section, tags, display_names) {
             generate_fail("xray JSON outbound is invalid in section " + section_name);
         }
         let tag_base = as_string(parsed.tag || (section_name + "-json-" + (i + 1)));
-        let tag = add_converted(config, taken, parsed, tag_base, display_names, parsed.tag);
+        let tag = add_converted(config, taken, parsed, tag_base, display_names, parsed.tag, section_mux_spec(section));
         if (tag != "")
             push(tags, tag);
         else
@@ -272,7 +292,7 @@ function add_subscriptions(config, taken, section, tags, display_names) {
             let display = as_string(outbound.remark || outbound.tag || "server");
             if (node_prefix != "")
                 display = node_prefix + " " + display;
-            let tag = add_converted(config, taken, outbound, display, display_names, display);
+            let tag = add_converted(config, taken, outbound, display, display_names, display, section_mux_spec(section));
             if (tag != "")
                 push(tags, tag);
         }
@@ -472,23 +492,33 @@ function xray_balancer_strategy(section) {
         return "leastPing";
     if (raw == "leastload" || raw == "least_load")
         return "leastLoad";
-    if (raw == "random")
+    if (raw == "random" || raw == "auto" || raw == "")
         return "random";
-    if (section_uses_urltest(section))
-        return "leastPing";
     return "random";
 }
 
 function xray_probe_url(section) {
+    let url = trim(option(section, "xray_probe_url", ""));
+    if (url != "")
+        return url;
     if (section_uses_urltest(section))
         return urltest_probe_url(section);
     return "https://www.gstatic.com/generate_204";
 }
 
 function xray_probe_interval(section) {
+    let interval = trim(option(section, "xray_probe_interval", ""));
+    if (match(interval, /^[0-9]+(ms|s|m|h)$/) != null)
+        return interval;
     if (section_uses_urltest(section))
         return urltest_interval(section);
     return "3m";
+}
+
+function xray_probe_concurrency(section) {
+    if (option(section, "xray_probe_concurrency", "") == "")
+        return true;
+    return bool_option(section, "xray_probe_concurrency", true);
 }
 
 function parse_unit_fraction(value, fallback) {
@@ -550,7 +580,7 @@ function ensure_observatory(config, section, tags) {
             subjectSelector: [],
             probeUrl: xray_probe_url(section),
             probeInterval: xray_probe_interval(section),
-            enableConcurrency: true
+            enableConcurrency: xray_probe_concurrency(section)
         };
     let seen = {};
     for (let existing in array_or_empty(config.observatory.subjectSelector))
@@ -598,6 +628,28 @@ function apply_balancer_fallbacks(config, nodes_map, requests) {
             balancer.fallbackTag = tag;
         }
     }
+}
+
+function node_stream_security(stream) {
+    let security = lc(as_string(object_or_empty(stream).security || ""));
+    if (security == "none" || security == "zero" || security == "auto")
+        return "";
+    return security;
+}
+
+function node_stream_mask(stream) {
+    let mask = object_or_empty(object_or_empty(stream).finalmask);
+    for (let item in array_or_empty(mask.udp)) {
+        let kind = lc(as_string(object_or_empty(item).type || ""));
+        if (kind != "" && kind != "none")
+            return kind;
+    }
+    for (let item in array_or_empty(mask.tcp)) {
+        let kind = lc(as_string(object_or_empty(item).type || ""));
+        if (kind != "" && kind != "none")
+            return kind;
+    }
+    return "";
 }
 
 function add_section(config, taken, section, ports, index, xray_sections, connection_sections, cascade, deferred, nodes_map, node_seq, fallback_requests) {
@@ -704,7 +756,9 @@ function add_section(config, taken, section, ports, index, xray_sections, connec
             name: node_name,
             kind: kind,
             protocol: as_string(object_or_empty(outbound).protocol || ""),
-            network: network
+            network: network,
+            security: node_stream_security(stream),
+            mask: node_stream_mask(stream)
         });
     }
     nodes_map[section_name] = section_nodes;
@@ -2008,6 +2062,29 @@ function add_native_policy_outbounds(config, taken) {
     }
 }
 
+function outbound_is_local_socks(outbound) {
+    outbound = object_or_empty(outbound);
+    if (lc(as_string(outbound.protocol || "")) != "socks")
+        return false;
+    let address = lc(trim(as_string(object_or_empty(outbound.settings).address || "")));
+    return address == "127.0.0.1" || address == "::1" || address == "localhost";
+}
+
+function outbound_mark_value(outbound) {
+    return int(object_or_empty(object_or_empty(object_or_empty(outbound).streamSettings).sockopt).mark || 0);
+}
+
+function outbound_is_provider_direct(outbound) {
+    if (lc(as_string(object_or_empty(outbound).protocol || "")) != "freedom")
+        return false;
+    let mark = outbound_mark_value(outbound);
+    if (mark <= 0)
+        return false;
+    let zapret = int(sb_constants.ZAPRET_ROUTE_MARK_BASE);
+    let zapret2 = int(sb_constants.ZAPRET2_ROUTE_MARK_BASE);
+    return (mark >= zapret && mark < zapret + 256) || (mark >= zapret2 && mark < zapret2 + 256);
+}
+
 function apply_output_interface(config) {
     let iface = output_network_interface();
     if (iface == "")
@@ -2016,6 +2093,8 @@ function apply_output_interface(config) {
         if (type(outbound) != "object")
             continue;
         if (lc(as_string(outbound.protocol || "")) == "blackhole")
+            continue;
+        if (outbound_is_local_socks(outbound) || outbound_is_provider_direct(outbound))
             continue;
         if (type(outbound.streamSettings) != "object")
             outbound.streamSettings = {};

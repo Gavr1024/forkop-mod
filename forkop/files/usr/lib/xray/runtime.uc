@@ -118,6 +118,17 @@ function file_stamp(path) {
     return as_string(path) + ":" + as_string(st.size || 0) + ":" + as_string(st.mtime || 0);
 }
 
+function subscription_cache_stamp() {
+    let dir = getenv("TMP_SUBSCRIPTION_FOLDER") || "/tmp/sing-box/subscriptions";
+    let stamps = [];
+    for (let path in fs.glob(dir + "/*.json"))
+        push(stamps, file_stamp(path));
+    sort(stamps);
+    if (length(stamps) == 0)
+        return dir + ":empty";
+    return join("\n", stamps);
+}
+
 function config_input_fingerprint() {
     let body = join("\n", [
         file_stamp("/etc/config/forkop"),
@@ -126,6 +137,7 @@ function config_input_fingerprint() {
         file_stamp(xray_constants.ALLOW_DOMAINS_DAT_ETC),
         file_stamp(xray_constants.XRAY_LOCATION_ASSET + "/geosite.dat"),
         file_stamp(xray_constants.XRAY_LOCATION_ASSET + "/adlist.dat"),
+        subscription_cache_stamp(),
         "balancer-live-switch-2"
     ]);
     let tmp = "/tmp/forkop-xray-fp." + as_string(clock()[0]);
@@ -1072,6 +1084,49 @@ function xray_established_count() {
     return count;
 }
 
+function outbound_traffic_map(parsed) {
+    let result = {};
+    for (let stat in stats_entries(parsed)) {
+        let name = as_string(object_or_empty(stat).name || object_or_empty(stat).Name || "");
+        if (index(name, "outbound>>>") != 0 || index(name, ">>>traffic>>>") < 0)
+            continue;
+        if (index(name, "outbound>>>api>>>") == 0)
+            continue;
+        let parts = split(name, ">>>");
+        if (length(parts) < 4)
+            continue;
+        let tag = as_string(parts[1]);
+        if (tag == "")
+            continue;
+        if (type(result[tag]) != "object")
+            result[tag] = { uplink: 0, downlink: 0 };
+        if (index(name, ">>>uplink") >= 0)
+            result[tag].uplink += stat_value(stat);
+        else if (index(name, ">>>downlink") >= 0)
+            result[tag].downlink += stat_value(stat);
+    }
+    return result;
+}
+
+function section_traffic_map(by_tag) {
+    let sections = {};
+    let nodes = read_nodes();
+    for (let section_name in nodes) {
+        let uplink = 0;
+        let downlink = 0;
+        for (let node in array_or_empty(nodes[section_name])) {
+            let tag = as_string(object_or_empty(node).tag || "");
+            if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG)
+                continue;
+            let item = object_or_empty(by_tag[tag]);
+            uplink += int(item.uplink || 0);
+            downlink += int(item.downlink || 0);
+        }
+        sections[section_name] = { uplink, downlink };
+    }
+    return sections;
+}
+
 function stats_json() {
     if (!engine.is_xray_primary() || !process_running()) {
         write_json({
@@ -1086,6 +1141,7 @@ function stats_json() {
     let traffic = xray_inbound_stats();
     let uplink = traffic.uplink;
     let downlink = traffic.downlink;
+    let sections = section_traffic_map(outbound_traffic_map(parse_json_object(xray_api_output("statsquery"))));
     if (uplink <= 0 && downlink <= 0) {
         let nft_bytes = nft_chain_bytes("proxy");
         if (nft_bytes <= 0)
@@ -1096,6 +1152,7 @@ function stats_json() {
         success: true,
         uplink,
         downlink,
+        sections,
         connections: xray_established_count(),
         memory: xray_sys_alloc()
     });
@@ -1510,6 +1567,31 @@ function uci_section_uses_urltest(section_name) {
     return length(connections.urltests(section)) > 0;
 }
 
+function section_balancer_active(section_name) {
+    let section = uci_section_by_name(section_name);
+    if (length(section) == 0)
+        return false;
+    let raw = trim(as_string(section.xray_balancer_strategy || ""));
+    return raw != "off" && raw != "disabled" && raw != "none";
+}
+
+function prepend_auto_node(list, name) {
+    for (let node in list)
+        if (as_string(object_or_empty(node).tag || "") == xray_constants.XRAY_URLTEST_TAG)
+            return list;
+    let auto_node = {
+        tag: xray_constants.XRAY_URLTEST_TAG,
+        name: name,
+        kind: "auto",
+        protocol: "auto",
+        delay: 0
+    };
+    let prefixed = [ auto_node ];
+    for (let node in list)
+        push(prefixed, node);
+    return prefixed;
+}
+
 function section_node_tags(section_name) {
     let result = [];
     for (let node in array_or_empty(read_nodes()[section_name])) {
@@ -1546,30 +1628,126 @@ function write_latency_delays(updates) {
     return write_file(path, sprintf("%J\n", delays)) != null;
 }
 
+function strategy_tile_name(raw) {
+    raw = lc(trim(as_string(raw)));
+    if (raw == "roundrobin" || raw == "round_robin")
+        return "roundRobin";
+    if (raw == "leastping" || raw == "least_ping")
+        return "leastPing";
+    if (raw == "leastload" || raw == "least_load")
+        return "leastLoad";
+    if (raw == "random")
+        return "random";
+    if (raw == "off" || raw == "disabled" || raw == "none")
+        return "off";
+    return "auto";
+}
+
+function lowest_delay_tag(list) {
+    let best = "";
+    let best_delay = 0;
+    for (let node in list) {
+        node = object_or_empty(node);
+        let tag = as_string(node.tag || "");
+        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG)
+            continue;
+        let delay = int(node.delay || 0);
+        if (delay <= 0)
+            continue;
+        if (best == "" || delay < best_delay) {
+            best = tag;
+            best_delay = delay;
+        }
+    }
+    return best;
+}
+
+function latest_detour_index() {
+    let index_by_tag = {};
+    let next = 0;
+    let data = command_output("tail -n 400 " + shell_quote(xray_constants.XRAY_ACCESS_LOG) + " 2>/dev/null");
+    for (let line in split(as_string(data), "\n")) {
+        let detour_pos = index(line, "detour: ");
+        if (detour_pos < 0)
+            continue;
+        let detour = trim(substr(line, detour_pos + 8));
+        let space = index(detour, " ");
+        if (space >= 0)
+            detour = substr(detour, 0, space);
+        if (detour == "")
+            continue;
+        next++;
+        index_by_tag[detour] = next;
+    }
+    return index_by_tag;
+}
+
+function active_node_tag(section_name, list, strategy_name, detours) {
+    let pin = as_string(object_or_empty(read_selected_outbounds())[section_name] || "");
+    if (pin != "" && pin != xray_constants.XRAY_URLTEST_TAG)
+        return pin;
+    let best = "";
+    let best_i = 0;
+    detours = object_or_empty(detours);
+    for (let node in list) {
+        let tag = as_string(object_or_empty(node).tag || "");
+        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG)
+            continue;
+        let seen = int(detours[tag] || 0);
+        if (seen > best_i) {
+            best = tag;
+            best_i = seen;
+        }
+    }
+    if (best != "")
+        return best;
+    if (strategy_name == "leastPing" || strategy_name == "leastLoad")
+        return lowest_delay_tag(list);
+    return as_string(urltest_chosen[section_name] || "");
+}
+
 function nodes_with_latency() {
     let nodes = read_nodes();
     let delays = read_json_object(xray_constants.XRAY_LATENCY_FILE);
+    let detours = latest_detour_index();
     for (let section_name in nodes) {
         let list = array_or_empty(nodes[section_name]);
-        if (uci_section_uses_urltest(section_name)) {
-            let auto_node = {
-                tag: xray_constants.XRAY_URLTEST_TAG,
-                name: "Fastest",
-                kind: "urltest",
-                delay: 0
-            };
-            let prefixed = [ auto_node ];
-            for (let node in list)
-                push(prefixed, node);
-            list = prefixed;
+        let strategy_name = "auto";
+        if (length(list) > 1 && (uci_section_uses_urltest(section_name) || section_balancer_active(section_name))) {
+            let section = uci_section_by_name(section_name);
+            strategy_name = strategy_tile_name(section.xray_balancer_strategy);
+            list = prepend_auto_node(list, strategy_name);
         }
         for (let node in list) {
             if (type(node) != "object")
                 continue;
             let tag = as_string(node.tag || "");
             let delay = int(delays[tag] || 0);
-            if (delay > 0)
-                node.delay = delay;
+            node.delay = delay;
+            if (delays[tag] != null)
+                node.probed = true;
+        }
+        let tile = null;
+        let active = null;
+        let active_tag = active_node_tag(section_name, list, strategy_name, detours);
+        for (let node in list) {
+            if (type(node) != "object")
+                continue;
+            let tag = as_string(node.tag || "");
+            if (tag == xray_constants.XRAY_URLTEST_TAG)
+                tile = node;
+            if (active_tag != "" && tag == active_tag)
+                active = node;
+        }
+        if (tile != null) {
+            tile.protocol = strategy_name;
+            if (active != null && int(active.delay || 0) > 0) {
+                tile.delay = int(active.delay || 0);
+                tile.probed = true;
+            } else if (strategy_name == "random" || strategy_name == "roundRobin") {
+                tile.delay = 0;
+                tile.probed = false;
+            }
         }
         nodes[section_name] = list;
     }
@@ -1580,7 +1758,11 @@ function nodes_json() {
     let selected = read_selected_outbounds();
     let nodes = nodes_with_latency();
     for (let section_name in nodes) {
-        if (!uci_section_uses_urltest(section_name))
+        let has_auto = false;
+        for (let node in array_or_empty(nodes[section_name]))
+            if (as_string(object_or_empty(node).tag || "") == xray_constants.XRAY_URLTEST_TAG)
+                has_auto = true;
+        if (!has_auto)
             continue;
         let current = as_string(selected[section_name] || "");
         if (current == "")
@@ -1769,6 +1951,10 @@ function resolve_probe_port(tag) {
 
 function proxy_latency_json(tag, timeout) {
     tag = trim(as_string(tag));
+    if (tag == xray_constants.XRAY_URLTEST_TAG) {
+        write_json({ delay: 0 });
+        return 0;
+    }
     let delay = probe_socks_delay(resolve_probe_port(tag), latency_test_url(), int(timeout || 5000));
     let updates = {};
     updates[tag] = delay;
@@ -1873,6 +2059,31 @@ function section_core_name(section) {
     return engine.is_xray_primary() ? "xray" : "sing-box";
 }
 
+function section_status_probe_url(section) {
+    section = object_or_empty(section);
+    let url = trim(as_string(section.xray_probe_url || ""));
+    if (url != "")
+        return url;
+    url = trim(as_string(section.urltest_testing_url || ""));
+    if (url != "")
+        return url;
+    return "https://www.gstatic.com/generate_204";
+}
+
+function record_node_delays(section, delays) {
+    section = object_or_empty(section);
+    let name = as_string(section[".name"] || "");
+    if (name == "")
+        return;
+    let url = section_status_probe_url(section);
+    for (let tag in section_node_tags(name)) {
+        tag = as_string(tag);
+        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG)
+            continue;
+        delays[tag] = probe_socks_delay(node_port_by_tag(tag), url, 5000);
+    }
+}
+
 function urltest_tick() {
     urltest_step = "plane";
     if (!engine.is_xray_primary() || !process_running())
@@ -1899,17 +2110,28 @@ function urltest_tick() {
         urltest_step = "core:" + name;
         if (section_core_name(section) != "xray")
             continue;
+        let raw_strategy = lc(trim(as_string(section.xray_balancer_strategy || "")));
+        if (raw_strategy != "" && raw_strategy != "auto") {
+            record_node_delays(section, delays);
+            continue;
+        }
         urltest_step = "urltests:" + name;
         let urltest_id = urltest_first_id(section);
-        if (urltest_id == "")
+        if (urltest_id == "") {
+            record_node_delays(section, delays);
             continue;
+        }
         let pin = as_string(selected[name] || "");
-        if (pin != "" && pin != xray_constants.XRAY_URLTEST_TAG)
+        if (pin != "" && pin != xray_constants.XRAY_URLTEST_TAG) {
+            record_node_delays(section, delays);
             continue;
+        }
         urltest_step = "nodes:" + name;
         let tags = section_node_tags(name);
-        if (length(tags) < 2)
+        if (length(tags) < 2) {
+            record_node_delays(section, delays);
             continue;
+        }
         urltest_step = "url:" + name;
         let url = as_string(section.urltest_testing_url || "") || "https://www.gstatic.com/generate_204";
         let tolerance = int(section.urltest_tolerance || 50);
@@ -2017,25 +2239,27 @@ function urltest_worker() {
                 continue;
             if (!section_is_connection(section))
                 continue;
-            let urltest_id = urltest_first_id(section);
-            if (urltest_id == "")
+            if (section_core_name(section) != "xray")
                 continue;
-            let interval = 180;
-            let raw_interval = as_string(section.urltest_check_interval || "");
-            if (uci_core.available() && urltest_id != "" && urltest_id != "urltest") {
-                try {
-                    let child = object_or_empty(uci_core.get_all("forkop", urltest_id));
-                    let child_interval = as_string(child.check_interval || child.urltest_check_interval || "");
-                    if (child_interval != "")
-                        raw_interval = child_interval;
+            let urltest_id = urltest_first_id(section);
+            if (urltest_id != "") {
+                let interval = 180;
+                let raw_interval = as_string(section.urltest_check_interval || "");
+                if (uci_core.available() && urltest_id != "urltest") {
+                    try {
+                        let child = object_or_empty(uci_core.get_all("forkop", urltest_id));
+                        let child_interval = as_string(child.check_interval || child.urltest_check_interval || "");
+                        if (child_interval != "")
+                            raw_interval = child_interval;
+                    }
+                    catch (e) {
+                    }
                 }
-                catch (e) {
-                }
+                if (raw_interval != "")
+                    interval = duration_to_seconds(raw_interval, 180);
+                if (interval < wait_seconds)
+                    wait_seconds = interval;
             }
-            if (raw_interval != "")
-                interval = duration_to_seconds(raw_interval, 180);
-            if (interval < wait_seconds)
-                wait_seconds = interval;
         }
         if (wait_seconds < 15)
             wait_seconds = 15;

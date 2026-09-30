@@ -62,7 +62,9 @@ extract_fn "$XRAY_GEN" "apply_stats_api" | grep -Fq 'StatsService' ||
 extract_fn "$XRAY_GEN" "apply_stats_api" | grep -Fq 'listen' ||
   fail "Xray Stats API must listen without a dokodemo-door inbound"
 extract_fn "$XRAY_RT" "xray_inbound_stats" | grep -Fq 'inbound>>>' ||
-  fail "Xray stats must sum inbound uplink/downlink"
+  fail "Xray stats must read inbound uplink/downlink"
+extract_fn "$XRAY_RT" "stats_json" | grep -Fq 'section_traffic_map' ||
+  fail "dashboard section traffic must sum outbound counters since Xray start"
 extract_fn "$XRAY_RT" "nft_chain_bytes" | grep -Fq 'nft' ||
   fail "Xray stats must fall back to nft counters when the API is empty"
 grep -Fq 'get_xray_connections' "$ROOT_DIR/forkop/files/usr/bin/forkop" ||
@@ -101,6 +103,16 @@ extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -Fq 'return "random"' ||
   fail "Xray sections without URLTest must default to a random balancer"
 extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -Fq 'return "roundRobin"' ||
   fail "Xray balancer must support round robin"
+extract_fn "$XRAY_OUT" "apply_mux" | grep -Fq 'xudpConcurrency' ||
+  fail "Xray Mux must be able to carry UDP"
+extract_fn "$XRAY_OUT" "apply_mux" | grep -Fq 'vision' ||
+  fail "VLESS Vision must not be wrapped in Mux"
+extract_fn "$XRAY_GEN" "section_mux_spec" | grep -Fq 'xray_mux_enabled' ||
+  fail "section Mux settings must reach the Xray outbound"
+extract_fn "$XRAY_RT" "nodes_with_latency" | grep -Fq 'probed' ||
+  fail "every probed Xray server must keep a dead-or-alive mark"
+extract_fn "$XRAY_RT" "urltest_tick" | grep -Fq 'record_node_delays' ||
+  fail "Xray must probe every server in a section, not only the selected one"
 extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -Fq 'return "off"' ||
   fail "Xray balancer must be possible to turn off"
 extract_fn "$XRAY_GEN" "add_section" | grep -Fq 'strategy != "off"' ||
@@ -395,7 +407,7 @@ extract_fn "$XRAY_GEN" "generate_config" | grep -Fq 'apply_dns_client_routes' ||
   fail "DNS client routes must be applied after section outbounds exist"
 extract_fn "$XRAY_GEO" "community_matchers" | grep -Fq 'v2fly_geosite_tag' ||
   fail "itdog lists must fall back to v2fly geosite.dat when allow-domains.dat is missing"
-extract_fn "$XRAY_GEO" "community_matchers" | grep -Fq 'community_lst_path' ||
+extract_fn "$XRAY_GEO" "community_matchers" | grep -Fq 'community_lst_readable' ||
   fail "itdog lists must fall back to cached RAW .lst when dat/geosite tags are missing"
 extract_fn "$XRAY_GEO" "community_ext_candidates" | grep -Fq 'ITDOG_SITE_CODE' ||
   fail "itdog geosite.dat uses top-level YOUTUBE/BLOCK/DISCORD groups, not only russia-inside@attr"
@@ -466,6 +478,16 @@ extract_fn "$XRAY_GEN" "xray_dial_strategy" | grep -Fq 'UseIPv4v6' ||
   fail "prefer_ipv4 must dial via sockopt.domainStrategy UseIPv4v6"
 extract_fn "$XRAY_GEN" "xray_dial_strategy" | grep -Fq 'UseIPv6v4' ||
   fail "prefer_ipv6 must dial via sockopt.domainStrategy UseIPv6v4"
+extract_fn "$XRAY_GEN" "apply_output_interface" | grep -Fq 'outbound_is_provider_direct' ||
+  fail "Zapret and Zapret2 must keep their fwmark and must not be pinned to the WAN interface"
+extract_fn "$SB_GEN" "add_zapret_outbound" | grep -Fq 'routing_mark' ||
+  fail "sing-box Zapret outbound must use its route mark"
+extract_fn "$SB_GEN" "add_zapret2_outbound" | grep -Fq 'routing_mark' ||
+  fail "sing-box Zapret2 outbound must use its route mark"
+extract_fn "$SB_GEN" "add_zapret_outbound" | grep -Fq 'bind_interface' &&
+  fail "sing-box Zapret outbound must not bind the WAN interface"
+extract_fn "$SB_GEN" "add_zapret2_outbound" | grep -Fq 'bind_interface' &&
+  fail "sing-box Zapret2 outbound must not bind the WAN interface"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -Fq 'SINGBOX_SIDECAR_TAG' ||
   fail "sidecar SOCKS must keep AsIs so the domain is passed through"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -Fq '"AsIs"' ||

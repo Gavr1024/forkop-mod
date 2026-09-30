@@ -3451,6 +3451,9 @@ msgstr ""
 msgid "Use sing-box duration format like 1d, 12h or 30m"
 msgstr ""
 
+msgid "Duration like 1d, 12h or 30m"
+msgstr ""
+
 #: src/forkop/tabs/diagnostic/checks/runInboundsCheck.ts:25
 msgid "Used by"
 msgstr ""

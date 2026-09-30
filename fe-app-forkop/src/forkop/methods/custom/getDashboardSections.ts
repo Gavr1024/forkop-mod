@@ -859,6 +859,12 @@ function getOutboundDisplayName(
   outboundMetadata?: Forkop.GetOutboundMetadata,
   preferMetadata = false,
 ) {
+  if (code === '__urltest__') {
+    return String(entry?.value?.name || '') === 'Fastest'
+      ? _('Fastest')
+      : _('Auto');
+  }
+
   const metadataName = outboundMetadata?.names?.[code];
 
   return (
@@ -1490,6 +1496,9 @@ function clashProtocolType(protocol?: string, kind?: string) {
   if (value === 'iface' || value === 'freedom' || value === 'interface') {
     return 'Direct';
   }
+  if (value === 'auto') {
+    return 'Auto';
+  }
   if (!value) {
     return 'VLESS';
   }
@@ -1538,10 +1547,13 @@ function mergeXrayNodesIntoClashProxies(
       }
 
       const selectorTag = getOutboundTagBySection(sectionName);
+      const requested = String(selected[sectionName] || '');
       const now =
-        selected[sectionName] && tags.includes(selected[sectionName])
-          ? selected[sectionName]
-          : tags[0];
+        requested && tags.includes(requested)
+          ? requested
+          : tags.includes('__urltest__')
+            ? '__urltest__'
+            : tags[0];
 
       tags.forEach((tag) => {
         const node =

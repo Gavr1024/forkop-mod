@@ -1161,4 +1161,38 @@ describe('getDashboardSections', () => {
     expect(byCode['xray-hy']?.latency).toBe(210);
     expect(byCode['xray-nl']?.selected).toBe(true);
   });
+
+  it('highlights Auto and leaves servers unselected when the Xray pin is cleared', async () => {
+    mocks.getConfigSections.mockResolvedValue([
+      proxySection({ proxy_core: 'xray', urltests: [], urltest_settings: '' }),
+    ]);
+    mocks.getClashApiProxies.mockResolvedValue({
+      success: true,
+      data: { proxies: {} },
+    });
+    mocks.getXrayNodes.mockResolvedValue({
+      success: true,
+      data: {
+        nodes: {
+          main: [
+            { tag: '__urltest__', name: 'Auto', protocol: 'auto', kind: 'auto' },
+            { tag: 'xray-nl', name: 'NL', protocol: 'vless' },
+            { tag: 'xray-hy', name: 'hysteria', protocol: 'hysteria' },
+          ],
+        },
+        selected: { main: '__urltest__' },
+      },
+    });
+
+    const result = await getDashboardSections();
+    const [section] = result.data;
+    const byCode = Object.fromEntries(
+      section.outbounds.map((outbound) => [outbound.code, outbound]),
+    );
+
+    expect(byCode['__urltest__']?.displayName).toBe('Auto');
+    expect(byCode['__urltest__']?.selected).toBe(true);
+    expect(byCode['xray-hy']?.selected).toBe(false);
+    expect(byCode['xray-nl']?.selected).toBe(false);
+  });
 });

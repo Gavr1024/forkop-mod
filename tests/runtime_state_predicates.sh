@@ -682,6 +682,8 @@ pass
 
 [rule.proxy1.xray_leastload_tolerance]
 
+[rule.proxy1.xray_mux_enabled]
+0
 [rule.proxy1.domain]
 full.example,legacy.example
 [rule.proxy1.domain_suffix]
@@ -770,6 +772,8 @@ disabled
 
 [rule.out1.xray_leastload_tolerance]
 
+[rule.out1.xray_mux_enabled]
+0
 [rule.out1.domain]
 
 [rule.out1.domain_suffix]
@@ -890,6 +894,8 @@ disabled
 
 [rule.vpn1.xray_leastload_tolerance]
 
+[rule.vpn1.xray_mux_enabled]
+0
 [rule.vpn1.domain]
 
 [rule.vpn1.domain_suffix]

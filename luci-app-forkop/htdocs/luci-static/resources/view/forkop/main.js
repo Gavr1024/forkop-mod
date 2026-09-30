@@ -1043,7 +1043,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.7";
+var FORKOP_LUCI_APP_VERSION = "1.0.8";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -2069,7 +2069,26 @@ function renderDefaultState({
     }
   }
   function renderOutbound(outbound) {
-    function getLatencyClass() {
+    function passiveBalancerLabel(outbound) {
+    if (!isXrayStrategyCode(outbound.code) || outbound.latency) {
+      return "";
+    }
+    const key = `${outbound.displayName || ""} ${outbound.type || ""}`.toLowerCase();
+    if (key.includes("round")) {
+      return _("In turn");
+    }
+    if (key.includes("random")) {
+      return _("At random");
+    }
+    return "";
+  }
+  function getLatencyClass() {
+    if (passiveBalancerLabel(outbound)) {
+      return "fkp_dashboard-page__outbound-grid__item__latency--empty";
+    }
+      if (outbound.probeState === "dead") {
+        return "fkp_dashboard-page__outbound-grid__item__latency--red";
+      }
       if (!outbound.latency) {
         return "fkp_dashboard-page__outbound-grid__item__latency--empty";
       }
@@ -2169,15 +2188,11 @@ function renderDefaultState({
           ] : []
         ]),
         E("div", { class: "fkp_dashboard-page__outbound-grid__item__footer" }, [
-          E(
-            "div",
-            { class: "fkp_dashboard-page__outbound-grid__item__type" },
-            [outbound.type].filter(Boolean)
-          ),
+          renderOutboundBadges(outbound),
           E(
             "div",
             { class: getLatencyClass() },
-            outbound.latency ? `${outbound.latency}ms` : "N/A"
+            outbound.probeState === "dead" && !passiveBalancerLabel(outbound) ? _("Not responding") : outbound.latency ? `${outbound.latency}ms` : passiveBalancerLabel(outbound) || "N/A"
           )
         ])
       ]
@@ -2242,11 +2257,37 @@ function renderDefaultState({
         ]
       )
     ]),
+    E(
+      "div",
+      {
+        class: "fkp_dashboard-page__outbound-section__traffic",
+        "data-section-traffic": section.sectionName
+      },
+      formatSectionTraffic(store.get().sectionTraffic?.[section.sectionName])
+    ),
     E("div", { class: "fkp_dashboard-page__outbound-grid" }, [
       ...metadataNodes,
       ...section.outbounds.map((outbound) => renderOutbound(outbound))
     ])
   ]);
+}
+function formatSectionTraffic(traffic) {
+  const uplink = prettyBytes(Math.max(0, Number(traffic?.uplink) || 0));
+  const downlink = prettyBytes(Math.max(0, Number(traffic?.downlink) || 0));
+  return `${_("Uplink")} ${uplink} · ${_("Downlink")} ${downlink}`;
+}
+function updateSectionTrafficInline(sectionTraffic) {
+  const container = document.getElementById("dashboard-sections-grid");
+  if (!container) {
+    return;
+  }
+  container.querySelectorAll("[data-section-traffic]").forEach((node) => {
+    const name = node.getAttribute("data-section-traffic") || "";
+    const text = formatSectionTraffic(sectionTraffic?.[name]);
+    if (node.textContent !== text) {
+      node.textContent = text;
+    }
+  });
 }
 function renderSections(props) {
   if (props.failed) {
@@ -2552,6 +2593,7 @@ var Forkop;
     AvailableMethods2["GET_BYEDPI_STATUS"] = "get_byedpi_status";
     AvailableMethods2["GET_XRAY_STATUS"] = "get_xray_status";
     AvailableMethods2["GET_XRAY_STATS"] = "get_xray_stats";
+    AvailableMethods2["GET_SECTION_TRAFFIC"] = "get_section_traffic";
     AvailableMethods2["GET_XRAY_CONNECTIONS"] = "get_xray_connections";
     AvailableMethods2["GET_XRAY_NODES"] = "get_xray_nodes";
     AvailableMethods2["SET_XRAY_GROUP_PROXY"] = "set_xray_group_proxy";
@@ -2803,6 +2845,12 @@ var ForkopShellMethods = {
   ),
   getXrayStats: async () => callBaseMethod(
     Forkop.AvailableMethods.GET_XRAY_STATS,
+    [],
+    "/usr/bin/forkop",
+    { timeout: 4e3 }
+  ),
+  getSectionTraffic: async () => callBaseMethod(
+    Forkop.AvailableMethods.GET_SECTION_TRAFFIC,
     [],
     "/usr/bin/forkop",
     { timeout: 4e3 }
@@ -3741,7 +3789,42 @@ function getPriorityGroups(dashboardCache) {
   }
   return groups;
 }
+function isXrayStrategyCode(code) {
+  const value = String(code || "");
+  return value === "__urltest__" || value.startsWith("__urltest__@");
+}
+function xrayStrategyProxyCode(sectionName) {
+  return `__urltest__@${sectionName}`;
+}
+function xrayStrategyWireTag(code) {
+  return isXrayStrategyCode(code) ? "__urltest__" : code;
+}
+function xrayStrategyLabel(name) {
+  const key = String(name || "").trim().toLowerCase().replace(/[_-]/g, "");
+  if (key === "roundrobin") {
+    return "Round robin";
+  }
+  if (key === "leastping") {
+    return "Least ping";
+  }
+  if (key === "leastload") {
+    return "Least load";
+  }
+  if (key === "random") {
+    return "Random";
+  }
+  if (key === "off" || key === "disabled" || key === "none") {
+    return _("Off");
+  }
+  if (key === "fastest") {
+    return _("Fastest");
+  }
+  return _("Auto");
+}
 function getOutboundDisplayName(code, entry, link, outboundMetadata, preferMetadata = false) {
+  if (isXrayStrategyCode(code)) {
+    return xrayStrategyLabel(entry?.value?.name);
+  }
   const metadataName = outboundMetadata?.names?.[code];
   return (preferMetadata ? metadataName : getProxyUrlName(link)) || (preferMetadata ? getProxyUrlName(link) : metadataName) || entry?.value?.name || code;
 }
@@ -3948,12 +4031,22 @@ function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGro
         code,
         displayName,
         latency: item?.value.history?.[0]?.delay || 0,
+        probeState: item?.value.probeState || "",
         type: priorityConfig ? "Priority" : protocolWithTransport(
           dashboardClashType(
             item?.value.type,
             outboundMetadata?.protocols?.[code]
           ) || "URLTest",
           item?.value.transport || transportFromShareLink(link)
+        ),
+        badges: outboundBadges(
+          priorityConfig ? "Priority" : dashboardClashType(
+            item?.value.type,
+            outboundMetadata?.protocols?.[code]
+          ) || "URLTest",
+          priorityConfig ? "" : item?.value.transport || transportFromShareLink(link),
+          priorityConfig ? "" : item?.value.security || securityFromShareLink(link),
+          priorityConfig ? "" : item?.value.mask || maskFromShareLink(link)
         ),
         selected: selector?.value?.now === code,
         link,
@@ -3992,7 +4085,7 @@ function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGro
     sortByLatency: shouldSortByLatency(section)
   });
   const latencyTestCodes = sortedOutbounds.filter(
-    (outbound) => outbound.runtimeAvailable !== false && !isSelectorOutbound(outbound) && !outbound.priorityInfo
+    (outbound) => !isXrayStrategyCode(outbound.code) && outbound.runtimeAvailable !== false && !isSelectorOutbound(outbound) && !outbound.priorityInfo
   ).map((outbound) => outbound.code);
   return {
     selector,
@@ -4127,6 +4220,102 @@ function normalizeTransport(value) {
   }
   return raw;
 }
+function prettyBadgeLabel(value) {
+  const raw = String(value || "").trim();
+  const key = raw.toLowerCase();
+  const names = {
+    tcp: "TCP",
+    udp: "UDP",
+    ws: "WS",
+    websocket: "WS",
+    grpc: "gRPC",
+    xhttp: "XHTTP",
+    httpupgrade: "HTTPUpgrade",
+    h2: "H2",
+    http: "HTTP",
+    quic: "QUIC",
+    kcp: "mKCP",
+    mkcp: "mKCP",
+    tls: "TLS",
+    reality: "Reality",
+    xtls: "XTLS",
+    salamander: "Salamander"
+  };
+  return names[key] || raw;
+}
+function badgeItem(kind, label) {
+  const text = prettyBadgeLabel(label);
+  if (!text || text.toLowerCase() === "none") {
+    return null;
+  }
+  return { kind, label: text };
+}
+function shareLinkParams(link) {
+  const value = String(link || "");
+  const query = (value.split("?")[1] || "").split("#")[0];
+  try {
+    return new URLSearchParams(query);
+  } catch (e) {
+    return new URLSearchParams();
+  }
+}
+function securityFromShareLink(link) {
+  const params = shareLinkParams(link);
+  const security = String(params.get("security") || "").toLowerCase();
+  if (security === "reality" || params.get("pbk") || params.get("publickey") || params.get("publicKey")) {
+    return "reality";
+  }
+  if (security && security !== "none" && security !== "zero") {
+    return security;
+  }
+  const scheme = String(link || "").split(":")[0].toLowerCase();
+  if (scheme === "hysteria2" || scheme === "hy2" || scheme === "hysteria" || scheme === "trojan") {
+    return "tls";
+  }
+  return "";
+}
+function maskFromShareLink(link) {
+  const params = shareLinkParams(link);
+  const obfs = String(params.get("obfs") || params.get("obfs-type") || params.get("obfsType") || "").toLowerCase();
+  if (!obfs || obfs === "none") {
+    return "";
+  }
+  return obfs;
+}
+function outboundBadges(protocol, transport, security, mask) {
+  const badges = [];
+  const proto = badgeItem("protocol", protocol);
+  if (proto) {
+    badges.push(proto);
+  }
+  const net = badgeItem("transport", transport);
+  if (net && net.label.toLowerCase() !== String(protocol || "").toLowerCase()) {
+    badges.push(net);
+  }
+  const sec = badgeItem("security", security);
+  if (sec) {
+    badges.push(sec);
+  }
+  const obfs = badgeItem("mask", mask);
+  if (obfs && obfs.label.toLowerCase() !== String(security || "").toLowerCase()) {
+    badges.push(obfs);
+  }
+  return badges;
+}
+function renderOutboundBadges(outbound) {
+  const badges = Array.isArray(outbound.badges) && outbound.badges.length ? outbound.badges : outbound.type ? [{ kind: "protocol", label: outbound.type }] : [];
+  return E(
+    "div",
+    { class: "fkp_dashboard-page__outbound-grid__item__badges" },
+    badges.map(
+      (badge) => E(
+        "span",
+        { class: `fkp_dashboard-page__outbound-grid__item__badge fkp_dashboard-page__outbound-grid__item__badge--${badge.kind || "protocol"}` },
+        badge.label
+      )
+    )
+  );
+}
 function protocolWithTransport(protocol, transport) {
   const name = String(protocol || "").trim();
   const net = normalizeTransport(transport);
@@ -4140,7 +4329,7 @@ function protocolWithTransport(protocol, transport) {
   if (lower.includes(net)) {
     return name;
   }
-  return `${name} · ${net}`;
+  return `${name} \xB7 ${net}`;
 }
 function transportFromShareLink(link) {
   const value = String(link || "");
@@ -4167,6 +4356,24 @@ function clashProtocolType(protocol, kind) {
   if (value === "iface" || value === "freedom" || value === "interface") {
     return "Direct";
   }
+  if (value === "auto") {
+    return "Auto";
+  }
+  if (value === "leastping") {
+    return "Least ping";
+  }
+  if (value === "leastload") {
+    return "Least load";
+  }
+  if (value === "roundrobin") {
+    return "Round robin";
+  }
+  if (value === "random") {
+    return "Random";
+  }
+  if (value === "off") {
+    return "Off";
+  }
   if (!value) {
     return "VLESS";
   }
@@ -4186,18 +4393,26 @@ function mergeXrayNodesIntoClashProxies(proxies, configSections, xrayPayload) {
       return;
     }
     const selectorTag = getOutboundTagBySection(sectionName);
-    const now = selected[sectionName] && tags.includes(selected[sectionName]) ? selected[sectionName] : tags[0];
-    tags.forEach((tag) => {
+    const requested = String(selected[sectionName] || "");
+    const now = requested && tags.includes(requested) ? requested : tags.includes("__urltest__") ? "__urltest__" : tags[0];
+    const displayTags = tags.map((tag) => tag === "__urltest__" ? xrayStrategyProxyCode(sectionName) : tag);
+    const displayNow = now === "__urltest__" ? xrayStrategyProxyCode(sectionName) : now;
+    displayTags.forEach((proxyCode) => {
+      const tag = proxyCode.startsWith("__urltest__@") ? "__urltest__" : proxyCode;
       const node = sectionNodes.find(
         (item) => String(item.tag || "").trim() === tag
       ) || {};
+      const probed = node.probed === true;
       const delay = Number(node.delay || 0);
-      next[tag] = {
+      next[proxyCode] = {
         type: clashProtocolType(node.protocol, node.kind),
         name: String(node.name || tag),
         udp: true,
         transport: normalizeTransport(node.network),
-        history: delay > 0 ? [{ time: (/* @__PURE__ */ new Date()).toISOString(), delay }] : next[tag]?.history || [],
+        security: String(node.security || ""),
+        mask: String(node.mask || ""),
+        history: probed ? [{ time: (/* @__PURE__ */ new Date()).toISOString(), delay }] : next[proxyCode]?.history || [],
+        probeState: probed ? delay > 0 ? "alive" : "dead" : "",
         now: void 0,
         all: void 0
       };
@@ -4207,8 +4422,8 @@ function mergeXrayNodesIntoClashProxies(proxies, configSections, xrayPayload) {
       name: selectorTag,
       udp: true,
       history: [],
-      now,
-      all: tags
+      now: displayNow,
+      all: displayTags
     };
   });
   return next;
@@ -4775,6 +4990,7 @@ var initialStore = {
     failed: false,
     data: { downloadTotal: 0, uploadTotal: 0 }
   },
+  sectionTraffic: {},
   systemInfoWidget: {
     loading: true,
     failed: false,
@@ -6200,6 +6416,10 @@ async function connectToClashSockets(dataUpdatesId) {
           }
         }
       });
+      latestClashConnections = parsedMsg;
+      if (sectionTrafficOwner !== "poll" && sectionTrafficPollSettled) {
+        applySingboxConnectionTraffic(parsedMsg);
+      }
     },
     (_err) => {
       if (dataUpdatesId !== dashboardDataUpdatesId || getDashboardServiceAvailability() === "stopped") {
@@ -6248,8 +6468,128 @@ function stopDashboardDataUpdates() {
     xrayStatsTimer = null;
   }
   lastXrayTrafficSample = null;
+  sectionTrafficOwner = "";
+  sectionTrafficPollSettled = false;
+  latestClashConnections = null;
   sectionsRefreshQueued = false;
   socket.resetAll();
+}
+const SINGBOX_SECTION_TRAFFIC_KEY = "forkop-singbox-section-traffic";
+let sectionTrafficOwner = "";
+let sectionTrafficPollSettled = false;
+let latestClashConnections = null;
+let singboxSectionTrafficState = loadSingboxSectionTrafficState();
+function loadSingboxSectionTrafficState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SINGBOX_SECTION_TRAFFIC_KEY) || "");
+    if (!parsed || typeof parsed !== "object") {
+      return { epoch: 0, seen: {}, sections: {} };
+    }
+    return {
+      epoch: Math.max(0, Number(parsed.epoch) || 0),
+      seen: parsed.seen && typeof parsed.seen === "object" ? parsed.seen : {},
+      sections: parsed.sections && typeof parsed.sections === "object" ? parsed.sections : {}
+    };
+  } catch {
+    return { epoch: 0, seen: {}, sections: {} };
+  }
+}
+function dashboardSectionNames() {
+  const data = store.get().sectionsWidget?.data;
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data.map((section) => section?.sectionName).filter((name) => typeof name === "string" && name !== "");
+}
+function connectionTrafficTags(connection) {
+  const tags = [];
+  const chains = Array.isArray(connection?.chains) ? connection.chains : [];
+  chains.forEach((item) => {
+    const tag = String(item || "").trim();
+    if (tag) {
+      tags.push(tag);
+    }
+  });
+  const outbound = String(connection?.metadata?.outbound || "").trim();
+  if (outbound) {
+    tags.push(outbound);
+  }
+  const routed = String(connection?.rule || "").match(/route\(([^)]+)\)/);
+  if (routed?.[1]) {
+    const tag = routed[1].replace(/^['"]|['"]$/g, "").trim();
+    if (tag) {
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+function matchingSectionNames(tags, names) {
+  return names.filter((name) => {
+    const prefix = `${name}-`;
+    const selector = `${prefix}out`;
+    return tags.some((tag) => tag === selector || tag.startsWith(prefix));
+  });
+}
+function applySingboxConnectionTraffic(snapshot) {
+  if (sectionTrafficOwner === "poll") {
+    return false;
+  }
+  const names = dashboardSectionNames();
+  if (!names.length || !Array.isArray(snapshot?.connections)) {
+    return false;
+  }
+  const epoch = Math.max(0, Number(snapshot.uploadTotal) || 0) + Math.max(0, Number(snapshot.downloadTotal) || 0);
+  if (epoch < (Number(singboxSectionTrafficState.epoch) || 0)) {
+    singboxSectionTrafficState = { epoch: 0, seen: {}, sections: {} };
+  }
+  const seen = singboxSectionTrafficState.seen && typeof singboxSectionTrafficState.seen === "object" ? singboxSectionTrafficState.seen : {};
+  const sections = { ...singboxSectionTrafficState.sections || {} };
+  names.forEach((name) => {
+    if (!sections[name] || typeof sections[name] !== "object") {
+      sections[name] = { uplink: 0, downlink: 0 };
+    }
+  });
+  const live = {};
+  snapshot.connections.forEach((connection) => {
+    const id = String(connection?.id || "").trim();
+    if (!id) {
+      return;
+    }
+    const matched = matchingSectionNames(connectionTrafficTags(connection), names);
+    if (!matched.length) {
+      return;
+    }
+    const upload = Math.max(0, Number(connection.upload) || 0);
+    const download = Math.max(0, Number(connection.download) || 0);
+    const previous = seen[id];
+    let uplinkDelta = upload;
+    let downlinkDelta = download;
+    if (previous && typeof previous === "object") {
+      uplinkDelta = upload - (Number(previous.upload) || 0);
+      downlinkDelta = download - (Number(previous.download) || 0);
+      if (uplinkDelta < 0) {
+        uplinkDelta = upload;
+      }
+      if (downlinkDelta < 0) {
+        downlinkDelta = download;
+      }
+    }
+    matched.forEach((name) => {
+      const bucket = sections[name] || { uplink: 0, downlink: 0 };
+      sections[name] = {
+        uplink: Math.max(0, (Number(bucket.uplink) || 0) + uplinkDelta),
+        downlink: Math.max(0, (Number(bucket.downlink) || 0) + downlinkDelta)
+      };
+    });
+    live[id] = { upload, download };
+  });
+  singboxSectionTrafficState = { epoch, seen: live, sections };
+  try {
+    localStorage.setItem(SINGBOX_SECTION_TRAFFIC_KEY, JSON.stringify(singboxSectionTrafficState));
+  } catch {
+  }
+  store.set({ sectionTraffic: sections });
+  return true;
 }
 async function pollXrayPlaneStats(dataUpdatesId) {
   if (dataUpdatesId !== dashboardDataUpdatesId || getDashboardRoutingEngine() !== "xray" || getDashboardServiceAvailability() === "stopped") {
@@ -6291,8 +6631,29 @@ async function pollXrayPlaneStats(dataUpdatesId) {
         connections: Number(response.data.connections) || 0,
         memory: Number(response.data.memory) || 0
       }
-    }
+    },
+    sectionTraffic: response.data.sections && typeof response.data.sections === "object" ? response.data.sections : {}
   });
+}
+async function pollSingboxSectionTraffic(dataUpdatesId) {
+  if (dataUpdatesId !== dashboardDataUpdatesId || getDashboardRoutingEngine() === "xray" || getDashboardServiceAvailability() === "stopped") {
+    return;
+  }
+  const response = await ForkopShellMethods.getSectionTraffic();
+  if (dataUpdatesId !== dashboardDataUpdatesId || getDashboardRoutingEngine() === "xray") {
+    return;
+  }
+  sectionTrafficPollSettled = true;
+  const sections = response.success && response.data && response.data.success !== false ? response.data.sections : null;
+  if (sections && typeof sections === "object" && Object.keys(sections).length > 0) {
+    sectionTrafficOwner = "poll";
+    singboxSectionTrafficState = { epoch: 0, seen: {}, sections: {} };
+    store.set({ sectionTraffic: sections });
+    return;
+  }
+  if (sectionTrafficOwner !== "poll" && latestClashConnections) {
+    applySingboxConnectionTraffic(latestClashConnections);
+  }
 }
 function startDashboardDataUpdates() {
   if (dashboardDataUpdatesStarted || !dashboardMounted || getDashboardServiceAvailability() === "stopped") {
@@ -6303,8 +6664,10 @@ function startDashboardDataUpdates() {
   void fetchDashboardSections({ force: true });
   void connectToClashSockets(dataUpdatesId);
   void pollXrayPlaneStats(dataUpdatesId);
+  void pollSingboxSectionTraffic(dataUpdatesId);
   xrayStatsTimer = setInterval(() => {
     void pollXrayPlaneStats(dataUpdatesId);
+    void pollSingboxSectionTraffic(dataUpdatesId);
   }, XRAY_STATS_POLL_INTERVAL_MS);
   sectionsRefreshTimer = setInterval(() => {
     void fetchDashboardSections();
@@ -6334,7 +6697,7 @@ async function handleChooseOutbound(sectionName, selector, tag) {
   setSelectorSwitching(sectionName, tag);
   try {
     if (section.proxyCore === "xray") {
-      await ForkopShellMethods.setXrayGroupProxy(sectionName, tag);
+      await ForkopShellMethods.setXrayGroupProxy(sectionName, xrayStrategyWireTag(tag));
     } else {
       await ForkopShellMethods.setClashApiGroupProxy(selector, tag);
     }
@@ -7248,6 +7611,9 @@ async function onStoreUpdate(next, prev, diff) {
   if (diff.trafficTotalWidget) {
     renderTrafficTotalWidget();
   }
+  if (diff.sectionTraffic) {
+    updateSectionTrafficInline(next.sectionTraffic);
+  }
   if (diff.systemInfoWidget) {
     renderSystemInfoWidget();
   }
@@ -7513,6 +7879,13 @@ var styles = `
     justify-content: flex-end;
     gap: 6px;
     flex: 0 0 auto;
+}
+
+.fkp_dashboard-page__outbound-section__traffic {
+    margin: -2px 0 8px;
+    color: var(--text-color-medium, #666);
+    font-size: 12px;
+    line-height: 1.35;
 }
 
 .fkp_dashboard-page .btn.fkp_dashboard-page__outbound-section__subscription-update {
@@ -7790,10 +8163,48 @@ var styles = `
 
 .fkp_dashboard-page__outbound-grid__item__footer {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
     margin-top: 10px;
+}
+
+.fkp_dashboard-page__outbound-grid__item__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+}
+
+.fkp_dashboard-page__outbound-grid__item__badge {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.01em;
+    background: rgba(127, 127, 127, 0.14);
+    color: var(--text-color-medium, #5c6570);
+}
+
+.fkp_dashboard-page__outbound-grid__item__badge--protocol {
+    background: rgba(47, 128, 237, 0.14);
+    color: var(--primary-color, #2f80ed);
+    font-weight: 600;
+}
+
+.fkp_dashboard-page__outbound-grid__item__badge--security {
+    background: rgba(111, 66, 193, 0.16);
+    color: #6f42c1;
+    font-weight: 600;
+}
+
+.fkp_dashboard-page__outbound-grid__item__badge--mask {
+    background: rgba(214, 158, 46, 0.18);
+    color: #b7791f;
+    font-weight: 600;
 }
 
 .fkp_dashboard-page__outbound-grid__item__type {
@@ -7803,18 +8214,30 @@ var styles = `
 
 .fkp_dashboard-page__outbound-grid__item__latency--empty {
     color: var(--primary-color-low, lightgray);
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-left: auto;
 }
 
 .fkp_dashboard-page__outbound-grid__item__latency--green {
     color: var(--success-color-medium, green);
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-left: auto;
 }
 
 .fkp_dashboard-page__outbound-grid__item__latency--yellow {
     color: var(--warn-color-medium, orange);
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-left: auto;
 }
 
 .fkp_dashboard-page__outbound-grid__item__latency--red {
     color: var(--error-color-medium, red);
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-left: auto;
 }
 
 .fkp_dashboard-page__urltest-details {
@@ -9802,7 +10225,7 @@ function renderWikiDisclaimer(kind) {
       classNames: ["cbi-button-save"],
       text: _("Open Project Page"),
       onClick: () => window.open(
-        "https://github.com/ushan0v/forkop#readme",
+        "https://github.com/Gavr1024/forkop-mod",
         "_blank",
         "noopener,noreferrer"
       )
@@ -9849,6 +10272,37 @@ async function runSectionsCheck() {
   const items = [];
   for (const section of sections.data) {
     async function getLatency() {
+      const servers = section.outbounds.filter((outbound) => {
+        const type = `${outbound.type || ""}`.toLowerCase();
+        if (!outbound.code || outbound.runtimeAvailable === false) {
+          return false;
+        }
+        if (isXrayStrategyCode(outbound.code)) {
+          return false;
+        }
+        return type !== "selector" && type !== "urltest" && type !== "priority";
+      });
+      if (section.withTagSelect && servers.length) {
+        const results = [];
+        for (const outbound of servers) {
+          const response = await ForkopShellMethods.getClashApiProxyLatency(
+            outbound.code,
+            section.latencyTestTimeout
+          );
+          const delay = Number(response.data?.delay || 0);
+          const alive = Boolean(response.success) && !response.data?.message && delay > 0;
+          const name = outbound.displayName || outbound.code;
+          results.push({
+            alive,
+            text: `[${name}] ${alive ? `${delay}ms` : _("Not responding")}`
+          });
+        }
+        const aliveCount = results.filter((item) => item.alive).length;
+        return {
+          state: aliveCount === 0 ? "error" : aliveCount === results.length ? "success" : "warning",
+          latency: results.map((item) => item.text).join(", ")
+        };
+      }
       if (section.withTagSelect) {
         const selectedOutbound2 = section.outbounds.find((item) => item.selected) ?? section.outbounds.find(
           (item) => item.type?.toLowerCase() === "urltest"

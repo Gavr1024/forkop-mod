@@ -311,6 +311,42 @@ msgstr "Не удалось сохранить настройки"
 msgid "Cascade connection"
 msgstr "Каскадное подключение"
 
+msgid "Mux"
+msgstr "Mux"
+
+msgid "Pack many site connections into one TCP channel. VLESS Vision and Hysteria2 stay unchanged. Works only with Xray."
+msgstr "Несколько соединений сайта идут одним TCP-каналом. VLESS Vision и Hysteria2 не меняются. Работает только с Xray."
+
+msgid "Connections per channel"
+msgstr "Соединений в одном канале"
+
+msgid "How many connections share one channel. From 1 to 128. Works only with Xray."
+msgstr "Сколько соединений делят один канал. От 1 до 128. Работает только с Xray."
+
+msgid "Use a number from 1 to 128"
+msgstr "Укажите число от 1 до 128"
+
+msgid "XUDP"
+msgstr "XUDP"
+
+msgid "Carry UDP inside the same channel. Works only with Xray."
+msgstr "Передавать UDP в том же канале. Работает только с Xray."
+
+msgid "UDP/443 through Mux"
+msgstr "UDP/443 через Mux"
+
+msgid "QUIC and some video traffic use UDP on port 443. Works only with Xray."
+msgstr "QUIC и часть видео идут по UDP на порт 443. Работает только с Xray."
+
+msgid "Do not send"
+msgstr "Не пускать"
+
+msgid "Send"
+msgstr "Пускать"
+
+msgid "Bypass Mux"
+msgstr "Мимо Mux"
+
 msgid "Certificate path"
 msgstr "Путь к сертификату"
 
@@ -367,6 +403,12 @@ msgstr "QR-код клиентской ссылки"
 
 msgid "Close"
 msgstr "Закрыть"
+
+msgid "Previous"
+msgstr "Назад"
+
+msgid "Next"
+msgstr "Далее"
 
 msgid "Close all connections"
 msgstr "Закрыть все подключения"
@@ -1379,6 +1421,15 @@ msgstr "Локальный резерв"
 msgid "Local list cache"
 msgstr "Локальный кэш списков"
 
+msgid "List contents"
+msgstr "Содержимое списка"
+
+msgid "Could not read this list"
+msgstr "Не удалось прочитать этот список"
+
+msgid "Showing the first entries. The list is longer."
+msgstr "Показаны первые записи. Список длиннее."
+
 msgid "Local list cache is disabled"
 msgstr "Локальный кэш списков отключён"
 
@@ -1543,6 +1594,12 @@ msgstr "Не требуется для этого адреса прослуши�
 
 msgid "Not responding"
 msgstr "Не отвечает"
+
+msgid "In turn"
+msgstr "По очереди"
+
+msgid "At random"
+msgstr "Случайно"
 
 msgid "Not running"
 msgstr "Не запущено"
@@ -2477,8 +2534,8 @@ msgstr "Настройки URLTest"
 msgid "Use 32 hex characters"
 msgstr "Укажите 32 hex-символа"
 
-msgid "Accepted share of failed probes, from 0 to 1."
-msgstr "Допустимая доля неудачных проверок, от 0 до 1."
+msgid "Accepted share of failed probes, from 0 to 1. Works only with Xray."
+msgstr "Допустимая доля неудачных проверок, от 0 до 1. Работает только с Xray."
 
 msgid "Auto"
 msgstr "Авто"
@@ -2486,38 +2543,80 @@ msgstr "Авто"
 msgid "Balancer strategy"
 msgstr "Стратегия балансировщика"
 
+msgid "Balancer strategy · shared check"
+msgstr "Стратегия балансировщика · общая проверка"
+
+msgid "Shared check"
+msgstr "Общая проверка"
+
+msgid "One server check"
+msgstr "Одна проверка серверов"
+
+msgid "URLTest and the balancer strategy use one server check. The address and interval from URLTest apply to Auto, Least ping and Least load. Without URLTest, Auto picks a server at random, and the probe uses the built-in address every 3 minutes. Works only with Xray."
+msgstr "URLTest и стратегия балансировщика используют одну проверку серверов. Адрес и интервал из URLTest действуют на Авто, Least ping и Least load. Если URLTest нет, Авто выбирает случайный сервер, а проверка идёт на встроенный адрес каждые 3 минуты. Работает только с Xray."
+
+msgid "URLTest · shared check"
+msgstr "URLTest · общая проверка"
+
 msgid "Off"
 msgstr "Выключен"
 
-msgid "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected."
-msgstr "Балансировщик выключен. Трафик идёт на выбранный сервер, а если он не выбран — на первый."
+msgid "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected. Works only with Xray."
+msgstr "Балансировщик выключен. Трафик идёт на выбранный сервер, а если он не выбран — на первый. Работает только с Xray."
 
-msgid "URLTest uses least ping. Without URLTest, Xray picks a server at random."
-msgstr "URLTest выбирает сервер с наименьшей задержкой. Без URLTest Xray берёт сервер случайно."
+msgid "URLTest uses least ping. Without URLTest, Xray picks a server at random. Works only with Xray."
+msgstr "URLTest выбирает сервер с наименьшей задержкой. Без URLTest Xray берёт сервер случайно. Работает только с Xray."
 
-msgid "Xray picks a server at random."
-msgstr "Xray выбирает сервер случайно."
+msgid "Least ping and Least load test servers with one observatory check. The address and interval below are that check. Auto, Random and Round robin do not test servers."
+msgstr "Least ping и Least load проверяют серверы одной проверкой observatory. Адрес и интервал ниже относятся к ней. Авто, Random и Round robin серверы не проверяют."
 
-msgid "Xray walks the servers in order."
-msgstr "Xray идёт по серверам по очереди."
+msgid "Xray picks a server at random. Choose Least ping or Least load to test servers first."
+msgstr "Xray берёт сервер случайно. Чтобы сначала проверить серверы, выберите Least ping или Least load."
 
-msgid "Xray picks the server with the lowest delay. Servers are probed first."
-msgstr "Xray берёт сервер с наименьшей задержкой. Серверы сначала проверяются."
+msgid "Probe address"
+msgstr "Адрес проверки"
 
-msgid "Xray picks the most stable servers. Set how many share traffic, the maximum RTT, and how many failed probes are allowed."
-msgstr "Xray берёт самые стабильные серверы. Ниже задаются число серверов, которые делят трафик, максимальный RTT и доля допустимых неудачных проверок."
+msgid "URL Xray uses to test servers."
+msgstr "Адрес, по которому Xray проверяет серверы."
+
+msgid "Probe interval"
+msgstr "Интервал проверки"
+
+msgid "How often Xray tests servers, for example 10s, 3m or 1h."
+msgstr "Как часто Xray проверяет серверы, например 10s, 3m или 1h."
+
+msgid "Probe in parallel"
+msgstr "Проверять параллельно"
+
+msgid "Test servers at the same time instead of one after another."
+msgstr "Проверять серверы одновременно, а не по очереди."
+
+msgid "Use a duration like 10s, 3m or 1h"
+msgstr "Укажите длительность, например 10s, 3m или 1h"
+
+msgid "Xray picks a server at random. Works only with Xray."
+msgstr "Xray выбирает сервер случайно. Работает только с Xray."
+
+msgid "Xray walks the servers in order. Works only with Xray."
+msgstr "Xray идёт по серверам по очереди. Работает только с Xray."
+
+msgid "Xray picks the server with the lowest delay. Servers are probed first. Works only with Xray."
+msgstr "Xray берёт сервер с наименьшей задержкой. Серверы сначала проверяются. Работает только с Xray."
+
+msgid "Xray picks the most stable servers. Set how many share traffic, the maximum RTT, and how many failed probes are allowed. Works only with Xray."
+msgstr "Xray берёт самые стабильные серверы. Ниже задаются число серверов, которые делят трафик, максимальный RTT и доля допустимых неудачных проверок. Работает только с Xray."
 
 msgid "Fallback server"
 msgstr "Запасной сервер"
 
-msgid "How many stable servers share new connections."
-msgstr "Сколько стабильных серверов делят новые соединения."
+msgid "How many stable servers share new connections. Works only with Xray."
+msgstr "Сколько стабильных серверов делят новые соединения. Работает только с Xray."
 
 msgid "Domains in this section get a real address, not a FakeIP. A section below cannot take their traffic: if the site name is not visible, it follows full routing or goes direct."
 msgstr "Домены этой секции получают настоящий адрес, а не FakeIP. Секция ниже не заберёт их трафик: если имя сайта не видно, он уйдёт в полную маршрутизацию или напрямую."
 
-msgid "How Xray picks a server in this section."
-msgstr "Как Xray выбирает сервер в этой секции."
+msgid "How Xray picks a server in this section. Works only with Xray."
+msgstr "Как Xray выбирает сервер в этой секции. Работает только с Xray."
 
 msgid "Least load group size"
 msgstr "Размер группы least load"
@@ -2528,11 +2627,11 @@ msgstr "Максимальный RTT least load"
 msgid "Least load tolerance"
 msgstr "Допуск least load"
 
-msgid "One server from another section, used when the rest are dead."
-msgstr "Один сервер из другой секции, если остальные не отвечают."
+msgid "One server from another section, used when the rest are dead. Works only with Xray."
+msgstr "Один сервер из другой секции, если остальные не отвечают. Работает только с Xray."
 
-msgid "Slowest accepted probe, such as 1s or 500ms."
-msgstr "Самая медленная допустимая проверка, например 1s или 500ms."
+msgid "Slowest accepted probe, such as 1s or 500ms. Works only with Xray."
+msgstr "Самая медленная допустимая проверка, например 1s или 500ms. Работает только с Xray."
 
 msgid "Use a duration like 500ms or 1s"
 msgstr "Укажите длительность, например 500ms или 1s"
@@ -2581,6 +2680,9 @@ msgstr "Используйте формат длительности sing-box, �
 
 msgid "Use sing-box duration format like 1d, 12h or 30m"
 msgstr "Используйте формат длительности sing-box, например 1d, 12h или 30m"
+
+msgid "Duration like 1d, 12h or 30m"
+msgstr "Длительность, например 1d, 12h или 30m"
 
 msgid "Used by"
 msgstr "Используется"

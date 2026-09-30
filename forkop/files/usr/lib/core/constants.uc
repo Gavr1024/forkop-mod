@@ -16,7 +16,7 @@ function shell_quote(value) {
 function constants_map() {
     let c = {};
 
-    c.FORKOP_VERSION = env("FORKOP_VERSION", "1.0.7");
+    c.FORKOP_VERSION = env("FORKOP_VERSION", "1.0.8");
     c.FORKOP_CONFIG_NAME = env("FORKOP_CONFIG_NAME", "forkop");
     c.FORKOP_CONFIG = env("FORKOP_CONFIG", "/etc/config/" + c.FORKOP_CONFIG_NAME);
     c.FORKOP_BIN = env("FORKOP_BIN", "/usr/bin/forkop");

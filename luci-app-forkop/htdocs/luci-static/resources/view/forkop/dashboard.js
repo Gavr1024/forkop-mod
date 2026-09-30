@@ -81,8 +81,12 @@ function renderLocalLists(payload) {
   const rows = items
     .map((item) => {
       const name = escapeHtml(item.name || item.id || "");
+      const clickable = item.status === "cached" && item.id;
+      const nameCell = clickable
+        ? `<button type="button" class="fkp-list-open" data-list-id="${escapeHtml(item.id)}" data-list-name="${name}" style="background:none;border:0;padding:0;color:var(--primary-color,#1a73e8);cursor:pointer;text-align:left;font:inherit;text-decoration:underline;">${name}</button>`
+        : name;
       return `<tr>
-        <td>${name}</td>
+        <td>${nameCell}</td>
         <td>${escapeHtml(item.kind || "")}</td>
         <td>${escapeHtml(formatBytes(item.size))}</td>
         <td>${escapeHtml(formatTime(item.mtime))}</td>
@@ -171,6 +175,19 @@ function mountLocalLists(payload) {
   }
 
   node.innerHTML = renderLocalLists(payload);
+  node.onclick = (event) => {
+    let element = event.target;
+    while (element && element !== node) {
+      if (element.getAttribute && element.getAttribute("data-list-id")) {
+        openListPreview(
+          element.getAttribute("data-list-id"),
+          element.getAttribute("data-list-name") || "",
+        );
+        return;
+      }
+      element = element.parentNode;
+    }
+  };
   const button = document.getElementById("forkop-local-lists-download");
   if (!button) {
     return;
@@ -234,6 +251,136 @@ function pollListDownload(startedAt, failures) {
         return;
       }
       window.setTimeout(() => pollListDownload(startedAt, next), 2000);
+    });
+}
+
+let listPreviewToken = "";
+
+function closeListPreview() {
+  const token = listPreviewToken;
+  listPreviewToken = "";
+  if (ui && typeof ui.hideModal === "function") {
+    ui.hideModal();
+  }
+  if (token) {
+    fs.exec("/usr/bin/forkop", ["list_cache_show_close", token]).catch(() => {});
+  }
+}
+
+function showListPreview(payload, fallbackName) {
+  if (!payload || !payload.ok) {
+    closeListPreview();
+    const message =
+      payload && payload.error === "missing"
+        ? _("Not downloaded yet")
+        : _("Could not read this list");
+    notify(message, "warning");
+    return;
+  }
+
+  listPreviewToken = `${payload.token || ""}`;
+  const page = Number(payload.page || 1);
+  const pages = Number(payload.pages || 1);
+  const titleName = payload.name || fallbackName || "";
+  if (ui && typeof ui.hideModal === "function") {
+    ui.hideModal();
+  }
+  const controls = [];
+  if (pages > 1) {
+    controls.push(
+      E(
+        "button",
+        {
+          class: "btn",
+          disabled: page <= 1 ? "disabled" : void 0,
+          click: () => loadListPreviewPage(page - 1, titleName),
+        },
+        _("Previous"),
+      ),
+      E("span", { style: "margin:0 0.6rem;" }, `${page} / ${pages}`),
+      E(
+        "button",
+        {
+          class: "btn",
+          disabled: page >= pages ? "disabled" : void 0,
+          click: () => loadListPreviewPage(page + 1, titleName),
+        },
+        _("Next"),
+      ),
+    );
+  }
+  controls.push(
+    E(
+      "button",
+      {
+        class: "btn",
+        click: closeListPreview,
+      },
+      _("Close"),
+    ),
+  );
+  ui.showModal(`${_("List contents")}: ${titleName}`, [
+    E(
+      "pre",
+      {
+        style:
+          "max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;",
+      },
+      payload.text || "",
+    ),
+    E("div", { class: "right" }, controls),
+  ]);
+}
+
+function readListPreviewResult(result) {
+  try {
+    return JSON.parse(result && result.stdout ? result.stdout : "{}");
+  } catch (_error) {
+    return {};
+  }
+}
+
+function loadListPreviewPage(page, name) {
+  const token = listPreviewToken;
+  if (!token || page < 1 || !ui || typeof ui.showModal !== "function") {
+    return;
+  }
+  if (typeof ui.hideModal === "function") {
+    ui.hideModal();
+  }
+  ui.showModal(`${_("List contents")}: ${name || ""}`, [
+    E("p", {}, _("Loading...")),
+  ]);
+  fs.exec("/usr/bin/forkop", ["list_cache_show_page", token, String(page)])
+    .then((result) => {
+      showListPreview(readListPreviewResult(result), name);
+    })
+    .catch(() => {
+      closeListPreview();
+      notify(_("Could not read this list"), "error");
+    });
+}
+
+function openListPreview(id, name) {
+  if (!id || !ui || typeof ui.showModal !== "function") {
+    return;
+  }
+
+  if (listPreviewToken) {
+    fs.exec("/usr/bin/forkop", ["list_cache_show_close", listPreviewToken]).catch(() => {});
+  }
+  listPreviewToken = "";
+  ui.showModal(`${_("List contents")}: ${name || id}`, [
+    E("p", {}, _("Loading...")),
+  ]);
+
+  fs.exec("/usr/bin/forkop", ["list_cache_show", id])
+    .then((result) => {
+      showListPreview(readListPreviewResult(result), name || id);
+    })
+    .catch(() => {
+      closeListPreview();
+      notify(_("Could not read this list"), "error");
     });
 }
 

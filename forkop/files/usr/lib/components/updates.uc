@@ -2129,9 +2129,12 @@ function import_builtin_subnets_from_rule(section, settings) {
             }
 
             try {
-                require("xray.geodata").remember_subnet_file(service, url, tmpfile);
+                if (!require("xray.geodata").remember_subnet_file(service, url, tmpfile))
+                    ok = false;
             }
-            catch (e) { }
+            catch (e) {
+                ok = false;
+            }
 
             if (!nft_module_success([
                 "nft-add-community-subnet-file-for-uci-section",
@@ -2152,6 +2155,15 @@ function import_builtin_subnets_from_rule(section, settings) {
                 ok = false;
 
             remove_file(tmpfile);
+        }
+        try {
+            if (!require("xray.geodata").community_subnets_ready(service)) {
+                log_message("Built-in " + as_string(service) + " subnet list is incomplete", "warn");
+                ok = false;
+            }
+        }
+        catch (e) {
+            ok = false;
         }
     }
 
@@ -2546,8 +2558,10 @@ function list_update() {
         let nftset_path = getenv("FORKOP_DNSMASQ_NFTSET_CONF") || "/tmp/dnsmasq.d/forkop-xray-nftset.conf";
         let before_config = file_md5(config_path);
         let before_nftset = file_md5(nftset_path);
-        if (!geodata.ensure_from_uci(settings, proxy_address, true))
+        if (!geodata.ensure_from_uci(settings, proxy_address, true)) {
             log_message("Xray list conversion kept previous copies where download failed", "warn");
+            ok = false;
+        }
         command_success_from_args([
             "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "init-config"
         ]);
@@ -2596,17 +2610,43 @@ function xray_list_assets_ready() {
     }
 }
 
+function selected_lists_ready() {
+    for (let item in list_cache.collect_selected_lists_from_uci()) {
+        if (type(item) != "object")
+            continue;
+        if (list_cache.usable_local_path(as_string(item.url)) == "")
+            return false;
+    }
+    try {
+        let geodata = require("xray.geodata");
+        for (let section in uci_sections("section")) {
+            if (!bool_option(section, "enabled", true))
+                continue;
+            for (let name in connections.community_lists(section))
+                if (!geodata.community_subnets_ready(name))
+                    return false;
+        }
+        if (!xray_list_assets_ready())
+            return false;
+    }
+    catch (e) {
+        log_message("List cache check failed: " + e, "warn");
+        return false;
+    }
+    return true;
+}
+
 function list_update_if_missing() {
     if (!list_cache.persist_enabled()) {
         list_update();
         return;
     }
     if (settings_update_interval(uci_settings()) == "") {
-        if (!engine.is_xray_primary() || xray_list_assets_ready()) {
+        if (selected_lists_ready()) {
             log_message("List auto-update is off; keeping flash cache on start", "info");
             exit(0);
         }
-        log_message("Xray list assets are missing from cache; running lists update now", "info");
+        log_message("Selected lists are missing from cache; running lists update now", "info");
         list_update();
         return;
     }
@@ -2626,8 +2666,8 @@ function list_update_if_due() {
 
     let last_run = file_first_line_value(LIST_UPDATE_STATE_FILE);
     let status = update_due_status(now_seconds(), last_run, seconds);
-    if (engine.is_xray_primary() && !xray_list_assets_ready()) {
-        log_message("Xray list assets are missing from cache; running lists update now", "info");
+    if (!selected_lists_ready()) {
+        log_message("Selected lists are missing from cache; running lists update now", "info");
         list_update();
     }
     if (status == 0)
@@ -2736,6 +2776,31 @@ function run_pending_reload_if_requested() {
     service_state_success([ "run-pending-reload-if-requested", PENDING_RELOAD_FILE, SERVICE_INIT ]);
 }
 
+function reload_xray_after_subscription_update() {
+    log_message("Reloading Xray to apply updated subscriptions", "info");
+    let config_path = "/etc/xray/config.json";
+    let before_config = file_md5(config_path);
+    if (!command_success_from_args([
+        "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "init-config"
+    ])) {
+        log_message("Failed to rebuild Xray after subscription update", "error");
+        return false;
+    }
+    let after_config = file_md5(config_path);
+    if (before_config != "" && before_config == after_config) {
+        log_message("Xray configuration unchanged after subscription update; skip reload", "info");
+        return true;
+    }
+    log_message("Refreshing Xray configuration after subscription update", "info");
+    if (!command_success_from_args([
+        "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "reload-runtime"
+    ])) {
+        log_message("Failed to reload Xray after subscription update", "error");
+        return false;
+    }
+    return true;
+}
+
 function subscription_update_common_locked(force, target_section, target_source_index) {
     let result = subscription_cache_capture([
         "update-request",
@@ -2767,8 +2832,13 @@ function subscription_update_common_locked(force, target_section, target_source_
             log_message("Subscription update completed: no changes detected", "info");
         else
             log_message("No subscription rules are due for update", "info");
+        if (engine.is_xray_primary() && unchanged > 0)
+            return reload_xray_after_subscription_update();
         return true;
     }
+
+    if (engine.is_xray_primary())
+        return reload_xray_after_subscription_update();
 
     log_message("Reloading sing-box to apply updated subscriptions", "info");
     if (!module_success([ LIB_DIR + "/server/service.uc", "prepare-all-defaults" ]))
@@ -2990,6 +3060,27 @@ function list_cache_job_outcome() {
     return "";
 }
 
+function print_list_cache_show(id) {
+    let result = list_cache.preview_selected(id);
+    if (type(result) != "object")
+        result = { ok: false, error: "unreadable" };
+    print(sprintf("%J", result), "\n");
+}
+
+function print_list_cache_show_page(token, page) {
+    let result = list_cache.preview_page(token, page);
+    if (type(result) != "object")
+        result = { ok: false, error: "unreadable" };
+    print(sprintf("%J", result), "\n");
+}
+
+function print_list_cache_show_close(token) {
+    let result = list_cache.preview_close(token);
+    if (type(result) != "object")
+        result = { ok: false, error: "missing" };
+    print(sprintf("%J", result), "\n");
+}
+
 function print_list_cache_status() {
     let status = list_cache.status_object();
     if (type(status) != "object")
@@ -3020,12 +3111,42 @@ function start_list_cache_persist() {
 }
 
 function run_list_cache_persist() {
-    let persist_result = list_cache.persist_selected_lists();
+    let settings = uci_settings();
+    let proxy_address = service_proxy_address(settings, "lists");
+    let persist_result = list_cache.persist_selected_lists(settings, proxy_address);
     let ok = true;
     if (type(persist_result) == "object")
         ok = persist_result.ok ? true : false;
     else
         ok = persist_result ? true : false;
+
+    let geodata = require("xray.geodata");
+    if (!geodata.ensure_shared_subnets(proxy_address, true)) {
+        log_message("Shared subnet download kept previous copies where download failed", "warn");
+        ok = false;
+    }
+
+    if (engine.is_xray_primary()) {
+        let config_path = "/etc/xray/config.json";
+        let before_config = file_md5(config_path);
+        if (!geodata.ensure_from_uci(settings, proxy_address, true)) {
+            log_message("Xray list download kept previous copies where download failed", "warn");
+            ok = false;
+        }
+        command_success_from_args([
+            "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "init-config"
+        ]);
+        let after_config = file_md5(config_path);
+        if (before_config != "" && before_config == after_config)
+            log_message("Xray configuration unchanged after list download; skip reload", "info");
+        else {
+            log_message("Refreshing Xray configuration after list download", "info");
+            command_success_from_args([
+                "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "reload-runtime"
+            ]);
+        }
+    }
+
     try { fs.writefile(LIST_CACHE_JOB_OUTCOME, (ok ? "ok" : "fail") + "\n"); } catch (e) { }
     try { fs.unlink(LIST_CACHE_JOB_PID); } catch (e2) { }
     log_message(ok ? "List cache download finished" : "List cache download finished with errors", ok ? "info" : "warn");
@@ -3064,6 +3185,12 @@ else if (mode == "list-update")
     list_update();
 else if (mode == "list-cache-status")
     print_list_cache_status();
+else if (mode == "list-cache-show")
+    print_list_cache_show(ARGV[1]);
+else if (mode == "list-cache-show-page")
+    print_list_cache_show_page(ARGV[1], ARGV[2]);
+else if (mode == "list-cache-show-close")
+    print_list_cache_show_close(ARGV[1]);
 else if (mode == "list-cache-persist")
     start_list_cache_persist();
 else if (mode == "list-cache-persist-run")

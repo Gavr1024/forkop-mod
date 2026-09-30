@@ -99,7 +99,7 @@ for (const key of [
   }
 }
 
-for (const key of ["xray_finalmask", "xray_finalmask_length", "xray_finalmask_interval", "xray_balancer_strategy", "xray_fallback_target", "xray_leastload_expected", "xray_leastload_max_rtt", "xray_leastload_tolerance"]) {
+for (const key of ["xray_finalmask", "xray_finalmask_length", "xray_finalmask_interval", "xray_balancer_strategy", "xray_fallback_target", "xray_leastload_expected", "xray_leastload_max_rtt", "xray_leastload_tolerance", "xray_mux_enabled", "xray_mux_concurrency", "xray_mux_xudp", "xray_mux_udp443"]) {
   const hidden = new RegExp(
     'restrictSectionEngine\\([\\s\\S]{0,320}"' + key + '"[\\s\\S]{0,240}"xray"',
   );

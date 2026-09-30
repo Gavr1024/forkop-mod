@@ -802,12 +802,50 @@ function supported_ir(ir) {
     return convert_ir(ir, "probe") != null;
 }
 
+function apply_mux(outbound, spec) {
+    outbound = object_or_empty(outbound);
+    spec = object_or_empty(spec);
+    if (spec.enabled != true)
+        return outbound;
+    let proto = lc(as_string(outbound.protocol || ""));
+    if (proto != "vless" && proto != "vmess" && proto != "trojan" && proto != "shadowsocks")
+        return outbound;
+    let settings = object_or_empty(outbound.settings);
+    let flow = lc(as_string(settings.flow || ""));
+    if (flow != "" && (index(flow, "vision") >= 0 || index(flow, "xtls") >= 0))
+        return outbound;
+    let method = lc(as_string(settings.method || ""));
+    if (proto == "shadowsocks" && index(method, "2022-") == 0)
+        return outbound;
+    let concurrency = int(spec.concurrency);
+    if (concurrency == null || concurrency < 1)
+        concurrency = 8;
+    if (concurrency > 128)
+        concurrency = 128;
+    let mux = {
+        enabled: true,
+        concurrency: concurrency
+    };
+    if (spec.xudp == true) {
+        mux.xudpConcurrency = concurrency;
+        let udp443 = lc(as_string(spec.udp443 || "reject"));
+        if (udp443 != "allow" && udp443 != "skip")
+            udp443 = "reject";
+        mux.xudpProxyUDP443 = udp443;
+    }
+    else
+        mux.xudpConcurrency = -1;
+    outbound.mux = mux;
+    return outbound;
+}
+
 return {
     convert_ir,
     convert_xray_native,
     convert_interface,
     socks_chain_outbound,
     apply_dialer_proxy,
+    apply_mux,
     apply_freedom_fragment,
     apply_tcp_finalmask,
     supported_ir,

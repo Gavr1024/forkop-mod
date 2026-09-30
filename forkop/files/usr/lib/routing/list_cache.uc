@@ -180,16 +180,35 @@ function cache_basename(url) {
     return singbox_rulesets.hash12(url) + "." + extension_for_url(url);
 }
 
+function cache_ram_rel(path) {
+    path = as_string(path);
+    let prefix = LIST_CACHE_DIR + "/";
+    let rel = path;
+    if (index(path, prefix) == 0)
+        rel = substr(path, length(prefix));
+    else {
+        let slash = rindex(path, "/");
+        rel = slash >= 0 ? substr(path, slash + 1) : path;
+    }
+    if (rel == "")
+        rel = "list";
+    return rel;
+}
+
+function cache_ram_path(path) {
+    return LIST_RAM_DIR + "/" + cache_ram_rel(path);
+}
+
 function staging_path(dest) {
     dest = as_string(dest);
     let slash = rindex(dest, "/");
-    let name = slash >= 0 ? substr(dest, slash + 1) : dest;
     let dir = slash > 0 ? substr(dest, 0, slash) : "";
     if (index(dir, "/tmp/") == 0 || dir == "/tmp")
         return dest + ".tmp";
     if (!ensure_dir("/tmp/forkop-stage"))
         return dest + ".tmp";
-    return "/tmp/forkop-stage/" + name + "." + as_string(clock()[0]) + ".tmp";
+    let token = replace(cache_ram_rel(dest), /[^A-Za-z0-9._-]+/g, "_");
+    return "/tmp/forkop-stage/" + token + "." + as_string(clock()[0]) + ".tmp";
 }
 
 function gzip_file(src, dest) {
@@ -265,13 +284,6 @@ function materialize_gzip(gz_path, ram_path) {
     return gunzip_file(gz_path, ram_path);
 }
 
-function cache_ram_path(path) {
-    path = as_string(path);
-    let slash = rindex(path, "/");
-    let name = slash >= 0 ? substr(path, slash + 1) : path;
-    return LIST_RAM_DIR + "/" + name;
-}
-
 function stored_list_size(path) {
     path = as_string(path);
     let recorded = read_stored_size(path);
@@ -298,8 +310,59 @@ function compress_cache_file(filepath) {
     return true;
 }
 
+function singbox_cache_dir() {
+    return LIST_CACHE_DIR + "/sing-box";
+}
+
 function cache_path_for_url(url) {
+    return singbox_cache_dir() + "/" + cache_basename(url);
+}
+
+function legacy_cache_path(url) {
     return LIST_CACHE_DIR + "/" + cache_basename(url);
+}
+
+function move_cache_file(src, dest) {
+    src = as_string(src);
+    dest = as_string(dest);
+    if (src == "" || dest == "" || src == dest || file_size(src) == 0)
+        return false;
+    let slash = rindex(dest, "/");
+    if (slash > 0 && !ensure_dir(substr(dest, 0, slash)))
+        return false;
+    return system("mv -f " + shell_quote(src) + " " + shell_quote(dest)) == 0;
+}
+
+function discard_cache_copy(path) {
+    path = as_string(path);
+    if (path == "")
+        return;
+    for (let suffix in [ "", ".gz", ".gz.size" ]) {
+        try { fs.unlink(path + suffix); } catch (e) { }
+    }
+}
+
+function cache_copy_mtime(path) {
+    let gz = file_mtime(path + ".gz");
+    let raw = file_mtime(path);
+    return gz > raw ? gz : raw;
+}
+
+function adopt_legacy_singbox_cache(path, legacy) {
+    if (path == "" || legacy == "" || path == legacy)
+        return;
+    let dest_mtime = cache_copy_mtime(path);
+    let legacy_mtime = cache_copy_mtime(legacy);
+    if (legacy_mtime > dest_mtime) {
+        if (file_size(legacy + ".gz") > 0)
+            move_cache_file(legacy + ".gz", path + ".gz");
+        if (file_size(legacy + ".gz.size") > 0)
+            move_cache_file(legacy + ".gz.size", path + ".gz.size");
+        if (file_size(path + ".gz") == 0 && file_size(legacy) > 0)
+            move_cache_file(legacy, path);
+    }
+    if (cache_copy_mtime(path) > 0 && cache_copy_mtime(path) >= legacy_mtime)
+        discard_cache_copy(legacy);
 }
 
 function ensure_cached_alias(path) {
@@ -322,6 +385,7 @@ function usable_local_path(url, settings) {
     if (url == "")
         return "";
     let path = cache_path_for_url(url);
+    adopt_legacy_singbox_cache(path, legacy_cache_path(url));
     if (file_size(path + ".gz") > 0)
         return ensure_cached_alias(path);
     return file_size(path) > 0 ? path : "";
@@ -520,7 +584,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.7",
+        "-A", "forkop-list-cache/1.0.8",
         "-o", output_path,
         "--url", as_string(url)
     ];
@@ -594,7 +658,8 @@ function install_download(src, filepath) {
     write_stored_size(filepath, size);
     let ram = cache_ram_path(filepath);
     if (src != ram) {
-        if (!ensure_dir(LIST_RAM_DIR))
+        let ram_slash = rindex(ram, "/");
+        if (ram_slash > 0 && !ensure_dir(substr(ram, 0, ram_slash)))
             return file_size(filepath + ".gz") > 0;
         if (system("mv -f " + shell_quote(src) + " " + shell_quote(ram)) != 0)
             return file_size(filepath + ".gz") > 0;
@@ -606,9 +671,10 @@ function install_download(src, filepath) {
 function download_to_file(url, filepath, proxy_address) {
     if (!ensure_dir(LIST_RAM_DIR))
         return false;
-    let slash = rindex(as_string(filepath), "/");
-    let name = slash >= 0 ? substr(as_string(filepath), slash + 1) : "list";
-    let tmp = LIST_RAM_DIR + "/" + name + ".download";
+    let tmp = cache_ram_path(filepath) + ".download";
+    let tmp_slash = rindex(tmp, "/");
+    if (tmp_slash > 0 && !ensure_dir(substr(tmp, 0, tmp_slash)))
+        return false;
     try { fs.unlink(tmp); } catch (e) { }
 
     let attempt = 1;
@@ -669,6 +735,400 @@ function item_status(item) {
     return persist_enabled() ? "missing" : "disabled";
 }
 
+const PREVIEW_LINE_LIMIT = 500;
+const SING_BOX_BIN = getenv("SING_BOX_BIN") || "/usr/bin/sing-box";
+
+function find_selected_item(id) {
+    id = trim_string(id);
+    if (id == "")
+        return null;
+    for (let item in collect_selected_lists_from_uci()) {
+        if (type(item) != "object")
+            continue;
+        if (as_string(item.id) == id || as_string(item.name) == id)
+            return item;
+    }
+    return null;
+}
+
+function readable_item_path(path) {
+    path = as_string(path);
+    let restored = ensure_cached_alias(path);
+    if (as_string(restored) != "" && file_size(restored) > 0)
+        return restored;
+    return file_size(path) > 0 ? path : "";
+}
+
+function push_preview_line(lines, seen, value) {
+    value = trim_string(value);
+    if (value == "" || seen[value])
+        return;
+    seen[value] = true;
+    push(lines, value);
+}
+
+function collect_preview_lines(node, lines, seen) {
+    if (type(node) == "array") {
+        for (let item in node)
+            collect_preview_lines(item, lines, seen);
+        return;
+    }
+    if (type(node) != "object")
+        return;
+    let keys = [ "domain", "domain_suffix", "domain_keyword", "domain_regex", "ip_cidr" ];
+    for (let key in keys) {
+        let values = node[key];
+        if (type(values) == "string")
+            push_preview_line(lines, seen, values);
+        else
+            for (let value in array_or_empty(values))
+                push_preview_line(lines, seen, value);
+    }
+    if (type(node.rules) == "array")
+        collect_preview_lines(node.rules, lines, seen);
+}
+
+function preview_value(value) {
+    value = as_string(value);
+    if (length(value) < 3 || length(value) > 253)
+        return false;
+    if (value == "domain" || value == "domain_suffix" || value == "domain_keyword" ||
+        value == "domain_regex" || value == "ip_cidr" || value == "rules" ||
+        value == "version" || value == "process_name")
+        return false;
+    if (match(value, /^[A-Za-z0-9_.:*-]+$/) == null)
+        return false;
+    return index(value, ".") >= 0 || index(value, ":") >= 0;
+}
+
+function collect_preview_tokens(text, lines, seen) {
+    text = as_string(text);
+    let i = 0;
+    let n = length(text);
+    while (i < n && length(lines) <= PREVIEW_LINE_LIMIT) {
+        if (substr(text, i, 1) != "\"") {
+            i++;
+            continue;
+        }
+        i++;
+        let start = i;
+        while (i < n) {
+            let ch = substr(text, i, 1);
+            if (ch == "\\") {
+                i += 2;
+                continue;
+            }
+            if (ch == "\"")
+                break;
+            i++;
+        }
+        if (i >= n || substr(text, i, 1) != "\"")
+            break;
+        let value = substr(text, start, i - start);
+        i++;
+        if (preview_value(value))
+            push_preview_line(lines, seen, value);
+    }
+}
+
+function read_file_prefix(path, limit) {
+    path = as_string(path);
+    limit = int(limit || 262144);
+    if (limit < 4096)
+        limit = 4096;
+    if (!ensure_dir("/tmp/forkop-stage"))
+        return "";
+    let dest = "/tmp/forkop-stage/list-preview-head.txt";
+    try { fs.unlink(dest); } catch (e) { }
+    system("dd if=" + shell_quote(path) + " of=" + shell_quote(dest) + " bs=" + as_string(limit) + " count=1 2>/dev/null");
+    let data = fs.readfile(dest);
+    try { fs.unlink(dest); } catch (e2) { }
+    return data == null ? "" : as_string(data);
+}
+
+function prefix_preview_lines(path) {
+    let lines = [];
+    collect_preview_tokens(read_file_prefix(path, 262144), lines, {});
+    return lines;
+}
+
+function decompiled_preview_lines(path) {
+    let lines = [];
+    if (file_size(SING_BOX_BIN) == 0 || !ensure_dir("/tmp/forkop-stage"))
+        return lines;
+    let tmp = "/tmp/forkop-stage/list-preview-" + as_string(clock()[0]) + ".json";
+    try { fs.unlink(tmp); } catch (e) { }
+    let command = command_from_args([ SING_BOX_BIN, "rule-set", "decompile", path, "-o", tmp ]) + " >/dev/null 2>&1";
+    if (file_size("/usr/bin/timeout") > 0)
+        command = command_from_args([ "/usr/bin/timeout", "45" ]) + " " + command;
+    else if (file_size("/bin/timeout") > 0)
+        command = command_from_args([ "/bin/timeout", "45" ]) + " " + command;
+    if (system(command) != 0 || file_size(tmp) == 0) {
+        try { fs.unlink(tmp); } catch (e2) { }
+        return lines;
+    }
+    if (file_size(tmp) > 262144) {
+        lines = prefix_preview_lines(tmp);
+        try { fs.unlink(tmp); } catch (e4) { }
+        return lines;
+    }
+    let parsed = json_decode_text(fs.readfile(tmp));
+    try { fs.unlink(tmp); } catch (e3) { }
+    collect_preview_lines(parsed, lines, {});
+    return lines;
+}
+
+function text_preview_lines(path) {
+    let data = fs.readfile(path);
+    if (data == null)
+        return null;
+    data = as_string(data);
+    if (index(data, "\0") >= 0)
+        return null;
+    let lines = [];
+    for (let line in split(data, "\n")) {
+        line = trim_string(line);
+        if (line != "")
+            push(lines, line);
+    }
+    return lines;
+}
+
+function limited_preview(lines) {
+    let total = length(lines);
+    let shown = [];
+    let count = 0;
+    for (let line in lines) {
+        if (count >= PREVIEW_LINE_LIMIT)
+            break;
+        push(shown, line);
+        count++;
+    }
+    return {
+        text: join("\n", shown),
+        total,
+        shown: count,
+        truncated: total > count
+    };
+}
+
+const PREVIEW_ROOT = "/tmp/forkop-list-preview";
+const PREVIEW_PAGE_SIZE = 500;
+
+function preview_token_ok(token) {
+    return match(as_string(token), /^[0-9a-f]{12}$/) != null;
+}
+
+function preview_dir(token) {
+    if (!preview_token_ok(token))
+        return "";
+    return PREVIEW_ROOT + "/" + token;
+}
+
+function remove_preview_tree(path) {
+    path = as_string(path);
+    if (path != PREVIEW_ROOT && index(path, PREVIEW_ROOT + "/") != 0)
+        return;
+    if (index(path, "..") >= 0)
+        return;
+    system("rm -rf " + shell_quote(path));
+}
+
+function clear_previews() {
+    remove_preview_tree(PREVIEW_ROOT);
+}
+
+function capture_command(command) {
+    if (!ensure_dir("/tmp/forkop-stage"))
+        return "";
+    let dest = "/tmp/forkop-stage/list-preview-capture.txt";
+    try { fs.unlink(dest); } catch (e) { }
+    system(as_string(command) + " > " + shell_quote(dest) + " 2>/dev/null");
+    let data = fs.readfile(dest);
+    try { fs.unlink(dest); } catch (e2) { }
+    return data == null ? "" : as_string(data);
+}
+
+function count_text_lines(path) {
+    let data = trim_string(capture_command("wc -l " + shell_quote(path)));
+    let parts = split(data, /[ \t]+/);
+    return int(parts[0] || 0);
+}
+
+function file_has_nul(path) {
+    let input = fs.open(as_string(path), "r");
+    if (!input)
+        return false;
+    let head = as_string(input.read(4096));
+    input.close();
+    return index(head, "\0") >= 0;
+}
+
+function drain_preview_strings(text) {
+    let values = [];
+    let rest = "";
+    let i = 0;
+    let n = length(text);
+    while (i < n) {
+        let quote = index(substr(text, i), "\"");
+        if (quote < 0)
+            break;
+        let start = i + quote + 1;
+        let end = index(substr(text, start), "\"");
+        if (end < 0) {
+            rest = substr(text, start - 1);
+            break;
+        }
+        let value = substr(text, start, end);
+        i = start + end + 1;
+        if (preview_value(value))
+            push(values, value);
+    }
+    return { values, rest };
+}
+
+function stream_ruleset_lines(src, dest) {
+    let input = fs.open(as_string(src), "r");
+    let output = fs.open(as_string(dest), "w");
+    if (!input || !output) {
+        if (input)
+            input.close();
+        if (output)
+            output.close();
+        return false;
+    }
+    let carry = "";
+    let total = 0;
+    while (true) {
+        let chunk = input.read(65536);
+        if (chunk == null || chunk == "")
+            break;
+        let drained = drain_preview_strings(carry + as_string(chunk));
+        carry = drained.rest;
+        if (length(carry) > 4096)
+            carry = substr(carry, length(carry) - 4096);
+        for (let value in drained.values) {
+            output.write(value + "\n");
+            total++;
+        }
+    }
+    input.close();
+    output.close();
+    return total > 0;
+}
+
+function extract_ruleset_lines(raw, dest) {
+    let pattern = "\"[A-Za-z0-9_.:*-]+\"";
+    let command = "grep -a -o -E -- " + shell_quote(pattern) + " " + shell_quote(raw) +
+        " | sed -e 's/^\"//' -e 's/\"$//' | grep -a -E '[.:]' > " + shell_quote(dest);
+    system(command + " 2>/dev/null");
+    if (file_size(dest) > 0)
+        return true;
+    try { fs.unlink(dest); } catch (e) { }
+    return stream_ruleset_lines(raw, dest);
+}
+
+function decompile_to_lines(path, raw, dest) {
+    if (file_size(SING_BOX_BIN) == 0)
+        return false;
+    try { fs.unlink(raw); } catch (e) { }
+    try { fs.unlink(dest); } catch (e2) { }
+    let command = command_from_args([ SING_BOX_BIN, "rule-set", "decompile", path, "-o", raw ]) + " >/dev/null 2>&1";
+    if (file_size("/usr/bin/timeout") > 0)
+        command = command_from_args([ "/usr/bin/timeout", "45" ]) + " " + command;
+    else if (file_size("/bin/timeout") > 0)
+        command = command_from_args([ "/bin/timeout", "45" ]) + " " + command;
+    let ok = system(command) == 0 && file_size(raw) > 0 && extract_ruleset_lines(raw, dest);
+    try { fs.unlink(raw); } catch (e3) { }
+    return ok && file_size(dest) > 0;
+}
+
+function copy_text_lines(src, dest) {
+    if (file_has_nul(src))
+        return false;
+    system("sed '/^[[:space:]]*$/d' " + shell_quote(src) + " > " + shell_quote(dest) + " 2>/dev/null");
+    return file_size(dest) > 0;
+}
+
+function prepare_preview(item, path) {
+    clear_previews();
+    if (!ensure_dir(PREVIEW_ROOT))
+        return { ok: false, error: "unreadable", name: as_string(item.name) };
+    let token = sprintf("%08x%04x", int(clock()[0]) % 4294967296, int(clock()[1] || 0) % 65536);
+    let dir = preview_dir(token);
+    if (dir == "" || !ensure_dir(dir))
+        return { ok: false, error: "unreadable", name: as_string(item.name) };
+    let lines = dir + "/lines.txt";
+    let raw = dir + "/raw.json";
+    let ext = extension_for_url(item.url);
+    let binary = ext == "srs" || file_has_nul(path);
+    let ready = binary ? decompile_to_lines(path, raw, lines) : copy_text_lines(path, lines);
+    if (!ready && !binary)
+        ready = decompile_to_lines(path, raw, lines);
+    try { fs.unlink(raw); } catch (e) { }
+    let total = ready ? count_text_lines(lines) : 0;
+    if (total <= 0) {
+        remove_preview_tree(dir);
+        return { ok: false, error: "unreadable", name: as_string(item.name) };
+    }
+    write_text_file(dir + "/name", as_string(item.name));
+    write_text_file(dir + "/total", sprintf("%d\n", total));
+    return { ok: true, token, total, name: as_string(item.name) };
+}
+
+function preview_page(token, page) {
+    let dir = preview_dir(token);
+    if (dir == "" || file_size(dir + "/lines.txt") == 0)
+        return { ok: false, error: "missing" };
+    let total = int(trim_string(fs.readfile(dir + "/total") || "0"));
+    if (total <= 0)
+        total = count_text_lines(dir + "/lines.txt");
+    let pages = int((total + PREVIEW_PAGE_SIZE - 1) / PREVIEW_PAGE_SIZE);
+    if (pages < 1)
+        pages = 1;
+    page = int(page || 1);
+    if (page < 1)
+        page = 1;
+    if (page > pages)
+        page = pages;
+    let start = (page - 1) * PREVIEW_PAGE_SIZE + 1;
+    let end = page * PREVIEW_PAGE_SIZE;
+    let text = capture_command(
+        "sed -n " + shell_quote(sprintf("%d,%dp", start, end)) + " " + shell_quote(dir + "/lines.txt")
+    );
+    return {
+        ok: true,
+        token,
+        name: trim_string(fs.readfile(dir + "/name") || ""),
+        page,
+        pages,
+        total,
+        page_size: PREVIEW_PAGE_SIZE,
+        text
+    };
+}
+
+function preview_close(token) {
+    let dir = preview_dir(token);
+    if (dir == "")
+        return { ok: false, error: "missing" };
+    remove_preview_tree(dir);
+    return { ok: true };
+}
+
+function preview_selected(id) {
+    let item = find_selected_item(id);
+    if (item == null)
+        return { ok: false, error: "missing" };
+    let path = readable_item_path(item.path);
+    if (path == "")
+        return { ok: false, error: "missing", name: as_string(item.name) };
+    let prepared = prepare_preview(item, path);
+    if (!prepared.ok)
+        return prepared;
+    return preview_page(prepared.token, 1);
+}
+
 function decorate_item(item) {
     item = object_or_empty(item);
     let size = stored_list_size(item.path);
@@ -715,20 +1175,16 @@ function filter(values, predicate) {
     return result;
 }
 
-function prune_unselected(selected) {
-    let keep = {
-        "manifest.json": true
-    };
-    for (let item in array_or_empty(selected))
-        keep[cache_basename(item.url)] = true;
-
-    let names = fs.lsdir(LIST_CACHE_DIR);
+function prune_cached_names(dir, keep, skip_engine_dirs) {
+    let names = fs.lsdir(dir);
     if (type(names) != "array")
         return;
 
     for (let name in names) {
         name = as_string(name);
-        if (name == "." || name == ".." || name == "manifest.json" || name == "xray")
+        if (name == "." || name == ".." || name == "manifest.json")
+            continue;
+        if (skip_engine_dirs && (name == "xray" || name == "sing-box" || name == "Subnets"))
             continue;
         let base = name;
         if (match(base, /\.gz\.size$/) != null)
@@ -738,9 +1194,20 @@ function prune_unselected(selected) {
         if (keep[base] || keep[name])
             continue;
         if (match(name, /\.tmp$/) != null || match(name, /\.(srs|json)(\.gz|\.gz\.size)?$/) != null) {
-            try { fs.unlink(LIST_CACHE_DIR + "/" + name); } catch (e) { }
+            try { fs.unlink(dir + "/" + name); } catch (e) { }
         }
     }
+}
+
+function prune_unselected(selected) {
+    let keep = {
+        "manifest.json": true
+    };
+    for (let item in array_or_empty(selected))
+        keep[cache_basename(item.url)] = true;
+
+    prune_cached_names(LIST_CACHE_DIR, keep, true);
+    prune_cached_names(singbox_cache_dir(), keep, false);
 }
 
 function persist_selected_lists(settings, proxy_address) {
@@ -773,6 +1240,7 @@ function persist_selected_lists(settings, proxy_address) {
     let changed = false;
 
     for (let item in selected) {
+        adopt_legacy_singbox_cache(item.path, legacy_cache_path(item.url));
         let previous_size = stored_list_size(item.path);
         if (download_to_file(item.url, item.path, proxy_address)) {
             let decorated = decorate_item(item);
@@ -808,12 +1276,16 @@ function module_exports() {
         persist_enabled,
         cache_dir,
         cache_path_for_url,
+        ensure_cached_alias,
         usable_local_path,
         local_entry,
         collect_selected_lists,
         collect_selected_lists_from_uci,
         ensure_download_section_up,
         persist_selected_lists,
+        preview_selected,
+        preview_page,
+        preview_close,
         download_to_file,
         lists_proxy_address,
         download_proxy_address,
