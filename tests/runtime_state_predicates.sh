@@ -560,8 +560,12 @@ cat >"$WORK_DIR/sing-box-signature.json" <<'JSON'
 JSON
 
 cat >"$WORK_DIR/sing-box-signature.expected" <<'EOF_SING_BOX_SIG'
+[settings.routing_engine]
+sing-box
 [settings.dns_type]
 tcp
+[settings.dns_certificate_name]
+
 [settings.dns_strategy]
 prefer_ipv6
 [settings.dns_server]
@@ -605,11 +609,15 @@ secret
 [settings.download_components_via_proxy]
 0
 [settings.persist_lists_locally]
-0
+1
 [settings.route_router_traffic]
+0
+[settings.xray_freedom_fragment]
 0
 [rule.proxy1.action]
 proxy
+[rule.proxy1.proxy_core]
+sing-box
 [rule.proxy1.connection_urls]
 [ "vless://one", "vless://two" ]
 [rule.proxy1.subscription_urls]
@@ -710,6 +718,8 @@ local.srs
 local.lst
 [rule.out1.action]
 outbound
+[rule.out1.proxy_core]
+sing-box
 [rule.out1.connection_urls]
 [ ]
 [rule.out1.subscription_urls]
@@ -832,6 +842,8 @@ byedpi
 
 [rule.vpn1.action]
 vpn
+[rule.vpn1.proxy_core]
+sing-box
 [rule.vpn1.connection_urls]
 [ ]
 [rule.vpn1.subscription_urls]

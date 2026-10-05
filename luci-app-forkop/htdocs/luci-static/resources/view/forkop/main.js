@@ -129,6 +129,17 @@ function validateDNS(value) {
   if (!value) {
     return { valid: false, message: _("DNS server address cannot be empty") };
   }
+  const hash = value.indexOf("#");
+  if (hash >= 0) {
+    const name = value.slice(hash + 1).trim();
+    value = value.slice(0, hash).trim();
+    if (!validateDomain(name).valid) {
+      return {
+        valid: false,
+        message: _("Certificate name must be a domain, for example dns.example.net"),
+      };
+    }
+  }
   const [addressPart, ...pathParts] = value.split("/");
   const parsedHostPort = parseHostPort(addressPart);
   const host = parsedHostPort ? parsedHostPort.host : unbracketHost(addressPart);
@@ -1043,7 +1054,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.8";
+var FORKOP_LUCI_APP_VERSION = "1.0.9";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -1096,6 +1107,52 @@ var DNS_SERVER_OPTIONS = {
   "dns.adguard-dns.com": "dns.adguard-dns.com (AdGuard Default)",
   "unfiltered.adguard-dns.com": "unfiltered.adguard-dns.com (AdGuard Unfiltered)",
   "family.adguard-dns.com": "family.adguard-dns.com (AdGuard Family)"
+};
+var DOQ_DNS_SERVER_OPTIONS = {
+  "9.9.9.9": "9.9.9.9 (Quad9)",
+  "149.112.112.112": "149.112.112.112 (Quad9)",
+  "223.5.5.5": "223.5.5.5 (AliDNS)",
+  "223.6.6.6": "223.6.6.6 (AliDNS)",
+  "94.140.14.14": "94.140.14.14 (AdGuard)",
+  "94.140.15.15": "94.140.15.15 (AdGuard)",
+  "94.140.14.140": "94.140.14.140 (AdGuard Unfiltered)",
+  "94.140.15.141": "94.140.15.141 (AdGuard Unfiltered)",
+  "94.140.14.15": "94.140.14.15 (AdGuard Family)",
+  "94.140.15.16": "94.140.15.16 (AdGuard Family)"
+};
+var DOQ_DNS_SERVER_REWRITE = {
+  "dns.quad9.net": "9.9.9.9",
+  "dns11.quad9.net": "9.9.9.11",
+  "dns.alidns.com": "223.5.5.5",
+  "dns.adguard-dns.com": "94.140.14.14",
+  "unfiltered.adguard-dns.com": "94.140.14.140",
+  "family.adguard-dns.com": "94.140.14.15"
+};
+var DOH3_DNS_SERVER_OPTIONS = {
+  "8.8.8.8": "8.8.8.8 (Google)",
+  "8.8.4.4": "8.8.4.4 (Google)",
+  "1.1.1.1": "1.1.1.1 (Cloudflare)",
+  "1.0.0.1": "1.0.0.1 (Cloudflare)",
+  "9.9.9.9": "9.9.9.9 (Quad9)",
+  "149.112.112.112": "149.112.112.112 (Quad9)",
+  "223.5.5.5": "223.5.5.5 (AliDNS)",
+  "223.6.6.6": "223.6.6.6 (AliDNS)",
+  "94.140.14.14": "94.140.14.14 (AdGuard)",
+  "94.140.15.15": "94.140.15.15 (AdGuard)",
+  "94.140.14.140": "94.140.14.140 (AdGuard Unfiltered)",
+  "94.140.15.141": "94.140.15.141 (AdGuard Unfiltered)",
+  "94.140.14.15": "94.140.14.15 (AdGuard Family)",
+  "94.140.15.16": "94.140.15.16 (AdGuard Family)"
+};
+var DOH3_DNS_SERVER_REWRITE = {
+  "dns.google": "8.8.8.8",
+  "cloudflare-dns.com": "1.1.1.1",
+  "dns.quad9.net": "9.9.9.9",
+  "dns11.quad9.net": "9.9.9.11",
+  "dns.alidns.com": "223.5.5.5",
+  "dns.adguard-dns.com": "94.140.14.14",
+  "unfiltered.adguard-dns.com": "94.140.14.140",
+  "family.adguard-dns.com": "94.140.14.15"
 };
 var BOOTSTRAP_DNS_SERVER_OPTIONS = {
   "77.88.8.8": "77.88.8.8 (Yandex DNS)",
@@ -3264,12 +3321,23 @@ var ForkopShellMethods = {
 };
 
 // src/forkop/methods/custom/getDashboardSections.ts
-function getSectionProxyCore(section) {
-  const value = String(section.proxy_core || "").trim().toLowerCase();
+function configuredRoutingEngine(configSections) {
+  const settings = (configSections || []).find((section) => section[".type"] === "settings");
+  const value = String(settings && settings.routing_engine || "").trim().toLowerCase();
   return value === "xray" || value === "xray-core" ? "xray" : "sing-box";
 }
-function withProxyCore(section, group) {
-  const proxyCore = getSectionProxyCore(section);
+function getSectionProxyCore(section, routingEngine) {
+  const value = String(section.proxy_core || "").trim().toLowerCase();
+  if (value === "xray" || value === "xray-core") {
+    return "xray";
+  }
+  if (value === "sing-box" || value === "singbox") {
+    return "sing-box";
+  }
+  return routingEngine === "xray" ? "xray" : "sing-box";
+}
+function withProxyCore(section, routingEngine, group) {
+  const proxyCore = getSectionProxyCore(section, routingEngine);
   return {
     ...group,
     proxyCore,
@@ -4384,7 +4452,7 @@ function mergeXrayNodesIntoClashProxies(proxies, configSections, xrayPayload) {
   const selected = xrayPayload?.selected || {};
   const next = { ...proxies };
   configSections.filter(
-    (section) => section.enabled !== "0" && isConnectionAction(section.action) && getSectionProxyCore(section) === "xray"
+    (section) => section.enabled !== "0" && isConnectionAction(section.action) && getSectionProxyCore(section, configuredRoutingEngine(configSections)) === "xray"
   ).forEach((section) => {
     const sectionName = section[".name"];
     const sectionNodes = Array.isArray(nodes[sectionName]) ? nodes[sectionName] : [];
@@ -4446,6 +4514,7 @@ async function getDashboardSections(options = {}) {
       data: []
     };
   }
+  const routingEngine = configuredRoutingEngine(configSections);
   const proxies = Object.entries(mergedProxies).map(([key, value]) => ({
     code: key,
     value
@@ -4479,7 +4548,7 @@ async function getDashboardSections(options = {}) {
           priorityGroups,
           cachedProxyLinks
         );
-        return withProxyCore(section, {
+        return withProxyCore(section, routingEngine, {
           withTagSelect: true,
           code: selector?.code || sectionName,
           sectionName,
@@ -4496,7 +4565,7 @@ async function getDashboardSections(options = {}) {
       if (sectionAction === "vpn") {
         const outboundTag2 = getOutboundTagBySection(sectionName);
         const outbound = proxies.find((proxy) => proxy.code === outboundTag2);
-        return withProxyCore(section, {
+        return withProxyCore(section, routingEngine, {
           withTagSelect: false,
           code: outbound?.code || sectionName,
           sectionName,
@@ -4519,7 +4588,7 @@ async function getDashboardSections(options = {}) {
       if (sectionAction === "outbound") {
         const outboundTag2 = getOutboundTagBySection(sectionName);
         const outbound = proxies.find((proxy) => proxy.code === outboundTag2);
-        return withProxyCore(section, {
+        return withProxyCore(section, routingEngine, {
           withTagSelect: false,
           code: outbound?.code || sectionName,
           sectionName,
@@ -4537,7 +4606,7 @@ async function getDashboardSections(options = {}) {
           ]
         });
       }
-      return withProxyCore(section, {
+      return withProxyCore(section, routingEngine, {
         withTagSelect: false,
         code: sectionName,
         sectionName,
@@ -8599,7 +8668,7 @@ async function runDnsCheck() {
     state,
     items: [
       ...insertIf(
-        data.dns_type === "doh" || data.dns_type === "dot" || data.bootstrap_dns_server_count > 1 || !data.bootstrap_dns_status,
+        data.dns_type === "doh" || data.dns_type === "doh3" || data.dns_type === "doq" || data.dns_type === "dot" || data.bootstrap_dns_server_count > 1 || !data.bootstrap_dns_status,
         [
           {
             state: data.bootstrap_dns_status ? "success" : "error",
@@ -12220,7 +12289,11 @@ function buildRouteDisplayNames(sections) {
     }
     routeSectionItems.push({ sectionName, displayName });
     map[getOutboundTagBySection(sectionName)] = displayName;
-    const core = normalizeString(section.proxy_core).toLowerCase() === "xray" ? "xray" : "sing-box";
+    const explicit = normalizeString(section.proxy_core).toLowerCase();
+    const settings = sections.find((item) => item[".type"] === "settings");
+    const routingValue = normalizeString(settings && settings.routing_engine).toLowerCase();
+    const routingEngine = routingValue === "xray" || routingValue === "xray-core" ? "xray" : "sing-box";
+    const core = explicit === "xray" || explicit === "xray-core" ? "xray" : explicit === "sing-box" || explicit === "singbox" ? "sing-box" : routingEngine;
     cores[getOutboundTagBySection(sectionName)] = core;
     const urltestIds = urltestsBySection.get(sectionName) || getUrlTestIds2(section);
     urltestIds.forEach((id) => {
@@ -16314,6 +16387,10 @@ return baseclass.extend({
   BOOTSTRAP_DNS_SERVER_OPTIONS,
   DEFAULT_LATENCY_TEST_URL,
   DNS_SERVER_OPTIONS,
+  DOH3_DNS_SERVER_OPTIONS,
+  DOH3_DNS_SERVER_REWRITE,
+  DOQ_DNS_SERVER_OPTIONS,
+  DOQ_DNS_SERVER_REWRITE,
   DOMAIN_LIST_OPTIONS,
   DashboardTab,
   DiagnosticTab,

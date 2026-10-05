@@ -11,6 +11,7 @@ XRAY_OUT="$LIB/xray/outbound.uc"
 XRAY_GEO="$LIB/xray/geodata.uc"
 SB_GEN="$LIB/singbox/generator.uc"
 NFT_APPLY="$LIB/nft/apply.uc"
+HOSTRESOLVE="$LIB/core/hostresolve.uc"
 LIFECYCLE="$LIB/service/lifecycle.uc"
 STATE="$LIB/service/state.uc"
 
@@ -133,8 +134,16 @@ extract_fn "$XRAY_OUT" "apply_hysteria_finalmask" | grep -Fq 'salamander' ||
   fail "Hysteria2 salamander obfs must be emitted as FinalMask udp salamander"
 extract_fn "$XRAY_OUT" "apply_tcp_finalmask" | grep -Fq 'type: "fragment"' ||
   fail "ordinary Xray protocols must be able to add TCP FinalMask fragment"
-extract_fn "$XRAY_OUT" "apply_freedom_fragment" | grep -Fq 'packets: "tlshello"' ||
+extract_fn "$XRAY_OUT" "apply_tcp_finalmask" | grep -Fq 'maxSplit' ||
+  fail "FinalMask fragment must be able to set maxSplit"
+extract_fn "$XRAY_OUT" "apply_tcp_finalmask" | grep -Fq 'type: "noise"' ||
+  fail "FinalMask must be able to add UDP noise"
+extract_fn "$XRAY_OUT" "apply_freedom_fragment" | grep -Fq 'fragment_packets' ||
   fail "direct Xray freedom outbounds must support TLS hello fragment"
+extract_fn "$XRAY_OUT" "fragment_packets" | grep -Fq 'tlshello' ||
+  fail "fragment packets must keep tlshello"
+extract_fn "$XRAY_OUT" "apply_freedom_fragment" | grep -Fq 'noises' ||
+  fail "direct fragment must be able to add TCP noise"
 extract_fn "$XRAY_GEN" "section_finalmask_spec" | grep -Fq 'xray_finalmask' ||
   fail "section FinalMask must follow the section checkbox"
 extract_fn "$XRAY_GEN" "global_freedom_fragment_spec" | grep -Fq 'xray_freedom_fragment' ||
@@ -342,8 +351,25 @@ extract_fn "$XRAY_GEN" "apply_bittorrent_bypass" | grep -Fq 'bittorrent' ||
   fail "Exclude BitTorrent must send the bittorrent protocol direct on Xray"
 extract_fn "$XRAY_GEN" "collect_fake_dns_domains" | grep -Fq 'fake_dns_domain_usable' ||
   fail "FakeDNS must drop geosite/ext matchers that are missing from dat"
-extract_fn "$NFT_APPLY" "resolve_host_ips" | grep -Fq '8.8.8.8' ||
+extract_fn "$HOSTRESOLVE" "resolve_hosts" | grep -Fq '8.8.8.8' ||
   fail "domain intercept must resolve via upstream DNS, not FakeDNS/resolveip"
+extract_fn "$HOSTRESOLVE" "resolve_hosts" | grep -Fq '77.88.8.8' ||
+  fail "domain intercept must try 77.88.8.8 before the often-blocked 8.8.8.8"
+extract_fn "$HOSTRESOLVE" "resolve_wave" | grep -Fq 'timeout 1' ||
+  fail "domain intercept must resolve many hosts in parallel with a 1s timeout"
+if grep -Fq 'tolower' "$HOSTRESOLVE"; then
+  fail "ucode has no tolower(); hostresolve must use builtin lc()"
+fi
+extract_fn "$XRAY_GEN" "dns_pinned_ip" | grep -Fq 'dns.quad9.net' ||
+  fail "DoQ/DoH3 names must be pinned so FakeDNS cannot answer the resolver"
+extract_fn "$XRAY_GEN" "dns_pinned_ip" | grep -Fq '94.140.14.14' ||
+  fail "AdGuard DoQ name must pin to 94.140.14.14"
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'dns_pinned_ip' ||
+  fail "Xray hosts must pin DoQ/DoH3 names to real IPs"
+extract_fn "$LIB/singbox/dns.uc" "server_from_options" | grep -Fq 'dns_pinned_ip' ||
+  fail "sing-box DoQ/DoH3 must dial a pinned IP with the certificate name in SNI"
+extract_fn "$NFT_APPLY" "nft_add_resolved_section_domains" | grep -Fq 'resolve_hosts' ||
+  fail "nft populate must resolve section domains in one batch"
 extract_fn "$NFT_APPLY" "resolve_host_is_fake_or_self" | grep -Fq '198.18.' ||
   fail "FakeIP answers must not be added to section nft sets"
 extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -Fq 'nft_add_resolved_section_domains' ||
@@ -377,6 +403,60 @@ extract_fn "$XRAY_GEN" "xray_dns_server_address" | grep -Fq 'https://' ||
   fail "Xray plane must map dns_type=doh to https:// DNS servers"
 extract_fn "$XRAY_GEN" "xray_dns_server_address" | grep -Fq 'tls://' ||
   fail "Xray plane must map dns_type=dot to tls:// DNS servers"
+extract_fn "$XRAY_GEN" "xray_dns_server_address" | grep -Fq 'quic+local://' ||
+  fail "Xray DoQ must use quic+local://; plain quic:// is not a DNS client"
+if extract_fn "$XRAY_GEN" "xray_dns_server_address" | grep -Fq 'h3://'; then
+  fail "Xray has no h3:// DNS client; DoH3 on the Xray plane must use https://"
+fi
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'pin_custom_dns_hosts' ||
+  fail "Xray must resolve a custom DoQ hostname and pin it outside FakeIP"
+extract_fn "$XRAY_GEN" "xray_dns_server_address" | grep -Fq 'tls_dns_name' ||
+  fail "Xray DoQ must use an explicit certificate name for a custom IP"
+extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'dns_certificate_name' ||
+  fail "settings certificate name must be attached only to an unknown IP"
+extract_fn "$LIB/singbox/dns.uc" "server_from_options" | grep -Fq 'explicit_certificate_name' ||
+  fail "sing-box DoQ must use the certificate name from a custom IP"
+extract_fn "$LIB/singbox/dns.uc" "server_list" | grep -Fq 'dns_certificate_name' ||
+  fail "sing-box must keep preset DoQ names and only fill a custom IP"
+awk '
+  /^function doh3_server_name\(/ { doh3 = NR }
+  /^function doq_server_name\(/ { doq = NR }
+  /^function preset_tls_name\(/ { preset = NR }
+  END {
+    if (doh3 == 0 || doq == 0 || preset == 0 || doh3 > preset || doq > preset)
+      exit 1
+  }
+' "$LIB/singbox/dns.uc" ||
+  fail "preset_tls_name must be declared after doq/doh3 helpers (ucode forward ref)"
+grep -Fq 'dns_certificate_name' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js" ||
+  fail "settings must offer a certificate name for a custom DoQ IP"
+grep -Fq 'dns_server_name' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js" ||
+  fail "a DNS section must offer a certificate name for a custom DoQ IP"
+extract_fn "$XRAY_GEN" "doq_hostname_for" | grep -Fq '94.140.14.14' ||
+  fail "AdGuard DoQ IP must keep the certificate name dns.adguard-dns.com"
+extract_fn "$XRAY_GEN" "doq_hostname_for" | grep -Fq 'dns.quad9.net' ||
+  fail "DoQ to 9.9.9.9 must use dns.quad9.net"
+extract_fn "$XRAY_GEN" "doq_hostname_for" | grep -Fq 'dns.alidns.com' ||
+  fail "AliDNS DoQ hostname is dns.alidns.com:853"
+if extract_fn "$XRAY_GEN" "doq_hostname_for" | grep -Eq 'dns.google|one.one.one.one|yandex|opendns'; then
+  fail "DoQ must not invent hostnames for resolvers that do not publish DoQ"
+fi
+extract_fn "$XRAY_GEN" "doh3_hostname_for" | grep -Fq 'dns.google' ||
+  fail "DoH3 to 8.8.8.8 must use dns.google"
+extract_fn "$XRAY_GEN" "doh3_hostname_for" | grep -Fq 'cloudflare-dns.com' ||
+  fail "DoH3 to 1.1.1.1 must use cloudflare-dns.com"
+extract_fn "$LIB/singbox/dns.uc" "server_from_options" | grep -Fq '"quic"' ||
+  fail "sing-box must map dns_type=doq to a quic DNS server"
+extract_fn "$LIB/singbox/dns.uc" "server_from_options" | grep -Fq '"h3"' ||
+  fail "sing-box must map dns_type=doh3 to an h3 DNS server"
+extract_fn "$LIB/singbox/dns.uc" "doq_server_name" | grep -Fq 'dns.quad9.net' ||
+  fail "Quad9 DoQ name is dns.quad9.net"
+grep -Fq 'DOQ_DNS_SERVER_OPTIONS' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "DoQ settings presets must be a separate list"
+grep -Fq 'DOH3_DNS_SERVER_OPTIONS' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "DoH3 settings presets must be a separate list"
+grep -Fq 'dns.adguard-dns.com' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "AdGuard DoQ preset must keep the official quic hostname"
 extract_fn "$XRAY_GEN" "doh_hostname_for" | grep -Fq 'dns.google' ||
   fail "DoH to 8.8.8.8 must use dns.google (TLS cert is not 8.8.8.8)"
 extract_fn "$XRAY_GEN" "xray_dns_server_address" | grep -Fq '853' ||
@@ -386,9 +466,10 @@ extract_fn "$XRAY_GEN" "dot_hostname_for" | grep -Fq 'one.one.one.one' ||
 extract_fn "$XRAY_GEN" "dot_hostname_for" | grep -Fq 'dns.opendns.com' ||
   fail "OpenDNS DoT hostname is dns.opendns.com, not doh.opendns.com"
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'enableParallelQuery' ||
-  fail "Xray DoT must race DoH so a stuck TLS session on :853 cannot freeze DNS"
-extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'xray_dns_server_address("doh"' ||
-  fail "DoT must keep a DoH twin for the same resolver (tls-in-tls on 853 dies after a few queries)"
+  fail "Xray DNS must query the configured servers in parallel"
+if extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'xray_dns_server_address("doh"'; then
+  fail "DoT must stay DoT; do not add a DoH twin for the same resolver"
+fi
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'serveStale' ||
   fail "Xray DNS must serve stale answers when the DoT session drops"
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'disableCache: true' ||
@@ -528,6 +609,11 @@ grep -Fq 'filter-rr=SVCB' "$LIB/dns/apply.uc" ||
   fail "dnsmasq must strip SVCB records"
 extract_fn "$XRAY_GEN" "dns_outbound" | grep -Fq 'sockopt' ||
   fail "dns-out must set outbound mark so nft output does not TPROXY Xray DNS"
+extract_fn "$XRAY_GEO" "dat_contains" | grep -Fq 'protobuf_country_codes' ||
+  fail "geosite codes must be read from protobuf country_code fields"
+if extract_fn "$XRAY_GEO" "dat_contains" | grep -Fq 'sprintf("%c"'; then
+  fail "a 10-byte geosite code must not be grepped; the length byte is a newline and cloudfront matches cloudfront.net"
+fi
 extract_fn "$XRAY_GEO" "looks_like_itdog_dat" | grep -Fq 'looks_like_v2fly_dat' &&
   fail "looks_like_itdog_dat must not call looks_like_v2fly_dat (ucode forward-ref)"
 extract_fn "$SB_GEN" "base_config" | grep -Fq 'is_xray_primary' ||

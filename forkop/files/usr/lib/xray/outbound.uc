@@ -674,6 +674,71 @@ function fragment_range(value, fallback) {
     return value;
 }
 
+function fragment_packets(value) {
+    value = trim(lc(as_string(value)));
+    if (value == "tlshello")
+        return "tlshello";
+    if (match(value, /^[0-9]+-[0-9]+$/) != null)
+        return value;
+    return "tlshello";
+}
+
+function fragment_max_split(value) {
+    value = trim(as_string(value));
+    if (value == "" || value == "0")
+        return "";
+    return fragment_range(value, "");
+}
+
+function mask_has_type(items, kind) {
+    kind = lc(as_string(kind));
+    for (let item in array_or_empty(items)) {
+        if (type(item) == "object" && lc(as_string(item.type || "")) == kind)
+            return true;
+    }
+    return false;
+}
+
+function finalmask_noise_item(spec) {
+    spec = object_or_empty(spec);
+    let kind = trim(lc(as_string(spec.noise_type || "rand")));
+    let delay = fragment_range(spec.noise_delay, "10-16");
+    if (kind == "" || kind == "rand" || kind == "none")
+        return {
+            rand: fragment_range(spec.noise_rand, "10-20"),
+            randRange: fragment_range(spec.noise_rand_range, "0-255"),
+            delay: delay
+        };
+    let packet = trim(as_string(spec.noise_packet));
+    if (packet == "")
+        return null;
+    return {
+        type: kind,
+        packet: packet,
+        delay: delay
+    };
+}
+
+function freedom_noise_item(spec) {
+    spec = object_or_empty(spec);
+    let kind = trim(lc(as_string(spec.noise_type || "rand")));
+    let delay = fragment_range(spec.noise_delay, "10-16");
+    if (kind == "" || kind == "rand" || kind == "none")
+        return {
+            type: "rand",
+            packet: fragment_range(spec.noise_rand, "10-20"),
+            delay: delay
+        };
+    let packet = trim(as_string(spec.noise_packet));
+    if (packet == "")
+        return null;
+    return {
+        type: kind,
+        packet: packet,
+        delay: delay
+    };
+}
+
 function apply_freedom_fragment(outbound, spec) {
     outbound = object_or_empty(outbound);
     spec = object_or_empty(spec);
@@ -683,11 +748,20 @@ function apply_freedom_fragment(outbound, spec) {
         return outbound;
     if (type(outbound.settings) != "object")
         outbound.settings = {};
-    outbound.settings.fragment = {
-        packets: "tlshello",
+    let fragment = {
+        packets: fragment_packets(spec.packets),
         length: fragment_range(spec.length, "100-200"),
         interval: fragment_range(spec.interval, "10-20")
     };
+    let max_split = fragment_max_split(spec.max_split);
+    if (max_split != "")
+        fragment.maxSplit = max_split;
+    outbound.settings.fragment = fragment;
+    if (spec.noise == true) {
+        let item = freedom_noise_item(spec);
+        if (item != null)
+            outbound.settings.noises = [ item ];
+    }
     return outbound;
 }
 
@@ -706,18 +780,34 @@ function apply_tcp_finalmask(outbound, spec) {
         stream.finalmask = {};
     if (type(stream.finalmask.tcp) != "array")
         stream.finalmask.tcp = [];
-    for (let item in stream.finalmask.tcp) {
-        if (type(item) == "object" && lc(as_string(item.type || "")) == "fragment")
-            return outbound;
-    }
-    push(stream.finalmask.tcp, {
-        type: "fragment",
-        settings: {
-            packets: "tlshello",
+    if (!mask_has_type(stream.finalmask.tcp, "fragment")) {
+        let settings = {
+            packets: fragment_packets(spec.packets),
             lengths: [ fragment_range(spec.length, "100-200") ],
             delays: [ fragment_range(spec.interval, "10-20") ]
+        };
+        let max_split = fragment_max_split(spec.max_split);
+        if (max_split != "")
+            settings.maxSplit = max_split;
+        push(stream.finalmask.tcp, {
+            type: "fragment",
+            settings: settings
+        });
+    }
+    if (spec.noise == true) {
+        if (type(stream.finalmask.udp) != "array")
+            stream.finalmask.udp = [];
+        if (!mask_has_type(stream.finalmask.udp, "noise")) {
+            let item = finalmask_noise_item(spec);
+            if (item != null)
+                push(stream.finalmask.udp, {
+                    type: "noise",
+                    settings: {
+                        noise: [ item ]
+                    }
+                });
         }
-    });
+    }
     outbound.streamSettings = stream;
     return outbound;
 }

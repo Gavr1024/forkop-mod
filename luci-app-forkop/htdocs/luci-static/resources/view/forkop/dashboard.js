@@ -50,10 +50,26 @@ function statusLabel(status) {
   if (status === "cached") {
     return _("Local backup");
   }
+  if (status === "ready") {
+    return _("On the router");
+  }
+  if (status === "absent") {
+    return _("File not found");
+  }
   if (status === "missing") {
     return _("Not downloaded yet");
   }
   return _("Disabled");
+}
+
+function isBuiltinList(item) {
+  if (!item) {
+    return false;
+  }
+  if (item.builtin === false || item.local === true) {
+    return false;
+  }
+  return item.builtin === true || item.kind === "community";
 }
 
 function parseStatusPayload(result) {
@@ -78,22 +94,33 @@ function renderLocalLists(payload) {
     ? _("Downloading lists…")
     : _("Download lists now");
 
-  const rows = items
-    .map((item) => {
-      const name = escapeHtml(item.name || item.id || "");
-      const clickable = item.status === "cached" && item.id;
-      const nameCell = clickable
-        ? `<button type="button" class="fkp-list-open" data-list-id="${escapeHtml(item.id)}" data-list-name="${name}" style="background:none;border:0;padding:0;color:var(--primary-color,#1a73e8);cursor:pointer;text-align:left;font:inherit;text-decoration:underline;">${name}</button>`
-        : name;
-      return `<tr>
+  const listRow = (item) => {
+    const name = escapeHtml(item.name || item.id || "");
+    const clickable =
+      (item.status === "cached" || item.status === "ready") && item.id;
+    const custom = !isBuiltinList(item);
+    const tag = custom
+      ? `<span class="fkp-list-custom-tag">${escapeHtml(_("Not a built-in list"))}</span>`
+      : "";
+    const nameCell = clickable
+      ? `<button type="button" class="fkp-list-open" data-list-id="${escapeHtml(item.id)}" data-list-name="${name}" style="background:none;border:0;padding:0;color:var(--primary-color,#1a73e8);cursor:pointer;text-align:left;font:inherit;text-decoration:underline;">${name}</button>${tag}`
+      : `${name}${tag}`;
+    return `<tr>
         <td>${nameCell}</td>
-        <td>${escapeHtml(item.kind || "")}</td>
+        <td>${escapeHtml(custom ? _("Your lists") : _("Built-in lists"))}</td>
         <td>${escapeHtml(formatBytes(item.size))}</td>
         <td>${escapeHtml(formatTime(item.mtime))}</td>
         <td>${escapeHtml(statusLabel(item.status))}</td>
       </tr>`;
-    })
-    .join("");
+  };
+  const groupRow = (label) =>
+    `<tr class="fkp-list-group"><td colspan="5">${escapeHtml(label)}</td></tr>`;
+  const builtin = items.filter((item) => isBuiltinList(item));
+  const custom = items.filter((item) => !isBuiltinList(item));
+  const rows = [
+    builtin.length ? groupRow(_("Built-in lists")) + builtin.map(listRow).join("") : "",
+    custom.length ? groupRow(_("Your lists")) + custom.map(listRow).join("") : "",
+  ].join("");
 
   const empty = `<tr><td colspan="5">${escapeHtml(
     enabled
@@ -130,6 +157,21 @@ function renderLocalLists(payload) {
         padding: 6px 8px;
         border-bottom: 1px solid var(--border-color-low, #333);
         word-break: break-all;
+      }
+      .fkp-list-group td {
+        font-weight: 600;
+        background: var(--background-color-high, rgba(127, 127, 127, 0.12));
+      }
+      .fkp-list-custom-tag {
+        display: inline-block;
+        margin-left: 0.45rem;
+        padding: 0 0.4rem;
+        border: 1px solid #c4a35a;
+        border-radius: 999px;
+        color: #8a6d1d;
+        font-size: 0.8em;
+        white-space: nowrap;
+        vertical-align: middle;
       }
       #cbi-forkop-dashboard-_local_lists > .cbi-value-title {
         display: none;
@@ -255,10 +297,20 @@ function pollListDownload(startedAt, failures) {
 }
 
 let listPreviewToken = "";
+let listPreviewView = "domains";
+
+function previewHasSubnets(payload) {
+  return Boolean(payload && (payload.has_subnets === true || payload.has_subnets === 1 || payload.has_subnets === "1"));
+}
+
+function previewViewName(view) {
+  return view === "subnets" ? "subnets" : "domains";
+}
 
 function closeListPreview() {
   const token = listPreviewToken;
   listPreviewToken = "";
+  listPreviewView = "domains";
   if (ui && typeof ui.hideModal === "function") {
     ui.hideModal();
   }
@@ -282,28 +334,80 @@ function showListPreview(payload, fallbackName) {
   const page = Number(payload.page || 1);
   const pages = Number(payload.pages || 1);
   const titleName = payload.name || fallbackName || "";
+  const view = previewViewName(payload.view || listPreviewView);
+  const hasSubnets = previewHasSubnets(payload);
+  listPreviewView = view;
   if (ui && typeof ui.hideModal === "function") {
     ui.hideModal();
   }
+  const modeButton = (label, mode) =>
+    E(
+      "button",
+      {
+        class: "btn",
+        style:
+          view === mode
+            ? "font-weight:600;border-color:#3e8f46;color:#3e8f46;"
+            : "",
+        click: () => {
+          if (view !== mode) {
+            loadListPreviewPage(1, titleName, mode);
+          }
+        },
+      },
+      label,
+    );
   const controls = [];
   if (pages > 1) {
+    const openPage = (target) => {
+      const next = Math.min(pages, Math.max(1, Math.floor(Number(target))));
+      if (!Number.isFinite(next) || next === page) {
+        return;
+      }
+      loadListPreviewPage(next, titleName, view);
+    };
+    const pageInput = E("input", {
+      type: "number",
+      min: "1",
+      max: String(pages),
+      value: String(page),
+      "data-list-page": "1",
+      style: "width:4.5rem;margin:0 0.35rem;vertical-align:middle;",
+      keydown: (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          openPage(event.target.value);
+        }
+      },
+      change: (event) => openPage(event.target.value),
+    });
     controls.push(
       E(
         "button",
         {
           class: "btn",
           disabled: page <= 1 ? "disabled" : void 0,
-          click: () => loadListPreviewPage(page - 1, titleName),
+          click: () => loadListPreviewPage(page - 1, titleName, view),
         },
         _("Previous"),
       ),
-      E("span", { style: "margin:0 0.6rem;" }, `${page} / ${pages}`),
+      pageInput,
+      E("span", { style: "margin:0 0.6rem;" }, `/ ${pages}`),
+      E(
+        "button",
+        {
+          class: "btn",
+          style: "margin-right:0.6rem;",
+          click: () => openPage(pageInput.value),
+        },
+        _("OK"),
+      ),
       E(
         "button",
         {
           class: "btn",
           disabled: page >= pages ? "disabled" : void 0,
-          click: () => loadListPreviewPage(page + 1, titleName),
+          click: () => loadListPreviewPage(page + 1, titleName, view),
         },
         _("Next"),
       ),
@@ -319,7 +423,7 @@ function showListPreview(payload, fallbackName) {
       _("Close"),
     ),
   );
-  ui.showModal(`${_("List contents")}: ${titleName}`, [
+  const body = [
     E(
       "pre",
       {
@@ -329,7 +433,17 @@ function showListPreview(payload, fallbackName) {
       payload.text || "",
     ),
     E("div", { class: "right" }, controls),
-  ]);
+  ];
+  if (hasSubnets) {
+    body.unshift(
+      E(
+        "div",
+        { style: "display:flex;gap:0.4rem;margin:0 0 0.75rem;" },
+        [modeButton(_("Domains"), "domains"), modeButton(_("Subnets"), "subnets")],
+      ),
+    );
+  }
+  ui.showModal(`${_("List contents")}: ${titleName}`, body);
 }
 
 function readListPreviewResult(result) {
@@ -340,18 +454,25 @@ function readListPreviewResult(result) {
   }
 }
 
-function loadListPreviewPage(page, name) {
+function loadListPreviewPage(page, name, view) {
   const token = listPreviewToken;
+  const nextView = previewViewName(view || listPreviewView);
   if (!token || page < 1 || !ui || typeof ui.showModal !== "function") {
     return;
   }
+  listPreviewView = nextView;
   if (typeof ui.hideModal === "function") {
     ui.hideModal();
   }
   ui.showModal(`${_("List contents")}: ${name || ""}`, [
     E("p", {}, _("Loading...")),
   ]);
-  fs.exec("/usr/bin/forkop", ["list_cache_show_page", token, String(page)])
+  fs.exec("/usr/bin/forkop", [
+    "list_cache_show_page",
+    token,
+    String(page),
+    nextView,
+  ])
     .then((result) => {
       showListPreview(readListPreviewResult(result), name);
     })
@@ -370,6 +491,7 @@ function openListPreview(id, name) {
     fs.exec("/usr/bin/forkop", ["list_cache_show_close", listPreviewToken]).catch(() => {});
   }
   listPreviewToken = "";
+  listPreviewView = "domains";
   ui.showModal(`${_("List contents")}: ${name || id}`, [
     E("p", {}, _("Loading...")),
   ]);

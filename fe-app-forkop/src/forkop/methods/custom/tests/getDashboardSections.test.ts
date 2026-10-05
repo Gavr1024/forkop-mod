@@ -1124,6 +1124,22 @@ describe('getDashboardSections', () => {
     ).toBe(true);
   });
 
+  it('follows the Xray routing engine when the section core is empty', async () => {
+    mocks.getConfigSections.mockResolvedValue([
+      {
+        '.name': 'settings',
+        '.type': 'settings',
+        routing_engine: 'xray',
+      },
+      proxySection({ proxy_core: '' }),
+    ]);
+
+    const result = await getDashboardSections();
+    const section = result.data.find((item) => item.sectionName === 'main');
+
+    expect(section?.proxyCore).toBe('xray');
+  });
+
   it('shows Xray SOCKS delays on dashboard cards', async () => {
     mocks.getConfigSections.mockResolvedValue([
       proxySection({ proxy_core: 'xray' }),

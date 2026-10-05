@@ -112,7 +112,7 @@ assertCurrentKeepsStableValues("protocol", ["tailscale", "vless", "vmess", "troj
 assertCurrentKeepsStableValues("security", ["reality", "tls", "none"]);
 assertCurrentKeepsStableValues("transport", ["tcp", "ws", "grpc", "http", "httpupgrade", "xhttp"]);
 assertCurrentKeepsStableValues("urltest_filter_mode", ["disabled", "exclude", "include", "mixed"]);
-assertCurrentKeepsStableValues("dns_type", ["doh", "dot", "udp"]);
+assertCurrentKeepsStableValues("dns_type", ["doh", "doh3", "doq", "dot", "udp"]);
 assertCurrentKeepsStableValues("routing_mode", ["rules", "direct", "section"]);
 assertCurrentKeepsStableValues("shadowsocks_method", ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"]);
 assertCurrentKeepsStableValues("vless_flow", ["none", "xtls-rprx-vision"]);

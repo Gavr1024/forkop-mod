@@ -1449,9 +1449,28 @@ function latency_clash_method(latency_type) {
     return { method: "get_proxy_latency", timeout: "5000" };
 }
 
+function section_uses_xray_core(section_name) {
+    section_name = as_string(section_name);
+    if (section_name == "" || !uci_core.available())
+        return engine.is_xray_primary();
+    let section = object_or_empty(uci_core.get_all(CONFIG_NAME, section_name));
+    let raw = as_string(section.proxy_core || "");
+    if (raw == "xray" || raw == "xray-core" || raw == "Xray")
+        return true;
+    if (raw == "sing-box" || raw == "singbox" || raw == "Sing-box")
+        return false;
+    return engine.is_xray_primary();
+}
+
+function latency_probe_xray(section) {
+    if (as_string(section) != "")
+        return section_uses_xray_core(section);
+    return engine.is_xray_primary() && !engine.need_singbox_sidecar();
+}
+
 function latency_worker(path, latency_type, tag, timeout, section) {
     let status = 1;
-    if (engine.is_xray_primary() && !engine.need_singbox_sidecar()) {
+    if (latency_probe_xray(section)) {
         let cmd = [
             "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
             "latency-test", latency_type, tag, timeout

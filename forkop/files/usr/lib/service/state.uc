@@ -1324,7 +1324,23 @@ function signature_add_outbound_detour_body(body, section, prefix) {
     return body;
 }
 
-function append_sing_box_rule_signature_body(body, section, sections) {
+function signature_routing_engine(settings) {
+    let value = lc(as_string(option(object_or_empty(settings), "routing_engine", "")));
+    if (value == "xray" || value == "xray-core")
+        return "xray";
+    return "sing-box";
+}
+
+function signature_proxy_core(section, settings) {
+    let value = lc(as_string(option(section, "proxy_core", "")));
+    if (value == "xray" || value == "xray-core")
+        return "xray";
+    if (value == "sing-box" || value == "singbox")
+        return "sing-box";
+    return signature_routing_engine(settings);
+}
+
+function append_sing_box_rule_signature_body(body, section, sections, settings) {
     section = object_or_empty(section);
     let name = section_name(section);
     if (name == "" || !bool_option(section, "enabled", true))
@@ -1338,6 +1354,7 @@ function append_sing_box_rule_signature_body(body, section, sections) {
     body = signature_add_value(body, prefix + ".action", action);
 
     if (connections.is_connections_action(action)) {
+        body = signature_add_value(body, prefix + ".proxy_core", signature_proxy_core(section, settings));
         body = signature_add_value(body, prefix + ".connection_urls", connection_urls_signature(section));
         body = signature_add_value(body, prefix + ".subscription_urls", subscription_urls_signature(section));
         body = signature_add_value(body, prefix + ".interfaces", interfaces_signature(section));
@@ -1365,8 +1382,18 @@ function append_sing_box_rule_signature_body(body, section, sections) {
         body = signature_add_value(body, prefix + ".resolve_real_ip_for_routing", bool_option_value(section, "resolve_real_ip_for_routing", false));
         body = signature_add_value(body, prefix + ".xray_finalmask", bool_option_value(section, "xray_finalmask", false));
         if (bool_option(section, "xray_finalmask", false)) {
+            body = signature_add_value(body, prefix + ".xray_finalmask_packets", option(section, "xray_finalmask_packets", "tlshello"));
             body = signature_add_value(body, prefix + ".xray_finalmask_length", option(section, "xray_finalmask_length", "100-200"));
             body = signature_add_value(body, prefix + ".xray_finalmask_interval", option(section, "xray_finalmask_interval", "10-20"));
+            body = signature_add_value(body, prefix + ".xray_finalmask_max_split", option(section, "xray_finalmask_max_split", "100-200"));
+            body = signature_add_value(body, prefix + ".xray_finalmask_noise", bool_option_value(section, "xray_finalmask_noise", false));
+            if (bool_option(section, "xray_finalmask_noise", false)) {
+                body = signature_add_value(body, prefix + ".xray_finalmask_noise_type", option(section, "xray_finalmask_noise_type", "rand"));
+                body = signature_add_value(body, prefix + ".xray_finalmask_noise_rand", option(section, "xray_finalmask_noise_rand", "10-20"));
+                body = signature_add_value(body, prefix + ".xray_finalmask_noise_rand_range", option(section, "xray_finalmask_noise_rand_range", "0-255"));
+                body = signature_add_value(body, prefix + ".xray_finalmask_noise_packet", option(section, "xray_finalmask_noise_packet", ""));
+                body = signature_add_value(body, prefix + ".xray_finalmask_noise_delay", option(section, "xray_finalmask_noise_delay", "10-16"));
+            }
         }
         body = signature_add_value(body, prefix + ".xray_balancer_strategy", option(section, "xray_balancer_strategy", ""));
         body = signature_add_value(body, prefix + ".xray_fallback_target", option(section, "xray_fallback_target", ""));
@@ -1392,6 +1419,7 @@ function append_sing_box_rule_signature_body(body, section, sections) {
     else if (action == "dns") {
         body = signature_add_value(body, prefix + ".dns_type", option(section, "dns_type", "udp"));
         body = signature_add_value(body, prefix + ".dns_server", option(section, "dns_server", ""));
+        body = signature_add_value(body, prefix + ".dns_server_name", option(section, "dns_server_name", ""));
         body = signature_add_value(body, prefix + ".dns_detour_enabled", bool_option_value(section, "dns_detour_enabled", false));
         if (bool_option(section, "dns_detour_enabled", false))
             body = signature_add_value(body, prefix + ".dns_detour_section", option(section, "dns_detour_section", ""));
@@ -1501,7 +1529,9 @@ function sing_box_signature_body(settings, sections, servers, mwan3_active) {
     settings = object_or_empty(settings);
     let body = "";
 
+    body = signature_add_value(body, "settings.routing_engine", signature_routing_engine(settings));
     body = signature_add_value(body, "settings.dns_type", option(settings, "dns_type", "doh"));
+    body = signature_add_value(body, "settings.dns_certificate_name", option(settings, "dns_certificate_name", ""));
     body = signature_add_value(body, "settings.dns_strategy", option(settings, "dns_strategy", "prefer_ipv4"));
     for (let value in list_option(settings, "dns_server", "77.88.8.8"))
         body = signature_add_value(body, "settings.dns_server", value);
@@ -1544,12 +1574,21 @@ function sing_box_signature_body(settings, sections, servers, mwan3_active) {
         body = signature_add_value(body, "settings.route_router_traffic_section", option(settings, "route_router_traffic_section", ""));
     body = signature_add_value(body, "settings.xray_freedom_fragment", bool_option_value(settings, "xray_freedom_fragment", false));
     if (bool_option(settings, "xray_freedom_fragment", false)) {
+        body = signature_add_value(body, "settings.xray_freedom_fragment_packets", option(settings, "xray_freedom_fragment_packets", "tlshello"));
         body = signature_add_value(body, "settings.xray_freedom_fragment_length", option(settings, "xray_freedom_fragment_length", "100-200"));
         body = signature_add_value(body, "settings.xray_freedom_fragment_interval", option(settings, "xray_freedom_fragment_interval", "10-20"));
+        body = signature_add_value(body, "settings.xray_freedom_fragment_max_split", option(settings, "xray_freedom_fragment_max_split", "100-200"));
+        body = signature_add_value(body, "settings.xray_freedom_fragment_noise", bool_option_value(settings, "xray_freedom_fragment_noise", false));
+        if (bool_option(settings, "xray_freedom_fragment_noise", false)) {
+            body = signature_add_value(body, "settings.xray_freedom_fragment_noise_type", option(settings, "xray_freedom_fragment_noise_type", "rand"));
+            body = signature_add_value(body, "settings.xray_freedom_fragment_noise_rand", option(settings, "xray_freedom_fragment_noise_rand", "10-20"));
+            body = signature_add_value(body, "settings.xray_freedom_fragment_noise_packet", option(settings, "xray_freedom_fragment_noise_packet", ""));
+            body = signature_add_value(body, "settings.xray_freedom_fragment_noise_delay", option(settings, "xray_freedom_fragment_noise_delay", "10-16"));
+        }
     }
 
     for (let section in sections)
-        body = append_sing_box_rule_signature_body(body, object_or_empty(section), sections);
+        body = append_sing_box_rule_signature_body(body, object_or_empty(section), sections, settings);
 
     for (let server in servers)
         body = append_sing_box_server_signature_body(body, object_or_empty(server));

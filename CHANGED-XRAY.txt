@@ -1,5 +1,5 @@
 Файлы, изменённые относительно стокового Forkop 1.0.5
-(плоскость Xray, конвертация списков, DNS parity).
+(ядро Xray, конвертация списков, DNS parity).
 
 Backend (пакет forkop)
   forkop/files/usr/lib/xray/generator.uc

@@ -124,6 +124,65 @@ function configureDnsList(option, choices, defaultValue) {
   };
 }
 
+function dnsProtocolValue(dnsTypeOption, section_id) {
+  const live = dnsTypeOption ? dnsTypeOption.formvalue(section_id) : null;
+  if (live != null && `${live}` !== "") {
+    return `${live}`;
+  }
+  return uci.get(UCI_PACKAGE, section_id, "dns_type") || "udp";
+}
+
+function dnsChoicesForProtocol(protocol) {
+  if (protocol === "doq") {
+    return main.DOQ_DNS_SERVER_OPTIONS;
+  }
+  if (protocol === "doh3") {
+    return main.DOH3_DNS_SERVER_OPTIONS;
+  }
+  return main.DNS_SERVER_OPTIONS;
+}
+
+function sanitizeDnsServers(protocol, values) {
+  const list = L.toArray(values)
+    .map((item) => `${item || ""}`.trim())
+    .filter(Boolean);
+  if (protocol !== "doq" && protocol !== "doh3") {
+    return list;
+  }
+  const allowed = new Set(Object.keys(dnsChoicesForProtocol(protocol) || {}));
+  const plain = new Set(Object.keys(main.DNS_SERVER_OPTIONS || {}));
+  const rewrite =
+    protocol === "doq"
+      ? main.DOQ_DNS_SERVER_REWRITE || {}
+      : main.DOH3_DNS_SERVER_REWRITE || {};
+  const kept = [];
+  const seen = new Set();
+  list.forEach((value) => {
+    const mapped = rewrite[value] || value;
+    if (!allowed.has(mapped) && plain.has(value)) {
+      return;
+    }
+    if (seen.has(mapped)) {
+      return;
+    }
+    seen.add(mapped);
+    kept.push(mapped);
+  });
+  if (kept.length > 0) {
+    return kept;
+  }
+  return protocol === "doq" ? ["9.9.9.9"] : ["8.8.8.8"];
+}
+
+function replaceDnsServerChoices(option, protocol) {
+  const choices = dnsChoicesForProtocol(protocol);
+  option.keylist = [];
+  option.vallist = [];
+  Object.entries(choices).forEach(([key, label]) => {
+    option.value(key, _(label));
+  });
+}
+
 function configureDnsFailoverVisibility(option, dnsOption, bootstrapOption) {
   option.depends("dns_server", "__forkop_multiple_dns__");
   option.depends("bootstrap_dns_server", "__forkop_multiple_dns__");
@@ -155,13 +214,46 @@ function configureDnsDuration(
 }
 
 let routingEngineOption = null;
+let unsavedRoutingEngine = "";
 
 function isXrayRoutingEngine(value) {
   const engine = `${value || ""}`.trim().toLowerCase();
   return engine === "xray" || engine === "xray-core";
 }
 
+function liveDropdownValue(id) {
+  const node = document.getElementById(id);
+  if (!node || typeof node.querySelector !== "function") {
+    return "";
+  }
+  const selected = node.querySelector("li[selected]");
+  const fromItem = selected ? selected.getAttribute("data-value") : "";
+  if (fromItem) {
+    return `${fromItem}`;
+  }
+  const hidden = node.querySelector('input[type="hidden"]');
+  if (hidden && `${hidden.value || ""}` !== "") {
+    return `${hidden.value}`;
+  }
+  const data = node.getAttribute ? node.getAttribute("data-value") : "";
+  if (data) {
+    return `${data}`;
+  }
+  return node.value ? `${node.value}` : "";
+}
+
 function currentRoutingEngine() {
+  if (unsavedRoutingEngine) {
+    return unsavedRoutingEngine;
+  }
+
+  const liveDom = liveDropdownValue(
+    "cbid." + UCI_PACKAGE + ".settings.routing_engine",
+  );
+  if (liveDom) {
+    return liveDom;
+  }
+
   if (routingEngineOption) {
     try {
       const live = routingEngineOption.formvalue("settings");
@@ -173,14 +265,81 @@ function currentRoutingEngine() {
     }
   }
 
-  const node = document.getElementById(
-    "cbid." + UCI_PACKAGE + ".settings.routing_engine",
-  );
-  if (node && node.value) {
-    return `${node.value}`;
-  }
-
   return uci.get(UCI_PACKAGE, "settings", "routing_engine") || "sing-box";
+}
+
+function dnsProtocolChoices(engine) {
+  const xray = isXrayRoutingEngine(engine);
+  const choices = [["doh", _("DNS over HTTPS (DoH)")]];
+  if (!xray) {
+    choices.push(["doh3", _("DNS over HTTP/3 (DoH3)")]);
+  }
+  choices.push(["doq", _("DNS over QUIC (DoQ)")]);
+  if (!xray) {
+    choices.push(["dot", _("DNS over TLS (DoT)")]);
+  }
+  choices.push(["udp", _("UDP (Unprotected DNS)")]);
+  return choices;
+}
+
+function replaceListChoices(option, choices) {
+  option.keylist = [];
+  option.vallist = [];
+  choices.forEach(([key, label]) => option.value(key, label));
+}
+
+let dnsTypeRefreshLock = false;
+
+function displayedDnsProtocol(option, section_id, cfgvalue) {
+  const raw =
+    cfgvalue != null && `${cfgvalue}` !== ""
+      ? `${cfgvalue}`.trim()
+      : dnsProtocolValue(option, section_id);
+  const xray = isXrayRoutingEngine(currentRoutingEngine());
+  if (xray) {
+    if (raw === "doh3") {
+      option._forkopHeldDoh3 = true;
+    }
+    if (raw === "doh3" || (option._forkopHeldDoh3 && raw === "doh")) {
+      return "doh";
+    }
+    option._forkopHeldDoh3 = false;
+    return raw || "udp";
+  }
+  if (option._forkopHeldDoh3 && (raw === "doh" || raw === "doh3")) {
+    option._forkopHeldDoh3 = false;
+    return "doh3";
+  }
+  option._forkopHeldDoh3 = false;
+  return raw || "udp";
+}
+
+function refreshDnsTypeField(option, section_id) {
+  const field =
+    document.querySelector(
+      `#cbi-${UCI_PACKAGE}-${section_id}-dns_type .cbi-value-field`,
+    ) ||
+    document.querySelector(
+      `#cbi-${UCI_PACKAGE}-settings-dns_type .cbi-value-field`,
+    );
+  if (!field || !option) {
+    return;
+  }
+  dnsTypeRefreshLock = true;
+  const rendered = option.renderWidget(
+    section_id,
+    null,
+    option.formvalue(section_id),
+  );
+  Promise.resolve(rendered).then((node) => {
+    if (node) {
+      field.replaceChildren(node);
+    }
+    option.onchange(null, section_id, false);
+    window.setTimeout(() => {
+      dnsTypeRefreshLock = false;
+    }, 50);
+  });
 }
 
 function routingEngineMatches(engine, wanted) {
@@ -245,6 +404,33 @@ function createSettingsContent(section, capabilities) {
   o.default = "sing-box";
   o.rmempty = false;
   routingEngineOption = o;
+  const renderRoutingEngine = o.render;
+  o.render = function (option_index, section_id) {
+    const settingsId = section_id != null ? section_id : option_index;
+    return Promise.resolve(renderRoutingEngine.apply(this, arguments)).then(
+      (node) => {
+        if (node && node.addEventListener && !node.dataset.fkpDnsTypeEngine) {
+          node.dataset.fkpDnsTypeEngine = "1";
+          const refresh = (ev) => {
+            const picked = ev && ev.detail && ev.detail.value;
+            const engine =
+              picked && typeof picked === "object" ? picked.value : picked;
+            if (engine) {
+              unsavedRoutingEngine = `${engine}`;
+            }
+            window.setTimeout(
+              () => refreshDnsTypeField(dnsTypeOption, settingsId),
+              0,
+            );
+          };
+          node.addEventListener("widget-change", refresh);
+          node.addEventListener("cbi-dropdown-change", refresh);
+          node.addEventListener("change", refresh);
+        }
+        return node;
+      },
+    );
+  };
 
   o = section.option(
     form.Flag,
@@ -292,15 +478,127 @@ function createSettingsContent(section, capabilities) {
 
   o = section.option(
     form.ListValue,
+    "xray_freedom_fragment_packets",
+    _("FinalMask packets"),
+    _(
+      "tlshello splits the TLS handshake. 1-3 splits the first TCP writes.",
+    ),
+  );
+  o.value("tlshello", _("TLS handshake"));
+  o.value("1-3", _("First TCP writes (1-3)"));
+  o.default = "tlshello";
+  o.rmempty = false;
+  o.depends("xray_freedom_fragment", "1");
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.Value,
+    "xray_freedom_fragment_max_split",
+    _("FinalMask max split"),
+    _(
+      "How many pieces one packet may be split into, for example 100-200. Use 0 for no limit.",
+    ),
+  );
+  o.default = "100-200";
+  o.rmempty = false;
+  o.depends("xray_freedom_fragment", "1");
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 100-200");
+  };
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.Flag,
+    "xray_freedom_fragment_noise",
+    _("FinalMask noise"),
+    _(
+      "Send extra bytes before a direct connection. This is TCP noise on the direct outbound.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.depends("xray_freedom_fragment", "1");
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.ListValue,
+    "xray_freedom_fragment_noise_type",
+    _("Noise type"),
+  );
+  o.value("rand", _("Random bytes"));
+  o.value("str", _("Text"));
+  o.value("hex", _("Hex"));
+  o.value("base64", _("Base64"));
+  o.default = "rand";
+  o.rmempty = false;
+  o.depends({ xray_freedom_fragment: "1", xray_freedom_fragment_noise: "1" });
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.Value,
+    "xray_freedom_fragment_noise_rand",
+    _("Noise length"),
+    _("Random byte length, for example 10-20."),
+  );
+  o.default = "10-20";
+  o.rmempty = false;
+  o.depends({
+    xray_freedom_fragment: "1",
+    xray_freedom_fragment_noise: "1",
+    xray_freedom_fragment_noise_type: "rand",
+  });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 10-20");
+  };
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.Value,
+    "xray_freedom_fragment_noise_packet",
+    _("Noise packet"),
+    _("Fixed noise data. Text, hex or base64, matching the type."),
+  );
+  o.depends({ xray_freedom_fragment: "1", xray_freedom_fragment_noise: "1", xray_freedom_fragment_noise_type: "str" });
+  o.depends({ xray_freedom_fragment: "1", xray_freedom_fragment_noise: "1", xray_freedom_fragment_noise_type: "hex" });
+  o.depends({ xray_freedom_fragment: "1", xray_freedom_fragment_noise: "1", xray_freedom_fragment_noise_type: "base64" });
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.Value,
+    "xray_freedom_fragment_noise_delay",
+    _("Noise delay"),
+    _("Pause after the noise, in milliseconds, for example 10-16."),
+  );
+  o.default = "10-16";
+  o.rmempty = false;
+  o.depends({ xray_freedom_fragment: "1", xray_freedom_fragment_noise: "1" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 10-20");
+  };
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.ListValue,
     "dns_type",
     _("DNS Protocol Type"),
     _("Select DNS protocol to use"),
   );
-  o.value("doh", _("DNS over HTTPS (DoH)"));
-  o.value("dot", _("DNS over TLS (DoT)"));
-  o.value("udp", _("UDP (Unprotected DNS)"));
+  replaceListChoices(o, dnsProtocolChoices(currentRoutingEngine()));
   o.default = "udp";
   o.rmempty = false;
+  const dnsTypeOption = o;
+  const renderDnsTypeWidget = o.renderWidget;
+  o.renderWidget = function (section_id, option_index, cfgvalue) {
+    replaceListChoices(this, dnsProtocolChoices(currentRoutingEngine()));
+    const selected = displayedDnsProtocol(this, section_id, cfgvalue);
+    return renderDnsTypeWidget.call(this, section_id, option_index, selected);
+  };
 
   const dnsOption = section.option(
     form.DynamicList,
@@ -311,6 +609,89 @@ function createSettingsContent(section, capabilities) {
     ),
   );
   configureDnsList(dnsOption, main.DNS_SERVER_OPTIONS, "77.88.8.8");
+  const renderDnsServers = dnsOption.renderWidget;
+  dnsOption.renderWidget = function (section_id, option_index, cfgvalue) {
+    const protocol = dnsProtocolValue(dnsTypeOption, section_id);
+    replaceDnsServerChoices(this, protocol);
+    const selected = sanitizeDnsServers(
+      protocol,
+      cfgvalue != null ? cfgvalue : this.cfgvalue(section_id),
+    );
+    return renderDnsServers.call(this, section_id, option_index, selected);
+  };
+  dnsTypeOption.onchange = function (_event, section_id, fromUser) {
+    if (fromUser) {
+      this._forkopHeldDoh3 = false;
+    }
+    const field = document.querySelector(
+      `#cbi-${UCI_PACKAGE}-${section_id}-dns_server .cbi-value-field`,
+    );
+    if (!field) {
+      return;
+    }
+    const rendered = dnsOption.renderWidget(
+      section_id,
+      null,
+      dnsOption.formvalue(section_id),
+    );
+    Promise.resolve(rendered).then((node) => {
+      if (node) {
+        field.replaceChildren(node);
+      }
+    });
+  };
+  const renderDnsType = dnsTypeOption.render;
+  dnsTypeOption.render = function (option_index, section_id) {
+    const settingsId = section_id != null ? section_id : option_index;
+    return Promise.resolve(renderDnsType.apply(this, arguments)).then((node) => {
+      if (node && node.addEventListener && !node.dataset.fkpDnsProtocol) {
+        node.dataset.fkpDnsProtocol = "1";
+        node.addEventListener("widget-change", () => {
+          dnsTypeOption.onchange(null, settingsId, !dnsTypeRefreshLock);
+        });
+      }
+      return node;
+    });
+  };
+
+  o = section.option(form.DummyValue, "_xray_doq_direct", _("DoQ"));
+  o.depends("dns_type", "doq");
+  o.rawhtml = true;
+  o.cfgvalue = function () {
+    return (
+      '<span style="color:#c62828">' +
+      _(
+        "DoQ does not go through a section. Xray dials it directly from the router.",
+      ) +
+      "</span>"
+    );
+  };
+  o.write = function () {};
+  o.remove = function () {};
+  restrictRoutingEngine(o, "xray");
+
+  o = section.option(
+    form.Value,
+    "dns_certificate_name",
+    _("Certificate name"),
+    _(
+      "Name on the certificate when the server is a custom IP, for example dns.example.net. A hostname or a preset from the list does not need this.",
+    ),
+  );
+  o.rmempty = true;
+  o.depends("dns_type", "doq");
+  o.depends("dns_type", "doh3");
+  o.depends("dns_type", "doh");
+  o.depends("dns_type", "dot");
+  o.validate = function (_section_id, value) {
+    const name = `${value || ""}`.trim();
+    if (!name) {
+      return true;
+    }
+    return main.validateDomain(name).valid
+      ? true
+      : _("Certificate name must be a domain, for example dns.example.net");
+  };
 
   const bootstrapOption = section.option(
     form.DynamicList,

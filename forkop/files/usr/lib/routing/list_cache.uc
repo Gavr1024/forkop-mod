@@ -15,6 +15,13 @@ const SB_SERVICE_MIXED_INBOUND_PORT = int(getenv("SB_SERVICE_MIXED_INBOUND_PORT"
 const XRAY_PORTS_FILE = getenv("XRAY_PORTS_FILE") || "/var/run/forkop/xray-ports.json";
 const DOWNLOAD_WAIT_SECONDS = int(getenv("FORKOP_LIST_CACHE_WAIT_SECONDS") || "45");
 const LIST_RAM_DIR = "/tmp/forkop-list-cache";
+const FORKOP_LIB = getenv("FORKOP_LIB") || "/usr/lib/forkop";
+const DOWNLOAD_SOCKS_PORT = int(getenv("FORKOP_DOWNLOAD_SOCKS_PORT") || "38901");
+const DOWNLOAD_SOCKS_DIR = getenv("FORKOP_DOWNLOAD_SOCKS_DIR") || "/var/run/forkop";
+const DOWNLOAD_SOCKS_STATE = DOWNLOAD_SOCKS_DIR + "/download-socks.json";
+const DOWNLOAD_SOCKS_CONFIG = DOWNLOAD_SOCKS_DIR + "/download-socks-config.json";
+const DOWNLOAD_SOCKS_PID = DOWNLOAD_SOCKS_DIR + "/download-socks.pid";
+const DOWNLOAD_SOCKS_LOG = DOWNLOAD_SOCKS_DIR + "/download-socks.log";
 
 function as_string(value) {
     return value == null ? "" : "" + value;
@@ -413,6 +420,8 @@ function community_item(name) {
         id: cache_basename(url),
         name,
         kind: "community",
+        builtin: true,
+        local: false,
         url,
         path: cache_path_for_url(url)
     };
@@ -428,9 +437,35 @@ function remote_item(reference, kind) {
         id: cache_basename(reference),
         name: reference,
         kind: kind || "rule_set",
+        builtin: false,
+        local: false,
         url: reference,
         path: cache_path_for_url(reference)
     };
+}
+
+function local_item(reference, kind) {
+    reference = trim_string(reference);
+    if (reference == "" || substr(reference, 0, 1) != "/")
+        return null;
+    return {
+        id: "local-" + singbox_rulesets.hash12(reference),
+        name: reference,
+        kind: kind || "custom",
+        builtin: false,
+        local: true,
+        url: reference,
+        path: reference
+    };
+}
+
+function custom_reference_item(reference, kind) {
+    reference = trim_string(reference);
+    if (reference == "")
+        return null;
+    if (substr(reference, 0, 7) == "http://" || substr(reference, 0, 8) == "https://")
+        return remote_item(reference, kind);
+    return local_item(reference, kind);
 }
 
 function collect_selected_lists(sections) {
@@ -455,15 +490,19 @@ function collect_selected_lists(sections) {
         for (let name in connections.community_lists(section))
             add_item(community_item(name));
         for (let reference in connections.rule_sets(section))
-            add_item(remote_item(reference, "rule_set"));
+            add_item(custom_reference_item(reference, "rule_set"));
         for (let reference in connections.rule_sets_with_subnets(section))
-            add_item(remote_item(reference, "rule_set_with_subnets"));
-        for (let reference in split(as_string(option(section, "domain_ip_lists", "")), /[ \t\r\n]+/))
-            add_item(remote_item(reference, "domain_ip_list"));
-        for (let reference in split(as_string(option(section, "remote_domain_lists", "")), /[ \t\r\n]+/))
-            add_item(remote_item(reference, "remote_domain_list"));
-        for (let reference in split(as_string(option(section, "remote_subnet_lists", "")), /[ \t\r\n]+/))
-            add_item(remote_item(reference, "remote_subnet_list"));
+            add_item(custom_reference_item(reference, "rule_set"));
+        for (let reference in connections.whitespace_list_value(section, "domain_ip_lists"))
+            add_item(custom_reference_item(reference, "domain_ip_list"));
+        for (let reference in connections.whitespace_list_value(section, "remote_domain_lists"))
+            add_item(custom_reference_item(reference, "remote_domain_list"));
+        for (let reference in connections.whitespace_list_value(section, "remote_subnet_lists"))
+            add_item(custom_reference_item(reference, "remote_subnet_list"));
+        for (let reference in connections.whitespace_list_value(section, "local_domain_lists"))
+            add_item(custom_reference_item(reference, "local_domain_list"));
+        for (let reference in connections.whitespace_list_value(section, "local_subnet_lists"))
+            add_item(custom_reference_item(reference, "local_subnet_list"));
     }
 
     return items;
@@ -557,10 +596,256 @@ function proxy_listen_port(proxy_address) {
     return matched ? int(matched[1]) : 0;
 }
 
+function self_pid() {
+    let stat = as_string(fs.readfile("/proc/self/stat") || "");
+    let space = index(stat, " ");
+    let pid = space > 0 ? substr(stat, 0, space) : "";
+    return match(pid, /^[0-9]+$/) != null ? pid : "";
+}
+
+function read_pid_file(path) {
+    let text = trim_string(fs.readfile(path) || "");
+    let newline = index(text, "\n");
+    if (newline >= 0)
+        text = substr(text, 0, newline);
+    text = trim_string(text);
+    return match(text, /^[0-9]+$/) != null ? text : "";
+}
+
+function command_capture(command) {
+    let out = "/tmp/forkop-list-cache-cmd";
+    system(command + " > " + shell_quote(out) + " 2>/dev/null");
+    let text = as_string(fs.readfile(out) || "");
+    try { fs.unlink(out); } catch (e) { }
+    return text;
+}
+
+function process_cmdline(pid) {
+    pid = trim_string(pid);
+    if (match(pid, /^[0-9]+$/) == null)
+        return "";
+    // BusyBox ucode stops fs.readfile at the first NUL, so /proc/pid/cmdline
+    // would be only the binary and the socks process looks dead.
+    let text = trim_string(command_capture("tr '\\000' ' ' < /proc/" + pid + "/cmdline"));
+    if (text != "")
+        return text;
+    let data = fs.readfile("/proc/" + pid + "/cmdline");
+    if (data == null)
+        return "";
+    return replace(as_string(data), /\0/g, " ");
+}
+
+function process_alive(pid) {
+    pid = trim_string(pid);
+    return match(pid, /^[0-9]+$/) != null && command_success_from_args([ "kill", "-0", pid ]);
+}
+
+function download_socks_pid_matches(pid) {
+    let cmd = process_cmdline(pid);
+    return cmd != "" && index(cmd, DOWNLOAD_SOCKS_CONFIG) >= 0;
+}
+
+function read_download_socks_state() {
+    return object_or_empty(read_json_file(DOWNLOAD_SOCKS_STATE));
+}
+
+function download_socks_owner_blocking(state) {
+    let owner = trim_string(object_or_empty(state).owner);
+    if (owner == "" || owner == self_pid())
+        return false;
+    return process_alive(owner);
+}
+
+function stop_download_socks() {
+    let state = read_download_socks_state();
+    if (download_socks_owner_blocking(state))
+        return false;
+
+    let pid = read_pid_file(DOWNLOAD_SOCKS_PID);
+    if (pid == "")
+        pid = trim_string(state.pid);
+    if (download_socks_pid_matches(pid)) {
+        command_success_from_args([ "kill", pid ]);
+        command_success_from_args([ "sleep", "1" ]);
+        if (download_socks_pid_matches(pid))
+            command_success_from_args([ "kill", "-9", pid ]);
+    }
+    try { fs.unlink(DOWNLOAD_SOCKS_PID); } catch (e) { }
+    try { fs.unlink(DOWNLOAD_SOCKS_STATE); } catch (e2) { }
+    for (let name in [ "xray", "sing-box" ]) {
+        let listed = replace(command_capture("pidof " + shell_quote(name)), /\n/g, " ");
+        for (let candidate in split(listed, " ")) {
+            candidate = trim_string(candidate);
+            if (!download_socks_pid_matches(candidate))
+                continue;
+            command_success_from_args([ "kill", candidate ]);
+            command_success_from_args([ "sleep", "1" ]);
+            if (download_socks_pid_matches(candidate))
+                command_success_from_args([ "kill", "-9", candidate ]);
+        }
+    }
+    return true;
+}
+
+function download_socks_reusable(section_name) {
+    if (service_is_running())
+        return false;
+    let state = read_download_socks_state();
+    if (as_string(state.section) != section_name)
+        return false;
+    if (int(state.port || 0) != DOWNLOAD_SOCKS_PORT)
+        return false;
+    let pid = read_pid_file(DOWNLOAD_SOCKS_PID);
+    if (pid == "")
+        pid = trim_string(state.pid);
+    if (!download_socks_pid_matches(pid))
+        return false;
+    return download_port_ready(DOWNLOAD_SOCKS_PORT);
+}
+
+function active_download_socks_address() {
+    if (service_is_running())
+        return "";
+    let state = read_download_socks_state();
+    let address = trim_string(state.address);
+    if (address == "")
+        return "";
+    let pid = read_pid_file(DOWNLOAD_SOCKS_PID);
+    if (pid == "")
+        pid = trim_string(state.pid);
+    if (!download_socks_pid_matches(pid))
+        return "";
+    if (!download_port_ready(int(state.port || DOWNLOAD_SOCKS_PORT)))
+        return "";
+    return address;
+}
+
+function download_section_object(section_name) {
+    for (let section in uci_core.section_objects(CONFIG_NAME, "section")) {
+        section = object_or_empty(section);
+        if (as_string(section[".name"]) == section_name)
+            return section;
+    }
+    return null;
+}
+
+function download_core_bin(core) {
+    if (core == "xray")
+        return getenv("XRAY_BIN") || "/usr/bin/xray";
+    return getenv("FORKOP_SING_BOX_BIN") || getenv("SING_BOX_BIN") || "/usr/bin/sing-box";
+}
+
+function generate_download_socks_config(core, section_name) {
+    if (!ensure_dir(DOWNLOAD_SOCKS_DIR))
+        return false;
+    let script = core == "xray" ? "/xray/generator.uc" : "/singbox/generator.uc";
+    let args = [
+        "ucode", "-L", FORKOP_LIB, FORKOP_LIB + script,
+        "download-socks", section_name, DOWNLOAD_SOCKS_CONFIG, "" + DOWNLOAD_SOCKS_PORT
+    ];
+    let gen_log = DOWNLOAD_SOCKS_DIR + "/download-socks-gen.log";
+    let ok = system(command_from_args(args) + " >" + shell_quote(gen_log) + " 2>&1") == 0;
+    if (!ok || file_size(DOWNLOAD_SOCKS_CONFIG) == 0) {
+        log_message("download socks config failed for '" + section_name + "' (" + core + ")", "error");
+        return false;
+    }
+    return true;
+}
+
+function start_download_socks(settings) {
+    if (service_is_running())
+        return false;
+    let section_name = trim_string(option(settings, "download_lists_via_proxy_section", ""));
+    if (section_name == "")
+        return false;
+    if (download_socks_reusable(section_name)) {
+        log_message("reusing download socks for section '" + section_name + "'", "info");
+        return true;
+    }
+    if (!stop_download_socks()) {
+        log_message("download socks is busy with another update", "warn");
+        return false;
+    }
+
+    let section = download_section_object(section_name);
+    if (section == null) {
+        log_message("download section '" + section_name + "' was not found", "error");
+        return false;
+    }
+    if (!connections.is_connections_action(option(section, "action", ""))) {
+        log_message("download section '" + section_name + "' is not a connection", "error");
+        return false;
+    }
+
+    let core = connections.proxy_core(section);
+    let bin = download_core_bin(core);
+    if (file_size(bin) == 0) {
+        log_message("download socks binary is missing: " + bin, "error");
+        return false;
+    }
+    if (!generate_download_socks_config(core, section_name))
+        return false;
+
+    let test_args = core == "xray"
+        ? [ bin, "run", "-test", "-c", DOWNLOAD_SOCKS_CONFIG ]
+        : [ bin, "check", "-c", DOWNLOAD_SOCKS_CONFIG ];
+    if (system(command_from_args(test_args) + " >>" + shell_quote(DOWNLOAD_SOCKS_LOG) + " 2>&1") != 0) {
+        log_message("download socks config was rejected by " + core, "error");
+        return false;
+    }
+
+    try { fs.unlink(DOWNLOAD_SOCKS_LOG); } catch (e) { }
+    let run_args = core == "xray"
+        ? [ bin, "run", "-c", DOWNLOAD_SOCKS_CONFIG ]
+        : [ bin, "run", "-c", DOWNLOAD_SOCKS_CONFIG, "-D", DOWNLOAD_SOCKS_DIR ];
+    if (system("setsid " + command_from_args(run_args) + " >>" + shell_quote(DOWNLOAD_SOCKS_LOG) + " 2>&1 1000>&- & echo $! > " + shell_quote(DOWNLOAD_SOCKS_PID)) != 0) {
+        log_message("failed to start download socks", "error");
+        return false;
+    }
+    let pid = "";
+    let attempt = 0;
+    while (attempt < 5) {
+        pid = read_pid_file(DOWNLOAD_SOCKS_PID);
+        if (download_socks_pid_matches(pid))
+            break;
+        if (process_alive(pid) && download_port_ready(DOWNLOAD_SOCKS_PORT))
+            break;
+        command_success_from_args([ "sleep", "1" ]);
+        attempt++;
+    }
+    if (!download_socks_pid_matches(pid) && !(process_alive(pid) && download_port_ready(DOWNLOAD_SOCKS_PORT))) {
+        log_message("download socks process did not stay up", "error");
+        stop_download_socks();
+        return false;
+    }
+
+    let address = "socks5h://" + SB_SERVICE_MIXED_INBOUND_ADDRESS + ":" + DOWNLOAD_SOCKS_PORT;
+    write_json_file(DOWNLOAD_SOCKS_STATE, {
+        pid: int(pid),
+        port: DOWNLOAD_SOCKS_PORT,
+        address: address,
+        core: core,
+        config: DOWNLOAD_SOCKS_CONFIG,
+        section: section_name,
+        owner: self_pid()
+    });
+    log_message("started " + core + " download socks for '" + section_name + "' on port " + DOWNLOAD_SOCKS_PORT, "info");
+    return true;
+}
+
 function download_proxy_address(settings, purpose) {
     if (type(settings) != "object")
         settings = settings_section();
     purpose = as_string(purpose || "lists");
+    if (purpose != "components" && !service_is_running()) {
+        let ephemeral = active_download_socks_address();
+        if (ephemeral != "")
+            return ephemeral;
+        if (download_port_ready(DOWNLOAD_SOCKS_PORT))
+            return "socks5h://" + SB_SERVICE_MIXED_INBOUND_ADDRESS + ":" + DOWNLOAD_SOCKS_PORT;
+        log_message("Forkop is stopped and download socks is not listening", "error");
+        return "";
+    }
     let enabled_key = purpose == "components" ? "download_components_via_proxy" : "download_lists_via_proxy";
     let section_key = purpose == "components" ? "download_components_via_proxy_section" : "download_lists_via_proxy_section";
     if (!bool_option(settings, enabled_key, false))
@@ -584,7 +869,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.8",
+        "-A", "forkop-list-cache/1.0.9",
         "-o", output_path,
         "--url", as_string(url)
     ];
@@ -618,20 +903,35 @@ function ensure_download_section_up(settings) {
         return false;
     }
 
+    if (!service_is_running()) {
+        if (!start_download_socks(settings))
+            return false;
+        let address = "socks5h://" + SB_SERVICE_MIXED_INBOUND_ADDRESS + ":" + DOWNLOAD_SOCKS_PORT;
+        let attempt = 0;
+        while (attempt < DOWNLOAD_WAIT_SECONDS) {
+            if (download_port_ready(DOWNLOAD_SOCKS_PORT) && proxy_fetch_ready(address)) {
+                log_message("download section '" + section_name + "' can fetch through the temporary socks", "info");
+                return true;
+            }
+            command_success_from_args([ "sleep", "1" ]);
+            attempt++;
+        }
+        if (download_port_ready(DOWNLOAD_SOCKS_PORT)) {
+            log_message("download section '" + section_name + "' socks is up, but proxy fetch is not ready yet", "warn");
+            return true;
+        }
+        log_message("download section '" + section_name + "' socks did not start", "error");
+        stop_download_socks();
+        return false;
+    }
+
     let proxy_address = lists_proxy_address(settings);
     let listen_port = proxy_listen_port(proxy_address);
     if (listen_port <= 0)
         listen_port = SB_SERVICE_MIXED_INBOUND_PORT;
 
-    if (!download_port_ready(listen_port)) {
-        if (!service_is_running()) {
-            log_message("starting Forkop so lists can be downloaded through section '" + section_name + "'", "info");
-            command_success_from_args([ SERVICE_INIT, "start" ]);
-        }
-        else {
-            log_message("waiting for section '" + section_name + "' proxy on port " + listen_port, "info");
-        }
-    }
+    if (!download_port_ready(listen_port))
+        log_message("waiting for section '" + section_name + "' proxy on port " + listen_port, "info");
 
     let attempt = 0;
     while (attempt < DOWNLOAD_WAIT_SECONDS) {
@@ -730,6 +1030,8 @@ function write_manifest(items) {
 
 function item_status(item) {
     item = object_or_empty(item);
+    if (item.local == true)
+        return file_size(item.path) > 0 ? "ready" : "absent";
     if (stored_list_size(item.path) > 0)
         return "cached";
     return persist_enabled() ? "missing" : "disabled";
@@ -1039,7 +1341,6 @@ function decompile_to_lines(path, raw, dest) {
     else if (file_size("/bin/timeout") > 0)
         command = command_from_args([ "/bin/timeout", "45" ]) + " " + command;
     let ok = system(command) == 0 && file_size(raw) > 0 && extract_ruleset_lines(raw, dest);
-    try { fs.unlink(raw); } catch (e3) { }
     return ok && file_size(dest) > 0;
 }
 
@@ -1048,6 +1349,81 @@ function copy_text_lines(src, dest) {
         return false;
     system("sed '/^[[:space:]]*$/d' " + shell_quote(src) + " > " + shell_quote(dest) + " 2>/dev/null");
     return file_size(dest) > 0;
+}
+
+function community_subnet_names() {
+    return {
+        twitter: true,
+        meta: true,
+        telegram: true,
+        cloudflare: true,
+        hetzner: true,
+        ovh: true,
+        digitalocean: true,
+        cloudfront: true,
+        discord: true,
+        roblox: true
+    };
+}
+
+function subnet_source_paths(name) {
+    name = trim_string(name);
+    if (community_subnet_names()[name] != true)
+        return [];
+    let rels = [ "Subnets/IPv4/" + name + ".lst" ];
+    if (name != "roblox")
+        push(rels, "Subnets/IPv6/" + name + ".lst");
+    let paths = [];
+    for (let rel in rels) {
+        let ready = ensure_cached_alias(LIST_CACHE_DIR + "/" + rel);
+        if (ready != "")
+            push(paths, ready);
+    }
+    return paths;
+}
+
+function write_subnet_preview(sources, dest) {
+    let quoted = [];
+    for (let path in sources)
+        push(quoted, shell_quote(path));
+    if (length(quoted) == 0)
+        return false;
+    try { fs.unlink(dest); } catch (e) { }
+    let command = "cat " + join(" ", quoted) +
+        " | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -E '^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$' > " +
+        shell_quote(dest);
+    system(command + " 2>/dev/null");
+    return file_size(dest) > 0;
+}
+
+function append_cidr_lines(raw, dest) {
+    if (file_size(raw) == 0)
+        return;
+    let pattern = "\"[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[0-9]{1,2})?\"|\"[0-9A-Fa-f:]*:[0-9A-Fa-f:]+(/[0-9]{1,3})?\"";
+    system("grep -a -o -E -- " + shell_quote(pattern) + " " + shell_quote(raw) +
+        " | sed -e 's/^\"//' -e 's/\"$//' >> " + shell_quote(dest) + " 2>/dev/null");
+}
+
+function clean_plain_lines(src, dest) {
+    if (file_has_nul(src))
+        return false;
+    system("sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' " + shell_quote(src) +
+        " | grep -v '^$' > " + shell_quote(dest) + " 2>/dev/null");
+    return file_size(dest) > 0;
+}
+
+function separate_custom_preview(dir, lines) {
+    let domains = dir + "/domains.txt";
+    let subnets = dir + "/subnets.txt";
+    let pattern = "^[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[0-9]{1,2})?$|^[0-9A-Fa-f:]*:[0-9A-Fa-f:]+(/[0-9]{1,3})?$";
+    system("grep -E -- " + shell_quote(pattern) + " " + shell_quote(lines) + " > " + shell_quote(subnets) + " 2>/dev/null");
+    system("grep -E -v -- " + shell_quote(pattern) + " " + shell_quote(lines) + " > " + shell_quote(domains) + " 2>/dev/null");
+    if (file_size(subnets) > 0 && file_size(domains) > 0) {
+        system("mv -f " + shell_quote(domains) + " " + shell_quote(lines) + " 2>/dev/null");
+        return;
+    }
+    try { fs.unlink(subnets); } catch (e) { }
+    try { fs.unlink(domains); } catch (e2) { }
 }
 
 function prepare_preview(item, path) {
@@ -1060,29 +1436,57 @@ function prepare_preview(item, path) {
         return { ok: false, error: "unreadable", name: as_string(item.name) };
     let lines = dir + "/lines.txt";
     let raw = dir + "/raw.json";
-    let ext = extension_for_url(item.url);
-    let binary = ext == "srs" || file_has_nul(path);
-    let ready = binary ? decompile_to_lines(path, raw, lines) : copy_text_lines(path, lines);
-    if (!ready && !binary)
+    let ext = singbox_rulesets.file_extension(item.url);
+    let plain = ext == "lst" || ext == "txt" || ext == "list" || ext == "conf";
+    let ready = false;
+    if (plain)
+        ready = clean_plain_lines(path, lines);
+    else if (ext == "json" && !file_has_nul(path))
+        ready = extract_ruleset_lines(path, lines);
+    else
         ready = decompile_to_lines(path, raw, lines);
+    if (!ready && !plain)
+        ready = extract_ruleset_lines(path, lines);
+    if (ready && !plain && item.builtin != true && file_size(raw) > 0)
+        append_cidr_lines(raw, lines);
+    if (!plain && item.builtin != true && file_size(path) > 0 && ext == "json")
+        append_cidr_lines(path, lines);
     try { fs.unlink(raw); } catch (e) { }
+    if (ready && item.builtin != true)
+        separate_custom_preview(dir, lines);
     let total = ready ? count_text_lines(lines) : 0;
     if (total <= 0) {
         remove_preview_tree(dir);
         return { ok: false, error: "unreadable", name: as_string(item.name) };
     }
+    let subnet_sources = item.kind == "community" ? subnet_source_paths(item.name) : [];
+    if (length(subnet_sources) > 0)
+        write_subnet_preview(subnet_sources, dir + "/subnets.txt");
     write_text_file(dir + "/name", as_string(item.name));
     write_text_file(dir + "/total", sprintf("%d\n", total));
     return { ok: true, token, total, name: as_string(item.name) };
 }
 
-function preview_page(token, page) {
+function preview_has_subnets(dir) {
+    return file_size(dir + "/subnets.txt") > 0;
+}
+
+function preview_view_name(view, dir) {
+    if (as_string(view) == "subnets" && preview_has_subnets(dir))
+        return "subnets";
+    return "domains";
+}
+
+function preview_page(token, page, view) {
     let dir = preview_dir(token);
     if (dir == "" || file_size(dir + "/lines.txt") == 0)
         return { ok: false, error: "missing" };
-    let total = int(trim_string(fs.readfile(dir + "/total") || "0"));
+    let has_subnets = preview_has_subnets(dir);
+    view = preview_view_name(view, dir);
+    let lines_path = view == "subnets" ? dir + "/subnets.txt" : dir + "/lines.txt";
+    let total = count_text_lines(lines_path);
     if (total <= 0)
-        total = count_text_lines(dir + "/lines.txt");
+        return { ok: false, error: "missing" };
     let pages = int((total + PREVIEW_PAGE_SIZE - 1) / PREVIEW_PAGE_SIZE);
     if (pages < 1)
         pages = 1;
@@ -1094,7 +1498,7 @@ function preview_page(token, page) {
     let start = (page - 1) * PREVIEW_PAGE_SIZE + 1;
     let end = page * PREVIEW_PAGE_SIZE;
     let text = capture_command(
-        "sed -n " + shell_quote(sprintf("%d,%dp", start, end)) + " " + shell_quote(dir + "/lines.txt")
+        "sed -n " + shell_quote(sprintf("%d,%dp", start, end)) + " " + shell_quote(lines_path)
     );
     return {
         ok: true,
@@ -1104,6 +1508,8 @@ function preview_page(token, page) {
         pages,
         total,
         page_size: PREVIEW_PAGE_SIZE,
+        view,
+        has_subnets,
         text
     };
 }
@@ -1139,6 +1545,8 @@ function decorate_item(item) {
         id: as_string(item.id),
         name: as_string(item.name),
         kind: as_string(item.kind),
+        builtin: item.builtin == true,
+        local: item.local == true,
         url: as_string(item.url),
         path: as_string(item.path),
         size,
@@ -1224,8 +1632,11 @@ function persist_selected_lists(settings, proxy_address) {
     if (!ensure_download_section_up(settings))
         return false;
 
-    if (as_string(proxy_address) == "")
-        proxy_address = lists_proxy_address(settings);
+    let live_proxy = lists_proxy_address(settings);
+    if (live_proxy != "")
+        proxy_address = live_proxy;
+    else if (as_string(proxy_address) == "")
+        proxy_address = live_proxy;
 
     let selected = collect_selected_lists_from_uci();
     if (length(selected) == 0) {
@@ -1240,6 +1651,10 @@ function persist_selected_lists(settings, proxy_address) {
     let changed = false;
 
     for (let item in selected) {
+        if (item.local == true) {
+            push(stored, decorate_item(item));
+            continue;
+        }
         adopt_legacy_singbox_cache(item.path, legacy_cache_path(item.url));
         let previous_size = stored_list_size(item.path);
         if (download_to_file(item.url, item.path, proxy_address)) {
@@ -1283,6 +1698,10 @@ function module_exports() {
         collect_selected_lists_from_uci,
         ensure_download_section_up,
         persist_selected_lists,
+        stop_download_socks,
+        service_is_running,
+        download_port_ready,
+        proxy_listen_port,
         preview_selected,
         preview_page,
         preview_close,
@@ -1305,6 +1724,7 @@ if (mode == "status-json")
     print_status_json();
 else if (mode == "persist") {
     let result = persist_selected_lists();
+    stop_download_socks();
     if (type(result) == "object")
         exit(result.ok ? 0 : 1);
     exit(result ? 0 : 1);

@@ -1,4 +1,4 @@
-# Forkop-Mod 1.0.8 patch set
+# Forkop-Mod 1.0.9 patch set
 
 Based on upstream https://github.com/ushan0v/forkop main (1.0.5).
 
@@ -127,7 +127,7 @@ Leftover `route_router_traffic=1` without a section (old checkbox) is treated as
 
 Copy **settings.js, generator.uc, route.uc, constants.uc, nft/apply.uc, lifecycle.uc, state.uc, validator.uc** together and **restart Forkop**, not only Save. Copying nft/lifecycle without generator DNATs to a closed port.
 
-Сборка ipk/apk — в `BUILD.md` (`./build.sh 1.0.8 ./dist`). Версия пакета 1.0.8.
+Сборка ipk/apk — в `BUILD.md` (`./build.sh 1.0.9 ./dist`). Версия пакета 1.0.9.
 
 ## Manual copy onto an existing 1.0.5 install
 

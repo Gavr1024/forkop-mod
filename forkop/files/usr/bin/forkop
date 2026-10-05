@@ -65,7 +65,7 @@ function show_help() {
     print("    list_update_if_due      Update remote lists only when the configured interval has elapsed\n");
     print("    list_cache_status       Show locally cached lists as JSON\n");
     print("    list_cache_show <id>    Show the saved contents of one cached list\n");
-    print("    list_cache_show_page <token> <page>\n");
+    print("    list_cache_show_page <token> <page> [domains|subnets]\n");
     print("                            Show one page of an open list preview\n");
     print("    list_cache_show_close <token>\n");
     print("                            Delete a list preview from memory\n");
@@ -166,7 +166,7 @@ function command_spec(command) {
         list_update_if_due: [ "components/updates.uc", "list-update-if-due", 0 ],
         list_cache_status: [ "components/updates.uc", "list-cache-status", 0 ],
         list_cache_show: [ "components/updates.uc", "list-cache-show", 1 ],
-        list_cache_show_page: [ "components/updates.uc", "list-cache-show-page", 2 ],
+        list_cache_show_page: [ "components/updates.uc", "list-cache-show-page", 3 ],
         list_cache_show_close: [ "components/updates.uc", "list-cache-show-close", 1 ],
         list_cache_persist: [ "components/updates.uc", "list-cache-persist", 0 ],
         slot_status: [ "config/slots.uc", "status-json", 0 ],

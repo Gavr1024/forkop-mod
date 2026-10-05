@@ -2353,6 +2353,9 @@ msgstr ""
 msgid "Proxy core"
 msgstr ""
 
+msgid "Same as routing engine"
+msgstr ""
+
 #: src/forkop/tabs/dashboard/initController.ts:749
 msgid "Proxy link is unavailable"
 msgstr ""

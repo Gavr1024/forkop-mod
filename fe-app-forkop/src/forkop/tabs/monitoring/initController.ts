@@ -219,10 +219,19 @@ function buildRouteDisplayNames(sections: Forkop.ConfigSection[]) {
 
       routeSectionItems.push({ sectionName, displayName });
       map[getOutboundTagBySection(sectionName)] = displayName;
-      const core =
-        normalizeString(section.proxy_core).toLowerCase() === 'xray'
+      const explicit = normalizeString(section.proxy_core).toLowerCase();
+      const settings = sections.find((item) => item['.type'] === 'settings');
+      const routingEngine =
+        normalizeString(settings?.routing_engine).toLowerCase() === 'xray' ||
+        normalizeString(settings?.routing_engine).toLowerCase() === 'xray-core'
           ? 'xray'
           : 'sing-box';
+      const core =
+        explicit === 'xray' || explicit === 'xray-core'
+          ? 'xray'
+          : explicit === 'sing-box' || explicit === 'singbox'
+            ? 'sing-box'
+            : routingEngine;
       cores[getOutboundTagBySection(sectionName)] = core;
       const urltestIds =
         urltestsBySection.get(sectionName) || getUrlTestIds(section);

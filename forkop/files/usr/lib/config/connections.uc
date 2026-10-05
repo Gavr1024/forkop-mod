@@ -309,15 +309,6 @@ function action(section) {
     return normalize_action(option(section, "action", ""));
 }
 
-function proxy_core(section) {
-    let value = lc(as_string(option(section, "proxy_core", "")));
-    if (value == "xray" || value == "xray-core")
-        return "xray";
-    if (value == "sing-box" || value == "singbox")
-        return "sing-box";
-    return routing_engine();
-}
-
 function routing_engine() {
     let value = "";
     if (uci_core.available() && uci_core.exists(CONFIG_NAME + ".settings.routing_engine"))
@@ -330,6 +321,15 @@ function routing_engine() {
 
 function is_xray_primary() {
     return routing_engine() == "xray";
+}
+
+function proxy_core(section) {
+    let value = lc(as_string(option(section, "proxy_core", "")));
+    if (value == "xray" || value == "xray-core")
+        return "xray";
+    if (value == "sing-box" || value == "singbox")
+        return "sing-box";
+    return routing_engine();
 }
 
 function connection_urls(section) {

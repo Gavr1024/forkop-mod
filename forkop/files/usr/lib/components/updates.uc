@@ -2489,27 +2489,40 @@ function write_list_update_timestamp(timestamp) {
     write_file(LIST_UPDATE_STATE_FILE, as_string(timestamp) + "\n");
 }
 
+function finish_list_update(ok) {
+    list_cache.stop_download_socks();
+    list_update_pid_end();
+    exit(ok ? 0 : 1);
+}
+
 function list_update() {
     log_message("Starting lists update", "info");
     if (!list_update_pid_begin())
         exit(0);
 
     let settings = uci_settings();
+    if (bool_option(settings, "download_lists_via_proxy", false) && !list_cache.service_is_running())
+        list_cache.ensure_download_section_up(settings);
+
     let proxy_address = service_proxy_address(settings, "lists");
     if (engine.is_xray_primary() && as_string(proxy_address) == "")
         log_message("Xray plane: enable 'download lists via proxy' and pick an Xray section so GitHub lists can be fetched through SOCKS", "warn");
-    if (!dns_probe_passed(proxy_address)) {
-        list_update_pid_end();
-        exit(1);
-    }
-    github_probe(proxy_address);
+    if (!dns_probe_passed(proxy_address))
+        finish_list_update(false);
+    if (as_string(proxy_address) != "" &&
+        !list_cache.download_port_ready(list_cache.proxy_listen_port(proxy_address)))
+        log_message("section proxy is not listening; GitHub preflight skipped", "warn");
+    else
+        github_probe(proxy_address);
 
     log_message("Downloading and processing lists", "info");
     let sections = uci_sections("section");
     let ok = true;
-    if (!list_cache.ensure_download_section_up(settings)) {
+    if (bool_option(settings, "download_lists_via_proxy", false) &&
+        !list_cache.ensure_download_section_up(settings)) {
         log_message("Download section is not ready; local list cache will keep previous copies if any", "warn");
         ok = false;
+        proxy_address = service_proxy_address(settings, "lists");
     }
 
     for (let section in sections)
@@ -2562,6 +2575,10 @@ function list_update() {
             log_message("Xray list conversion kept previous copies where download failed", "warn");
             ok = false;
         }
+        if (!list_cache.service_is_running()) {
+            log_message("Forkop is stopped; downloaded lists stay on disk until the next start", "info");
+        }
+        else {
         command_success_from_args([
             "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc", "init-config"
         ]);
@@ -2583,6 +2600,7 @@ function list_update() {
             log_message("dnsmasq nftset unchanged after lists; skip dnsmasq restart", "info");
         else
             command_success_from_args([ "/etc/init.d/dnsmasq", "restart" ]);
+        }
     }
 
     if (ok) {
@@ -2593,8 +2611,7 @@ function list_update() {
         log_message("Lists update failed", "info");
     }
 
-    list_update_pid_end();
-    exit(ok ? 0 : 1);
+    finish_list_update(ok);
 }
 
 function xray_list_assets_ready() {
@@ -3067,8 +3084,8 @@ function print_list_cache_show(id) {
     print(sprintf("%J", result), "\n");
 }
 
-function print_list_cache_show_page(token, page) {
-    let result = list_cache.preview_page(token, page);
+function print_list_cache_show_page(token, page, view) {
+    let result = list_cache.preview_page(token, page, view);
     if (type(result) != "object")
         result = { ok: false, error: "unreadable" };
     print(sprintf("%J", result), "\n");
@@ -3112,6 +3129,8 @@ function start_list_cache_persist() {
 
 function run_list_cache_persist() {
     let settings = uci_settings();
+    if (bool_option(settings, "download_lists_via_proxy", false) && !list_cache.service_is_running())
+        list_cache.ensure_download_section_up(settings);
     let proxy_address = service_proxy_address(settings, "lists");
     let persist_result = list_cache.persist_selected_lists(settings, proxy_address);
     let ok = true;
@@ -3120,13 +3139,14 @@ function run_list_cache_persist() {
     else
         ok = persist_result ? true : false;
 
+    proxy_address = service_proxy_address(settings, "lists");
     let geodata = require("xray.geodata");
     if (!geodata.ensure_shared_subnets(proxy_address, true)) {
         log_message("Shared subnet download kept previous copies where download failed", "warn");
         ok = false;
     }
 
-    if (engine.is_xray_primary()) {
+    if (engine.is_xray_primary() && list_cache.service_is_running()) {
         let config_path = "/etc/xray/config.json";
         let before_config = file_md5(config_path);
         if (!geodata.ensure_from_uci(settings, proxy_address, true)) {
@@ -3146,7 +3166,15 @@ function run_list_cache_persist() {
             ]);
         }
     }
+    else if (engine.is_xray_primary()) {
+        if (!geodata.ensure_from_uci(settings, proxy_address, true)) {
+            log_message("Xray list download kept previous copies where download failed", "warn");
+            ok = false;
+        }
+        log_message("Forkop is stopped; downloaded lists stay on disk until the next start", "info");
+    }
 
+    list_cache.stop_download_socks();
     try { fs.writefile(LIST_CACHE_JOB_OUTCOME, (ok ? "ok" : "fail") + "\n"); } catch (e) { }
     try { fs.unlink(LIST_CACHE_JOB_PID); } catch (e2) { }
     log_message(ok ? "List cache download finished" : "List cache download finished with errors", ok ? "info" : "warn");
@@ -3188,7 +3216,7 @@ else if (mode == "list-cache-status")
 else if (mode == "list-cache-show")
     print_list_cache_show(ARGV[1]);
 else if (mode == "list-cache-show-page")
-    print_list_cache_show_page(ARGV[1], ARGV[2]);
+    print_list_cache_show_page(ARGV[1], ARGV[2], ARGV[3]);
 else if (mode == "list-cache-show-close")
     print_list_cache_show_close(ARGV[1]);
 else if (mode == "list-cache-persist")

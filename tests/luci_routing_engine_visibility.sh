@@ -26,6 +26,17 @@ for (const file of [sectionPath, settingsPath, forkopPath, serverPath]) {
   }
 }
 
+const sectionSrc = readFileSync(sectionPath, "utf8");
+if (sectionSrc.includes('document.addEventListener("click", kick, true)')) {
+  throw new Error("opening the balancer strategy menu must not remount the card");
+}
+if (!sectionSrc.includes('position: static !important;')) {
+  throw new Error("strategy title must not cover the dropdown");
+}
+if (!sectionSrc.includes('label.removeAttribute("for")')) {
+  throw new Error("strategy label must not toggle the menu on mouse release");
+}
+
 function extract(src, name) {
   const token = "function " + name;
   const start = src.indexOf(token);
@@ -99,7 +110,7 @@ for (const key of [
   }
 }
 
-for (const key of ["xray_finalmask", "xray_finalmask_length", "xray_finalmask_interval", "xray_balancer_strategy", "xray_fallback_target", "xray_leastload_expected", "xray_leastload_max_rtt", "xray_leastload_tolerance", "xray_mux_enabled", "xray_mux_concurrency", "xray_mux_xudp", "xray_mux_udp443"]) {
+for (const key of ["xray_finalmask", "xray_finalmask_packets", "xray_finalmask_length", "xray_finalmask_interval", "xray_finalmask_max_split", "xray_finalmask_noise", "xray_finalmask_noise_type", "xray_finalmask_noise_rand", "xray_finalmask_noise_rand_range", "xray_finalmask_noise_packet", "xray_finalmask_noise_delay", "xray_balancer_strategy", "xray_fallback_target", "xray_leastload_expected", "xray_leastload_max_rtt", "xray_leastload_tolerance", "xray_mux_enabled", "xray_mux_concurrency", "xray_mux_xudp", "xray_mux_udp443"]) {
   const hidden = new RegExp(
     'restrictSectionEngine\\([\\s\\S]{0,320}"' + key + '"[\\s\\S]{0,240}"xray"',
   );
@@ -162,6 +173,34 @@ for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strat
   if (window.includes("restrictRoutingEngine(")) {
     throw new Error(key + " must stay visible on both cores");
   }
+}
+
+if (!extract(settings, "dnsProtocolChoices").includes("isXrayRoutingEngine(engine)") ||
+    !extract(settings, "dnsProtocolChoices").includes('"doh3"') ||
+    !extract(settings, "dnsProtocolChoices").includes('choices.push(["dot", _("DNS over TLS (DoT)")])')) {
+  throw new Error("DoH3 and DoT must be left out of the main DNS list when Xray is primary");
+}
+if (!settings.includes("DoQ does not go through a section.")) {
+  throw new Error("Xray DoQ must say it does not go through a section");
+}
+
+if (!settings.includes("const settingsId = section_id != null ? section_id : option_index") ||
+    !settings.includes("refreshDnsTypeField(dnsTypeOption, settingsId)")) {
+  throw new Error("an unsaved routing engine change must refresh the settings DNS list");
+}
+
+if (!section.includes("dnsTypeChoices(!xray, !xray)") ||
+    !section.includes('if (xray && selected === "doh3")') ||
+    !section.includes("DoQ does not go through a section.")) {
+  throw new Error("section DNS protocol must hide DoH3 and DoT when Xray is primary");
+}
+
+const resolverAt = section.indexOf('form.ListValue,\n      "domain_resolver_dns_type"');
+if (resolverAt < 0) throw new Error("missing domain resolver protocol");
+const resolverWindow = section.slice(resolverAt, resolverAt + 700);
+if (!resolverWindow.includes("dnsTypeChoices()") ||
+    resolverWindow.includes("dnsTypeChoices(!xray)")) {
+  throw new Error("sing-box domain resolver must keep DoH3");
 }
 
 if (!forkop.includes("function syncRoutingEngineTabs()") ||

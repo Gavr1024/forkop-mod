@@ -8,6 +8,7 @@ let list_cache = require("routing.list_cache");
 let singbox_rulesets = require("singbox.rulesets");
 let xray_constants = require("xray.constants");
 let dat_contains_cache = {};
+let dat_code_cache = {};
 let dropped_matcher_log = {};
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
@@ -205,15 +206,86 @@ function shell_quote(value) {
     return "'" + replace(as_string(value), /'/g, "'\\''") + "'";
 }
 
+function read_varint(data, i, end) {
+    let value = 0;
+    let mul = 1;
+    let guard = 0;
+    while (i < end && guard < 5) {
+        let byte = ord(substr(data, i, 1));
+        i++;
+        value += (byte & 127) * mul;
+        if (byte < 128)
+            return [ value, i ];
+        mul *= 128;
+        guard++;
+    }
+    return null;
+}
+
+function protobuf_country_codes(path) {
+    let cached = dat_code_cache[path];
+    if (cached != null)
+        return cached;
+    let codes = {};
+    let data = null;
+    try {
+        data = fs.readfile(path);
+    }
+    catch (e) {
+        data = null;
+    }
+    if (data == null) {
+        dat_code_cache[path] = codes;
+        return codes;
+    }
+    let n = length(data);
+    let i = 0;
+    let entries = 0;
+    while (i + 2 <= n && entries < 20000) {
+        if (ord(substr(data, i, 1)) != 10)
+            break;
+        i++;
+        let parsed = read_varint(data, i, n);
+        if (parsed == null)
+            break;
+        let elen = parsed[0];
+        i = parsed[1];
+        if (elen < 2 || i + elen > n)
+            break;
+        let entry_end = i + elen;
+        if (ord(substr(data, i, 1)) == 10) {
+            let inner = read_varint(data, i + 1, entry_end);
+            if (inner != null) {
+                let clen = inner[0];
+                let start = inner[1];
+                if (clen >= 1 && clen <= 64 && start + clen <= entry_end) {
+                    let code = lc(substr(data, start, clen));
+                    if (match(code, /^[0-9a-z_!.+-]+$/) != null)
+                        codes[code] = true;
+                }
+            }
+        }
+        i = entry_end;
+        entries++;
+    }
+    dat_code_cache[path] = codes;
+    return codes;
+}
+
 function dat_contains(path, needle) {
     path = as_string(path);
-    needle = as_string(needle);
+    needle = lc(trim(as_string(needle)));
     if (file_size(path) == 0 || needle == "")
         return false;
     let key = path + "\t" + needle;
     if (dat_contains_cache[key] != null)
         return dat_contains_cache[key];
-    let found = system("grep -a -i -F -q -- " + shell_quote(needle) + " " + shell_quote(path) + " >/dev/null 2>&1") == 0;
+    // A 10-byte code has length byte 0x0A. Putting that byte in a grep
+    // pattern splits the pattern on a newline, so "^" matches every line
+    // and names like cloudfront look present because cloudfront.net is in
+    // the file. Xray then aborts: code not found CLOUDFRONT.
+    let codes = protobuf_country_codes(path);
+    let found = codes[needle] == true;
     dat_contains_cache[key] = found;
     return found;
 }

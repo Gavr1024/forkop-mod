@@ -248,6 +248,12 @@ require_contains "$CONNECTIONS_UC" 'if (value == "xray" || value == "xray-core")
   "proxy_core must accept xray"
 require_contains "$CONNECTIONS_UC" 'return routing_engine()' \
   "empty proxy_core must follow the selected routing plane, not a native core"
+awk '
+  /^function routing_engine\(/ { r = NR }
+  /^function proxy_core\(/ { p = NR }
+  END { if (r == 0 || p == 0 || r > p) exit 1 }
+' "$CONNECTIONS_UC" ||
+  fail "ucode binds names at definition time; routing_engine must be defined before proxy_core"
 
 require_contains "$GENERATOR_UC" 'function add_xray_sidecar_outbound' \
   "sing-box must emit a SOCKS sidecar for xray sections"
@@ -259,16 +265,16 @@ require_contains "$GENERATOR_UC" 'type: "selector"' \
   "xray sidecar must expose a Clash selector so Outbounds diagnostics can probe it"
 require_contains "$GENERATOR_UC" 'domain_resolver: runtime_constants.DNS_SERVER_TAG' \
   "xray sidecar SOCKS must resolve via real DNS, not FakeIP"
-require_contains "$GENERATOR_UC" 'unique_tag(as_string(node.tag' \
-  "xray sidecar leaf tag must not collide with the section selector"
+require_contains "$GENERATOR_UC" 'section_name + "-xray"' \
+  "xray sidecar traffic must use one SOCKS on the section balancer port"
 require_contains "$FORKOP_LIB/xray/outbound.uc" 'function vless_has_transport_security' \
   "Xray 26.9+ must skip plaintext VLESS instead of aborting the whole config"
 require_contains "$FORKOP_LIB/xray/outbound.uc" 'native_vless_is_plaintext' \
   "native VLESS JSON without TLS must not be emitted"
 require_contains "$FORKOP_LIB/xray/runtime.uc" 'latency-test' \
   "dashboard latency must probe Xray SOCKS when Clash is absent"
-require_contains "$FORKOP_LIB/service/ui.uc" 'need_singbox_sidecar' \
-  "latency worker must not call Clash when the sidecar is not running"
+require_contains "$FORKOP_LIB/service/ui.uc" 'function section_uses_xray_core' \
+  "xray section latency must probe Xray SOCKS even when sing-box is the routing core"
 require_contains "$FORKOP_LIB/service/ui.uc" 'need_xray_sidecar' \
   "dashboard must know when the Xray sidecar is unused"
 require_contains "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" 'isXraySidecarNeeded' \
@@ -377,8 +383,8 @@ require_contains "$FORKOP_BIN" 'show_xray_config' \
   "CLI must expose show_xray_config"
 require_contains "$FORKOP_LIB/xray/generator.uc" 'display_names[tag] = iface' \
   "xray interface nodes must keep the VPN interface name for the dashboard"
-require_contains "$GENERATOR_UC" 'urltest_candidates' \
-  "xray sidecar URLTest must wrap Clash urltest of SOCKS leaves, not only the Xray balancer"
+require_contains "$GENERATOR_UC" 'Xray leastPing/leastLoad owns node choice' \
+  "sing-box must hand an xray section to the section SOCKS so Xray can balance"
 require_contains "$FE_SRC/forkop/tabs/diagnostic/checks/runXrayCheck.ts" 'export async function runXrayCheck' \
   "diagnostics must run an Xray check"
 require_contains "$FE_SRC/forkop/tabs/monitoring/initController.ts" "type MonitoringTabId = 'active' | 'closed' | 'cores'" \
@@ -395,7 +401,7 @@ require_contains "$FORKOP_LIB/xray/constants.uc" 'XRAY_NODES_FILE' \
 require_contains "$FORKOP_LIB/xray/generator.uc" 'node_inbound_tag' \
   "xray must emit a SOCKS inbound per outbound so the dashboard can select it"
 require_contains "$GENERATOR_UC" 'function read_xray_section_nodes' \
-  "sing-box sidecar must expand all xray nodes into the Clash selector"
+  "sing-box sidecar must still read xray nodes for dashboard metadata"
 require_contains "$GENERATOR_UC" 'xray-nodes.json' \
   "sing-box sidecar must read the xray per-node port map"
 require_contains "$FE_SRC/forkop/methods/custom/getDashboardSections.ts" 'function dashboardClashType' \

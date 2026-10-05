@@ -184,7 +184,9 @@ function settings_update_interval() {
     if (!bool_option(settings, "list_update_enabled", true))
         return "";
 
-    let update_interval = option(settings, "update_interval", "1d");
+    let update_interval = lc(option(settings, "update_interval", "1d"));
+    if (update_interval == "never" || update_interval == "0" || update_interval == "off" || update_interval == "disabled")
+        return "";
     return update_interval != "" ? update_interval : "1d";
 }
 
@@ -401,6 +403,19 @@ function apply_remote_ruleset_http_client(rule_set, purpose) {
         rule_set.download_detour = detour;
 }
 
+let missing_ruleset_warned = false;
+
+function empty_ruleset_path() {
+    let path = runtime_ruleset_folder + "/empty-ruleset.json";
+    if (fs.stat(path) != null)
+        return path;
+    if (!ensure_dir(runtime_ruleset_folder))
+        return "";
+    if (write_json_file(path, { version: 2, rules: [] }) == null)
+        return "";
+    return path;
+}
+
 function register_remote_or_cached_ruleset(config, rule_set) {
     let url = as_string(rule_set.url);
     let cached = null;
@@ -422,6 +437,25 @@ function register_remote_or_cached_ruleset(config, rule_set) {
             tag: rule_set.tag,
             format: format_value,
             path: cached.path
+        });
+        return;
+    }
+
+    // sing-box treats a failed initial remote download as fatal (GitHub EOF
+    // aborts the process before DNS/TPROXY listen). A missing cache must not
+    // do that: keep the tag on an empty local set until the list updater
+    // writes the real file and the next reload picks it up.
+    let placeholder = empty_ruleset_path();
+    if (placeholder != "") {
+        if (!missing_ruleset_warned) {
+            missing_ruleset_warned = true;
+            warn("A community or remote list is not cached. sing-box will start without it; the next successful list download fills it in.\n");
+        }
+        push(config.route.rule_set, {
+            type: "local",
+            tag: rule_set.tag,
+            format: "source",
+            path: placeholder
         });
         return;
     }
@@ -2483,163 +2517,52 @@ function add_xray_sidecar_outbound(config, section, taken) {
     if (type(ports) != "object")
         ports = {};
     let port = int(ports[section_name] || 0, 10);
-
-    let fallback_name = "Xray";
-    let links = connections.connection_urls(section);
-    if (length(links) > 0) {
-        let frag = url_fragment(links[0]);
-        if (frag != "")
-            fallback_name = frag;
-    }
-    if (fallback_name == "Xray") {
-        let ifaces = connections.interfaces(section);
-        if (length(ifaces) > 0 && as_string(ifaces[0]) != "")
-            fallback_name = as_string(ifaces[0]);
-    }
-
-    let nodes = read_xray_section_nodes(section_name, port, fallback_name);
-    if (length(nodes) == 0)
+    if (port <= 0)
         runtime_generate_unsupported("xray sidecar port is missing for " + section_name + "; generate xray config first");
 
     taken = type(taken) == "object" ? taken : {};
     let selector_tag = outbound_tag(section_name);
     taken[selector_tag] = true;
+    // One SOCKS into the section inbound. Xray leastPing/leastLoad owns node choice.
+    let balance_tag = unique_tag(section_name + "-xray", taken);
+    taken[balance_tag] = true;
+    push(config.outbounds, {
+        type: "socks",
+        tag: balance_tag,
+        server: "127.0.0.1",
+        server_port: port,
+        version: "5",
+        udp_fragment: true,
+        routing_mark: runtime_constants.OUTBOUND_MARK,
+        domain_resolver: runtime_constants.DNS_SERVER_TAG
+    });
 
-    let selector_tags = [];
-    let urltest_candidates = [];
     let state = runtime_subscription.new_section_state(section_name);
+    let links = connections.connection_urls(section);
     let link_index = 0;
-
-    for (let i = 0; i < length(nodes); i++) {
-        let node = object_or_empty(nodes[i]);
-        let node_port = int(node.port || 0, 10);
-        if (node_port <= 0)
+    for (let node in read_xray_section_nodes(section_name, port, "Xray")) {
+        node = object_or_empty(node);
+        let tag = as_string(node.tag || "");
+        if (tag == "" || int(node.port || 0, 10) <= 0)
             continue;
-        let display_name = as_string(node.name || node.tag || fallback_name);
-        if (display_name == "")
-            display_name = fallback_name;
-        let leaf_tag = unique_tag(as_string(node.tag || (section_name + "-xray-" + (i + 1))), taken);
-        taken[leaf_tag] = true;
-        let socks = {
-            type: "socks",
-            tag: leaf_tag,
-            server: "127.0.0.1",
-            server_port: node_port,
-            version: "5",
-            udp_fragment: true,
-            routing_mark: runtime_constants.OUTBOUND_MARK,
-            domain_resolver: runtime_constants.DNS_SERVER_TAG
-        };
-        push(config.outbounds, socks);
-        push(selector_tags, leaf_tag);
-        if (as_string(node.kind || "proxy") != "iface")
-            push(urltest_candidates, leaf_tag);
+        let display_name = as_string(node.name || tag);
         runtime_subscription.remember_outbound_metadata(
             state,
-            leaf_tag,
+            tag,
             display_name,
             { type: xray_clash_type(node.protocol, node.kind) }
         );
         if (as_string(node.kind || "proxy") != "iface" && link_index < length(links)) {
-            state.links[leaf_tag] = as_string(links[link_index]);
+            state.links[tag] = as_string(links[link_index]);
             link_index++;
         }
     }
 
-    if (length(selector_tags) == 0)
-        runtime_generate_unsupported("xray sidecar port is missing for " + section_name + "; generate xray config first");
-    if (length(urltest_candidates) == 0)
-        urltest_candidates = selector_tags;
-
-    let urltest_tags = [];
-    let priority_tags = [];
-    let group_outbounds = {};
-    for (let urltest_id in connections.urltests(section)) {
-        let urltest = add_urltest_outbound(config, section, urltest_id, urltest_candidates, state);
-        remember_dashboard_group_outbounds(
-            group_outbounds,
-            connections.urltest_display_name(section, urltest_id),
-            urltest.outbounds
-        );
-        if (urltest.tag == "" && length(urltest_candidates) > 0) {
-            let forced_tag = urltest_outbound_tag(section_name, urltest_id);
-            let display_name = connections.urltest_display_name(section, urltest_id);
-            let forced = {
-                type: "urltest",
-                tag: forced_tag,
-                outbounds: urltest_candidates,
-                url: connections.urltest_testing_url(section, urltest_id),
-                interval: connections.urltest_check_interval(section, urltest_id),
-                tolerance: int(connections.urltest_tolerance(section, urltest_id), 10),
-                interrupt_exist_connections: connections.urltest_interrupt_exist_connections(section, urltest_id)
-            };
-            let idle_timeout = urltest_idle_timeout(section, urltest_id);
-            if (idle_timeout != "")
-                forced.idle_timeout = idle_timeout;
-            runtime_subscription.remember_outbound_metadata(state, forced_tag, display_name, forced);
-            runtime_subscription.remember_urltest_group_config(state, forced_tag, {
-                displayName: display_name,
-                outbounds: urltest_candidates,
-                url: forced.url,
-                interval: forced.interval,
-                tolerance: forced.tolerance,
-                idle_timeout: forced.idle_timeout,
-                interrupt_exist_connections: forced.interrupt_exist_connections
-            });
-            push(config.outbounds, forced);
-            urltest.tag = forced_tag;
-            urltest.outbounds = urltest_candidates;
-        }
-        if (urltest.tag == "")
-            continue;
-        push(urltest_tags, urltest.tag);
-    }
-    for (let group_id in connections.priority_groups(section)) {
-        let priority = add_priority_group_outbound(config, section, group_id, urltest_candidates, state);
-        remember_dashboard_group_outbounds(
-            group_outbounds,
-            connections.priority_group_display_name(section, group_id),
-            priority.outbounds
-        );
-        if (priority.tag == "" && length(urltest_candidates) > 0) {
-            let forced_tag = priority_outbound_tag(section_name, group_id);
-            let display_name = connections.priority_group_display_name(section, group_id);
-            let forced = {
-                type: "selector",
-                tag: forced_tag,
-                outbounds: urltest_candidates,
-                default: urltest_candidates[0],
-                interrupt_exist_connections: connections.priority_group_interrupt_exist_connections(section, group_id)
-            };
-            runtime_subscription.remember_outbound_metadata(state, forced_tag, display_name, forced);
-            push(config.outbounds, forced);
-            priority.tag = forced_tag;
-            priority.outbounds = urltest_candidates;
-        }
-        if (priority.tag == "")
-            continue;
-        push(priority_tags, priority.tag);
-    }
-
-    let selector_outbounds = dashboard_filtered_outbounds(section, selector_tags, state, group_outbounds);
-    let selector_default = selector_outbounds[0];
-    if (length(urltest_tags) > 0 || length(priority_tags) > 0) {
-        for (let tag in urltest_tags)
-            push(selector_outbounds, tag);
-        for (let tag in priority_tags)
-            push(selector_outbounds, tag);
-        selector_default = length(urltest_tags) > 0 ? urltest_tags[0] : priority_tags[0];
-    }
-    if (length(selector_outbounds) == 0)
-        selector_outbounds = selector_tags;
-    if (selector_default == "" || selector_default == null)
-        selector_default = selector_outbounds[0];
-
     push(config.outbounds, {
         type: "selector",
         tag: selector_tag,
-        outbounds: selector_outbounds,
-        default: selector_default,
+        outbounds: [ balance_tag ],
+        default: balance_tag,
         interrupt_exist_connections: true
     });
 
@@ -3567,7 +3490,11 @@ function add_dns_server_for_section(config, section) {
     let server = runtime_dns.server_from_options(
         dns_action_server_tag(section[".name"]),
         option(section, "dns_type", "udp"),
-        option(section, "dns_server", ""),
+        runtime_dns.with_certificate_name(
+            option(section, "dns_server", ""),
+            option(section, "dns_type", "udp"),
+            option(section, "dns_server_name", "")
+        ),
         dns_action_detour_tag(section)
     );
     if (server.unsupported)
@@ -4152,12 +4079,185 @@ function object_nonempty_stdin() {
     return (type(value) == "array" || type(value) == "object") && length(value) > 0;
 }
 
+function strip_download_routing_marks(config) {
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) != "object")
+            continue;
+        delete outbound.routing_mark;
+    }
+}
+
+function drop_missing_download_detours(config) {
+    let known = {};
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) != "object")
+            continue;
+        let tag_name = as_string(outbound.tag || "");
+        if (tag_name != "")
+            known[tag_name] = true;
+    }
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) != "object")
+            continue;
+        let detour = as_string(outbound.detour || "");
+        if (detour == "" || known[detour])
+            continue;
+        warn("download socks: detour '", detour, "' is not in this process; dialing directly\n");
+        delete outbound.detour;
+    }
+}
+
+function download_bootstrap_servers(settings) {
+    let values = list_option(settings, "bootstrap_dns_server");
+    if (length(values) == 0)
+        values = [ "77.88.8.8" ];
+    let servers = [];
+    let index = 0;
+    for (let value in values) {
+        value = trim(as_string(value));
+        if (value == "")
+            continue;
+        index++;
+        let tag_name = index == 1
+            ? runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+            : runtime_constants.BOOTSTRAP_DNS_SERVER_TAG + "-" + index;
+        let server = runtime_url.host(value);
+        let port = runtime_url.port(value);
+        push(servers, {
+            type: "udp",
+            tag: tag_name,
+            server: server != "" ? server : value,
+            server_port: port != "" ? int(port, 10) : 53
+        });
+    }
+    if (length(servers) == 0)
+        push(servers, {
+            type: "udp",
+            tag: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
+            server: "77.88.8.8",
+            server_port: 53
+        });
+    return servers;
+}
+
+function uci_section_by_name(section_name) {
+    section_name = as_string(section_name);
+    let found = [];
+    uci_cursor().load(CONFIG_NAME);
+    uci_cursor().foreach(CONFIG_NAME, "section", function(section) {
+        if (as_string(section[".name"]) == section_name)
+            push(found, section);
+    });
+    return length(found) > 0 ? found[length(found) - 1] : null;
+}
+
+function section_detour_chain(section) {
+    let chain = [];
+    let seen = {};
+    seen[as_string(section[".name"])] = true;
+    let current = section;
+    while (true) {
+        let target_name = outbound_detour_tag_for_section(current) == ""
+            ? ""
+            : option(current, "outbound_detour_section", "");
+        target_name = as_string(target_name);
+        if (target_name == "" || seen[target_name])
+            break;
+        seen[target_name] = true;
+        let target = uci_section_by_name(target_name);
+        if (target == null)
+            break;
+        if (!connections.is_connections_action(option(target, "action", "")))
+            break;
+        if (connections.proxy_core(target) != "sing-box")
+            break;
+        push(chain, target);
+        current = target;
+    }
+    return chain;
+}
+
+// Local SOCKS for one section. No TPROXY, DNS listen, nft, or routing marks.
+function generate_download_socks(section_name, output_path, listen_port) {
+    section_name = trim(as_string(section_name));
+    output_path = as_string(output_path);
+    listen_port = int(listen_port, 10);
+    if (!valid_section_name(section_name))
+        runtime_generate_unsupported("download socks section name is not safe");
+    if (output_path == "")
+        runtime_generate_unsupported("download socks output path is empty");
+    if (listen_port == null || listen_port < 1 || listen_port > 65535)
+        runtime_generate_unsupported("download socks port is invalid");
+
+    runtime_settings_cache = null;
+    let section = uci_section_by_name(section_name);
+    if (section == null)
+        runtime_generate_unsupported("download socks section was not found: " + section_name);
+    if (!connections.is_connections_action(option(section, "action", "")))
+        runtime_generate_unsupported("download socks section is not a connection: " + section_name);
+    if (connections.proxy_core(section) != "sing-box")
+        runtime_generate_unsupported("download socks section core is not sing-box: " + section_name);
+
+    let settings = runtime_settings();
+    let inbound_tag = "forkop-download";
+    let config = {
+        log: {
+            disabled: false,
+            level: option(settings, "log_level", "warn"),
+            timestamp: false
+        },
+        dns: {
+            servers: download_bootstrap_servers(settings),
+            rules: [],
+            final: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
+            strategy: option(settings, "dns_strategy", "prefer_ipv4")
+        },
+        inbounds: [{
+            type: "mixed",
+            tag: inbound_tag,
+            listen: "127.0.0.1",
+            listen_port: listen_port
+        }],
+        outbounds: [
+            { type: "direct", tag: runtime_constants.DIRECT_OUTBOUND_TAG }
+        ],
+        route: {
+            rules: [{
+                action: "route",
+                inbound: inbound_tag,
+                outbound: outbound_tag(section_name)
+            }],
+            rule_set: [],
+            final: runtime_constants.DIRECT_OUTBOUND_TAG,
+            auto_detect_interface: true,
+            default_domain_resolver: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+        }
+    };
+    if (!sing_box_at_least_1_14())
+        config.dns.independent_cache = true;
+
+    runtime_subscription.set_section_cache_dir(output_path + ".sections");
+    let taken = {};
+    taken[runtime_constants.DIRECT_OUTBOUND_TAG] = true;
+    let chain = section_detour_chain(section);
+    for (let i = length(chain) - 1; i >= 0; i--)
+        add_connections_outbound(config, chain[i], taken);
+    add_connections_outbound(config, section, taken);
+    drop_missing_download_detours(config);
+    strip_download_routing_marks(config);
+    strip_internal_fields(config);
+    if (!ensure_parent_dir(output_path) || !write_json_file(output_path, config))
+        runtime_generate_unsupported("failed to write download socks config");
+}
+
 let mode = ARGV[0] || "";
 
 if (mode == "generate-config")
     generate_config(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5] || "");
 else if (mode == "generate-config-fixture")
     generate_config_fixture(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6] || "");
+else if (mode == "download-socks")
+    generate_download_socks(ARGV[1] || "", ARGV[2] || "", ARGV[3] || "");
 else if (mode == "stdin-length")
     stdin_length();
 else if (mode == "stdin-contains")

@@ -11,6 +11,7 @@ let xray_outbound = require("xray.outbound");
 let xray_servers = require("xray.servers");
 let xray_geodata = require("xray.geodata");
 let engine = require("core.engine");
+let hostresolve = require("core.hostresolve");
 let sb_constants = require("singbox.constants");
 let converted_lists_cache = {};
 
@@ -130,8 +131,15 @@ function global_freedom_fragment_spec() {
         return null;
     return {
         enabled: true,
+        packets: option(settings, "xray_freedom_fragment_packets", "tlshello"),
         length: option(settings, "xray_freedom_fragment_length", "100-200"),
-        interval: option(settings, "xray_freedom_fragment_interval", "10-20")
+        interval: option(settings, "xray_freedom_fragment_interval", "10-20"),
+        max_split: option(settings, "xray_freedom_fragment_max_split", "100-200"),
+        noise: bool_option(settings, "xray_freedom_fragment_noise", false),
+        noise_type: option(settings, "xray_freedom_fragment_noise_type", "rand"),
+        noise_rand: option(settings, "xray_freedom_fragment_noise_rand", "10-20"),
+        noise_packet: option(settings, "xray_freedom_fragment_noise_packet", ""),
+        noise_delay: option(settings, "xray_freedom_fragment_noise_delay", "10-16")
     };
 }
 
@@ -140,8 +148,16 @@ function section_finalmask_spec(section) {
         return null;
     return {
         enabled: true,
+        packets: option(section, "xray_finalmask_packets", "tlshello"),
         length: option(section, "xray_finalmask_length", "100-200"),
-        interval: option(section, "xray_finalmask_interval", "10-20")
+        interval: option(section, "xray_finalmask_interval", "10-20"),
+        max_split: option(section, "xray_finalmask_max_split", "100-200"),
+        noise: bool_option(section, "xray_finalmask_noise", false),
+        noise_type: option(section, "xray_finalmask_noise_type", "rand"),
+        noise_rand: option(section, "xray_finalmask_noise_rand", "10-20"),
+        noise_rand_range: option(section, "xray_finalmask_noise_rand_range", "0-255"),
+        noise_packet: option(section, "xray_finalmask_noise_packet", ""),
+        noise_delay: option(section, "xray_finalmask_noise_delay", "10-16")
     };
 }
 
@@ -993,36 +1009,6 @@ function section_domain_matchers(section) {
     return usable_xray_matchers(result);
 }
 
-function resolve_host_ips(host) {
-    host = trim(as_string(host));
-    if (host == "" || match(host, /^[A-Za-z0-9._-]+$/) == null)
-        return [];
-    let ips = [];
-    for (let dns_server in [ "8.8.8.8", "77.88.8.8" ]) {
-        let pipe = fs.popen("timeout 3 nslookup '" + replace(host, /'/g, "") + "' " + dns_server + " 2>/dev/null", "r");
-        if (!pipe)
-            continue;
-        let raw = pipe.read("all");
-        pipe.close();
-        for (let line in split(as_string(raw), /\n/)) {
-            line = trim(replace(line, /\r/g, ""));
-            let matched = match(line, /^Address[ \t]*[0-9]*:[ \t]*([^ \t]+)/);
-            let addr = matched ? trim(as_string(matched[1])) : line;
-            let v4port = match(addr, /^([0-9]+(\.[0-9]+){3}):[0-9]+$/);
-            if (v4port)
-                addr = as_string(v4port[1]);
-            if (match(addr, /^[0-9]+(\.[0-9]+){3}$/) == null)
-                continue;
-            if (addr == dns_server || index(addr, "198.18.") == 0 || index(addr, "198.19.") == 0)
-                continue;
-            push_unique(ips, addr);
-        }
-        if (length(ips) > 0)
-            return ips;
-    }
-    return ips;
-}
-
 function section_user_domain_hosts(section) {
     let result = [];
     for (let key in [ "domain", "domain_suffix_text", "domain_list" ]) {
@@ -1060,9 +1046,16 @@ function section_ip_matchers(section) {
     for (let value in section_converted_lists(section).ips)
         push_unique(result, value);
     if (engine.is_xray_primary()) {
-        for (let host in section_user_domain_hosts(section)) {
-            for (let ip in resolve_host_ips(host))
-                push_unique(result, ip);
+        let hosts = section_user_domain_hosts(section);
+        let resolved = hostresolve.resolve_hosts(hosts);
+        for (let host in hosts) {
+            let ips = resolved[host];
+            if (type(ips) != "array")
+                continue;
+            for (let ip in ips) {
+                if (match(ip, /^[0-9]+(\.[0-9]+){3}$/) != null)
+                    push_unique(result, ip);
+            }
         }
     }
     return usable_xray_matchers(result);
@@ -1295,10 +1288,21 @@ function apply_dial_strategy(config) {
 
 function dns_server_token(value) {
     value = trim(as_string(value));
+    let hash = index(value, "#");
+    if (hash > 0)
+        value = trim(substr(value, 0, hash));
     let space = index(value, " ");
     if (space > 0)
         value = trim(substr(value, 0, space));
     return value;
+}
+
+function dns_certificate_token(value) {
+    value = trim(as_string(value));
+    let hash = index(value, "#");
+    if (hash < 0)
+        return "";
+    return lc(trim(substr(value, hash + 1)));
 }
 
 function doh_hostname_for(value) {
@@ -1335,6 +1339,72 @@ function dot_hostname_for(value) {
     return "";
 }
 
+function doq_hostname_for(value) {
+    let host = lc(dns_server_token(value));
+    if (host == "9.9.9.9" || host == "149.112.112.112" || host == "dns.quad9.net")
+        return "dns.quad9.net";
+    if (host == "9.9.9.11" || host == "149.112.112.11" || host == "dns11.quad9.net")
+        return "dns11.quad9.net";
+    if (host == "223.5.5.5" || host == "223.6.6.6" || host == "dns.alidns.com")
+        return "dns.alidns.com";
+    if (host == "94.140.14.14" || host == "94.140.15.15" || host == "dns.adguard-dns.com")
+        return "dns.adguard-dns.com";
+    if (host == "94.140.14.140" || host == "94.140.15.141" || host == "unfiltered.adguard-dns.com")
+        return "unfiltered.adguard-dns.com";
+    if (host == "94.140.14.15" || host == "94.140.15.16" || host == "family.adguard-dns.com")
+        return "family.adguard-dns.com";
+    return "";
+}
+
+function doh3_hostname_for(value) {
+    let host = lc(dns_server_token(value));
+    if (host == "8.8.8.8" || host == "8.8.4.4" || host == "dns.google")
+        return "dns.google";
+    if (host == "1.1.1.1" || host == "1.0.0.1" || host == "cloudflare-dns.com")
+        return "cloudflare-dns.com";
+    if (host == "9.9.9.9" || host == "149.112.112.112" || host == "dns.quad9.net")
+        return "dns.quad9.net";
+    if (host == "9.9.9.11" || host == "149.112.112.11" || host == "dns11.quad9.net")
+        return "dns11.quad9.net";
+    if (host == "223.5.5.5" || host == "223.6.6.6" || host == "dns.alidns.com")
+        return "dns.alidns.com";
+    if (host == "94.140.14.14" || host == "94.140.15.15" || host == "dns.adguard-dns.com")
+        return "dns.adguard-dns.com";
+    if (host == "94.140.14.140" || host == "94.140.15.141" || host == "unfiltered.adguard-dns.com")
+        return "unfiltered.adguard-dns.com";
+    if (host == "94.140.14.15" || host == "94.140.15.16" || host == "family.adguard-dns.com")
+        return "family.adguard-dns.com";
+    return "";
+}
+
+// DoQ/DoH3 settings are IPs, same as DoH/DoT. Xray still needs the certificate
+// name: quic+local uses that name as SNI, and dns.hosts pins it to this IP so
+// the system lookup inside quic.DialAddr cannot come back as 198.18.
+function dns_pinned_ip(name) {
+    name = lc(trim(as_string(name)));
+    if (name == "dns.quad9.net")
+        return "9.9.9.9";
+    if (name == "dns11.quad9.net")
+        return "9.9.9.11";
+    if (name == "dns.google")
+        return "8.8.8.8";
+    if (name == "cloudflare-dns.com" || name == "one.one.one.one")
+        return "1.1.1.1";
+    if (name == "dns.alidns.com")
+        return "223.5.5.5";
+    if (name == "dns.adguard-dns.com")
+        return "94.140.14.14";
+    if (name == "unfiltered.adguard-dns.com")
+        return "94.140.14.140";
+    if (name == "family.adguard-dns.com")
+        return "94.140.14.15";
+    if (name == "doh.opendns.com" || name == "dns.opendns.com")
+        return "208.67.222.222";
+    if (name == "common.dot.dns.yandex.net")
+        return "77.88.8.8";
+    return "";
+}
+
 function add_dns_host(hosts, name, ip) {
     name = trim(as_string(name));
     ip = dns_server_token(ip);
@@ -1353,12 +1423,55 @@ function add_dns_host(hosts, name, ip) {
         hosts[name] = [ existing, ip ];
 }
 
+function decorate_certificate_name(value, dns_type, extra_name) {
+    extra_name = lc(trim(as_string(extra_name)));
+    if (extra_name == "" || dns_certificate_token(value) != "")
+        return as_string(value);
+    let host = dns_server_token(value);
+    if (match(host, /^[0-9]+(\.[0-9]+){3}$/) == null)
+        return as_string(value);
+    dns_type = lc(as_string(dns_type || ""));
+    let known = "";
+    if (dns_type == "doq")
+        known = doq_hostname_for(host);
+    else if (dns_type == "doh3")
+        known = doh3_hostname_for(host);
+    else if (dns_type == "dot")
+        known = dot_hostname_for(host);
+    else if (dns_type == "doh")
+        known = doh_hostname_for(host);
+    else
+        return as_string(value);
+    if (known != "")
+        return as_string(value);
+    return trim(as_string(value)) + "#" + extra_name;
+}
+
+function tls_dns_name(dns_type, value) {
+    let host = dns_server_token(value);
+    let mapped = "";
+    dns_type = lc(as_string(dns_type || ""));
+    if (dns_type == "doh")
+        mapped = doh_hostname_for(host);
+    else if (dns_type == "dot")
+        mapped = dot_hostname_for(host);
+    else if (dns_type == "doq")
+        mapped = doq_hostname_for(host);
+    else if (dns_type == "doh3")
+        mapped = doh3_hostname_for(host);
+    if (mapped == "")
+        mapped = dns_certificate_token(value);
+    return mapped != "" ? mapped : host;
+}
+
 function xray_dns_server_address(dns_type, value) {
+    let named = tls_dns_name(dns_type, value);
     value = dns_server_token(value);
     if (value == "")
         return "";
     let existing = lc(runtime_url.scheme(value));
-    if (existing == "https" || existing == "h3" || existing == "quic" ||
+    if (existing == "https" || existing == "https+local" || existing == "h3" ||
+        existing == "quic" || existing == "quic+local" ||
         existing == "tls" || existing == "tcp" || existing == "udp")
         return value;
 
@@ -1368,21 +1481,28 @@ function xray_dns_server_address(dns_type, value) {
     let path = as_string(runtime_url.path(value));
     let port = as_string(runtime_url.port(value));
     dns_type = lc(as_string(dns_type || "udp"));
-    if (dns_type == "doh") {
-        let mapped = doh_hostname_for(host);
-        if (mapped != "")
-            host = mapped;
+    if (dns_type == "doh" || dns_type == "doh3") {
+        if (named != "")
+            host = named;
         if (path == "" || path == "/")
             path = "/dns-query";
         return "https://" + host + path;
     }
     if (dns_type == "dot") {
-        let mapped = dot_hostname_for(host);
-        if (mapped != "")
-            host = mapped;
+        if (named != "")
+            host = named;
         if (port == "")
             port = "853";
         return "tls://" + host + ":" + port;
+    }
+    if (dns_type == "doq") {
+        if (named == "")
+            named = host;
+        if (port == "")
+            port = "853";
+        // Plain quic:// is not a DNS client. Xray only dials DoQ for quic+local://
+        // and uses the URL host as SNI, so the certificate name has to stay here.
+        return "quic+local://" + named + ":" + port;
     }
     return host;
 }
@@ -1407,7 +1527,12 @@ function collect_dns_action_servers(sections) {
         if (length(domains) == 0)
             continue;
         let dns_type = option(section, "dns_type", "udp");
-        let address = xray_dns_server_address(dns_type, section_first_dns_server(section));
+        let server_value = decorate_certificate_name(
+            section_first_dns_server(section),
+            dns_type,
+            option(section, "dns_server_name", "")
+        );
+        let address = xray_dns_server_address(dns_type, server_value);
         if (address == "")
             continue;
         push(servers, {
@@ -1489,7 +1614,10 @@ function push_interface_dial_dns(servers, domains, dns_type) {
     if (length(domains) == 0)
         return;
     let pinned = false;
+    let settings_cert = option(settings_section(), "dns_certificate_name", "");
+    let dial_type = option(settings_section(), "dns_type", "udp");
     for (let value in settings_list("dns_server", "8.8.8.8")) {
+        value = decorate_certificate_name(value, dial_type, settings_cert);
         let address = xray_dns_server_address(dns_type, value);
         if (address == "")
             continue;
@@ -1529,6 +1657,50 @@ function dns_cache_ttl() {
     return ttl;
 }
 
+function dns_host_has_ip(hosts, name) {
+    let existing = hosts[name];
+    if (existing == null)
+        return false;
+    if (type(existing) == "array")
+        return length(existing) > 0;
+    return match(as_string(existing), /^[0-9]+(\.[0-9]+){3}$/) != null;
+}
+
+function remember_unpinned_dns_name(hosts, lookup_names, name) {
+    name = lc(trim(as_string(name)));
+    if (name == "" || match(name, /^[0-9.]+$/) != null || index(name, ":") >= 0)
+        return;
+    if (!dns_host_has_ip(hosts, name))
+        lookup_names[name] = true;
+}
+
+function pin_custom_dns_hosts(hosts, lookup_names) {
+    let pending = [];
+    for (let name in lookup_names) {
+        name = lc(trim(as_string(name)));
+        if (name == "" || dns_host_has_ip(hosts, name))
+            continue;
+        let pinned = dns_pinned_ip(name);
+        if (pinned != "") {
+            add_dns_host(hosts, name, pinned);
+            continue;
+        }
+        push(pending, name);
+    }
+    if (length(pending) == 0)
+        return;
+    let found = hostresolve.resolve_hosts(pending);
+    for (let name in pending) {
+        let ips = found[name];
+        if (type(ips) != "array")
+            continue;
+        for (let ip in ips) {
+            if (match(as_string(ip), /^[0-9]+(\.[0-9]+){3}$/) != null)
+                add_dns_host(hosts, name, ip);
+        }
+    }
+}
+
 function primary_dns_config(sections) {
     let fake = collect_fake_dns_domains(sections);
     let dns_type = option(settings_section(), "dns_type", "udp");
@@ -1538,7 +1710,9 @@ function primary_dns_config(sections) {
     let byedpi_domains = collect_byedpi_real_dns_domains(sections);
     if (length(byedpi_domains) > 0) {
         let pinned = false;
+        let settings_cert = option(settings_section(), "dns_certificate_name", "");
         for (let value in settings_list("dns_server", "8.8.8.8")) {
+            value = decorate_certificate_name(value, dns_type, settings_cert);
             let address = xray_dns_server_address(dns_type, value);
             if (address == "")
                 continue;
@@ -1581,7 +1755,10 @@ function primary_dns_config(sections) {
         "mask-h2.icloud.com": "127.0.0.1"
     };
     let resolver_hosts = [];
+    let lookup_names = {};
+    let settings_cert = option(settings_section(), "dns_certificate_name", "");
     for (let value in settings_list("dns_server", "8.8.8.8")) {
+        value = decorate_certificate_name(value, dns_type, settings_cert);
         let address = xray_dns_server_address(dns_type, value);
         if (address == "")
             continue;
@@ -1590,32 +1767,49 @@ function primary_dns_config(sections) {
             tag: xray_constants.XRAY_DNS_REMOTE_TAG,
             timeoutMs: 2000
         });
-        if (lc(dns_type) == "dot") {
-            let doh_address = xray_dns_server_address("doh", value);
-            if (doh_address != "" && doh_address != address)
-                push(servers, {
-                    address: doh_address,
-                    tag: xray_constants.XRAY_DNS_REMOTE_TAG,
-                    timeoutMs: 2000
-                });
-            let doh_host = doh_hostname_for(value);
-            if (doh_host != "") {
-                push_unique(resolver_hosts, "full:" + doh_host);
-                add_dns_host(hosts, doh_host, value);
-            }
-        }
-        let mapped = lc(dns_type) == "dot" ? dot_hostname_for(value) : doh_hostname_for(value);
+        let mapped = "";
+        if (lc(dns_type) == "dot")
+            mapped = dot_hostname_for(value);
+        else if (lc(dns_type) == "doq")
+            mapped = doq_hostname_for(value);
+        else if (lc(dns_type) == "doh3")
+            mapped = doh3_hostname_for(value);
+        else
+            mapped = doh_hostname_for(value);
         if (mapped != "") {
             push_unique(resolver_hosts, "full:" + mapped);
             add_dns_host(hosts, mapped, value);
+            add_dns_host(hosts, mapped, dns_pinned_ip(mapped));
         }
         let scheme_host = trim(as_string(runtime_url.host(address)));
         if (scheme_host != "" && mapped != scheme_host &&
             match(scheme_host, /^[0-9.]+$/) == null && match(scheme_host, /:/) == null) {
             push_unique(resolver_hosts, "full:" + scheme_host);
             add_dns_host(hosts, scheme_host, value);
+            add_dns_host(hosts, scheme_host, dns_pinned_ip(scheme_host));
+        }
+        remember_unpinned_dns_name(hosts, lookup_names, mapped);
+        remember_unpinned_dns_name(hosts, lookup_names, scheme_host);
+    }
+    for (let section in array_or_empty(sections)) {
+        if (option(section, "action", "") != "dns")
+            continue;
+        let section_type = option(section, "dns_type", "udp");
+        let section_server = decorate_certificate_name(
+            section_first_dns_server(section),
+            section_type,
+            option(section, "dns_server_name", "")
+        );
+        let section_address = xray_dns_server_address(section_type, section_server);
+        let section_name = trim(as_string(runtime_url.host(section_address)));
+        if (section_name != "" && match(section_name, /^[0-9.]+$/) == null && index(section_name, ":") < 0) {
+            push_unique(resolver_hosts, "full:" + section_name);
+            add_dns_host(hosts, section_name, dns_server_token(section_server));
+            add_dns_host(hosts, section_name, dns_pinned_ip(section_name));
+            remember_unpinned_dns_name(hosts, lookup_names, section_name);
         }
     }
+    pin_custom_dns_hosts(hosts, lookup_names);
     if (length(servers) == 1)
         push(servers, { address: "8.8.8.8", tag: xray_constants.XRAY_DNS_REMOTE_TAG });
 
@@ -2354,9 +2548,281 @@ function generate_config(output_path, ports_path) {
     print(sprintf("%J", { sections: length(sections), ports: ports, cascade: cascade, nodes: nodes_map }), "\n");
 }
 
+function section_object_by_name(name) {
+    name = as_string(name);
+    if (!uci_core.available())
+        return null;
+    for (let section in uci_core.section_objects("forkop", "section")) {
+        section = object_or_empty(section);
+        if (as_string(section[".name"]) == name)
+            return section;
+    }
+    return null;
+}
+
+function collect_download_tags(config, taken, section) {
+    let tags = [];
+    let display_names = {};
+    add_manual_links(config, taken, section, tags, display_names);
+    add_subscriptions(config, taken, section, tags, display_names);
+    add_json_outbounds(config, taken, section, tags, display_names);
+    add_interfaces(config, taken, section, tags, display_names);
+    let mask = section_finalmask_spec(section);
+    if (mask != null) {
+        for (let tag in tags)
+            xray_outbound.apply_tcp_finalmask(outbound_by_tag(config, tag), mask);
+    }
+    return tags;
+}
+
+function xray_detour_chain(section) {
+    let chain = [];
+    let seen = {};
+    seen[as_string(section[".name"])] = true;
+    let current = section;
+    while (true) {
+        let target_name = detour_target_name(current);
+        if (target_name == "" || seen[target_name])
+            break;
+        seen[target_name] = true;
+        let target = section_object_by_name(target_name);
+        if (target == null)
+            break;
+        if (!connections.is_connections_action(option(target, "action", "")))
+            break;
+        if (connections.proxy_core(target) != "xray")
+            break;
+        push(chain, target);
+        current = target;
+    }
+    return chain;
+}
+
+function download_bootstrap_addresses() {
+    let servers = [];
+    for (let value in settings_list("bootstrap_dns_server", "77.88.8.8")) {
+        let host = dns_server_token(value);
+        if (host == "")
+            continue;
+        push(servers, {
+            address: host,
+            skipFallback: true
+        });
+    }
+    if (length(servers) == 0)
+        push(servers, { address: "77.88.8.8", skipFallback: true });
+    return servers;
+}
+
+function strip_download_marks(config) {
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) != "object")
+            continue;
+        let stream = outbound.streamSettings;
+        if (type(stream) == "object" && type(stream.sockopt) == "object")
+            delete stream.sockopt.mark;
+    }
+}
+
+function apply_download_domain_strategy(config) {
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) != "object")
+            continue;
+        let protocol = lc(as_string(outbound.protocol || ""));
+        if (protocol == "" || protocol == "freedom" || protocol == "blackhole" ||
+            protocol == "dns" || protocol == "hysteria")
+            continue;
+        if (type(outbound.streamSettings) != "object")
+            outbound.streamSettings = {};
+        if (type(outbound.streamSettings.sockopt) != "object")
+            outbound.streamSettings.sockopt = {};
+        outbound.streamSettings.sockopt.domainStrategy = "UseIPv4";
+    }
+}
+
+function download_tag_host(config, tag) {
+    let outbound = outbound_by_tag(config, tag);
+    if (type(outbound) != "object" || type(outbound.settings) != "object")
+        return "";
+    return trim(as_string(outbound.settings.address || ""));
+}
+
+function download_host_is_name(host) {
+    if (host == "")
+        return false;
+    if (match(host, /^[0-9.]+$/) != null)
+        return false;
+    if (match(host, /:/) != null)
+        return false;
+    return true;
+}
+
+// A dead name (NXDOMAIN) must not be the dial target. If every name fails
+// DNS, keep the original set: the lookup itself may be blocked.
+function prefer_resolvable_download_tags(config, tags) {
+    let host_by_tag = {};
+    let hosts = [];
+    for (let tag in tags) {
+        let host = download_tag_host(config, tag);
+        host_by_tag[as_string(tag)] = host;
+        if (download_host_is_name(host))
+            push(hosts, host);
+    }
+    let resolved = {};
+    if (length(hosts) > 0) {
+        try {
+            resolved = object_or_empty(hostresolve.resolve_hosts(hosts));
+        }
+        catch (e) {
+            resolved = {};
+        }
+    }
+    if (type(config.dns) != "object")
+        config.dns = {};
+    if (length(resolved) > 0) {
+        if (type(config.dns.hosts) != "object")
+            config.dns.hosts = {};
+        for (let host in resolved) {
+            let ips = resolved[host];
+            if (type(ips) == "array" && length(ips) > 0)
+                config.dns.hosts[host] = ips[0];
+        }
+    }
+    let keep = [];
+    let dropped = [];
+    for (let tag in tags) {
+        let host = host_by_tag[as_string(tag)];
+        if (!download_host_is_name(host) || type(resolved[lc(host)]) == "array")
+            push(keep, tag);
+        else
+            push(dropped, tag);
+    }
+    if (length(keep) == 0 || length(dropped) == 0)
+        return tags;
+    let drop = {};
+    for (let tag in dropped)
+        drop[as_string(tag)] = true;
+    let kept_outbounds = [];
+    for (let outbound in array_or_empty(config.outbounds)) {
+        let tag = as_string(object_or_empty(outbound).tag);
+        if (drop[tag])
+            continue;
+        push(kept_outbounds, outbound);
+    }
+    config.outbounds = kept_outbounds;
+    warn("xray download socks: skipped unresolved server, using the rest\n");
+    return keep;
+}
+
+// One local SOCKS inbound. No TPROXY, DNS listen, nft, or packet marks.
+function generate_download_socks(section_name, output_path, listen_port) {
+    section_name = trim(as_string(section_name));
+    output_path = as_string(output_path);
+    let port = int(listen_port, 10);
+    if (section_name == "" || output_path == "")
+        generate_fail("download socks arguments are incomplete");
+    if (port == null || port < 1 || port > 65535)
+        generate_fail("download socks port is invalid");
+
+    let section = section_object_by_name(section_name);
+    if (section == null)
+        generate_fail("download socks section was not found: " + section_name);
+    if (!connections.is_connections_action(option(section, "action", "")))
+        generate_fail("download socks section is not a connection: " + section_name);
+    if (connections.proxy_core(section) != "xray")
+        generate_fail("download socks section core is not xray: " + section_name);
+
+    let config = {
+        log: { loglevel: xray_log_level() },
+        dns: {
+            servers: download_bootstrap_addresses(),
+            queryStrategy: "UseIPv4",
+            disableCache: true
+        },
+        inbounds: [ socks_inbound("forkop-download", port) ],
+        outbounds: [ freedom_outbound() ],
+        routing: {
+            domainStrategy: "AsIs",
+            rules: [],
+            balancers: []
+        }
+    };
+    let taken = {};
+    taken[xray_constants.FREEDOM_TAG] = true;
+
+    let tag_map = {};
+    let chain = xray_detour_chain(section);
+    for (let i = length(chain) - 1; i >= 0; i--) {
+        let item = chain[i];
+        tag_map[as_string(item[".name"])] = collect_download_tags(config, taken, item);
+    }
+    let tags = collect_download_tags(config, taken, section);
+    if (length(tags) == 0)
+        generate_fail("xray download section '" + section_name + "' has no usable outbounds");
+    tags = prefer_resolvable_download_tags(config, tags);
+
+    let target_name = detour_target_name(section);
+    let target_tags = array_or_empty(tag_map[target_name]);
+    if (target_name != "" && length(target_tags) > 0)
+        apply_detour_to_leaf_tags(config, detour_leaf_tags(config, tags), target_tags[0]);
+    else if (target_name != "")
+        warn("xray download socks: detour '", target_name, "' is not in this process; dialing directly\n");
+
+    let inbound = "forkop-download";
+    let pinned = chosen_section_outbound(section_name, tags);
+    let strategy = xray_balancer_strategy(section);
+    let use_balancer = strategy != "off" && pinned == "" && length(tags) > 1;
+    if (use_balancer) {
+        let balancer = xray_constants.balancer_tag(section_name);
+        let selector = [];
+        for (let tag in tags)
+            push(selector, tag);
+        let balancer_cfg = {
+            tag: balancer,
+            selector: selector,
+            strategy: { type: strategy }
+        };
+        if (strategy == "leastLoad")
+            balancer_cfg.strategy.settings = least_load_settings(section);
+        if (strategy == "leastPing" || strategy == "leastLoad")
+            balancer_cfg.fallbackTag = tags[0];
+        push(config.routing.balancers, balancer_cfg);
+        push(config.routing.rules, {
+            type: "field",
+            inboundTag: [ inbound ],
+            balancerTag: balancer
+        });
+        if (strategy_needs_observatory(strategy, null))
+            ensure_observatory(config, section, tags);
+    }
+    else {
+        push(config.routing.rules, {
+            type: "field",
+            inboundTag: [ inbound ],
+            outboundTag: pinned != "" ? pinned : tags[0]
+        });
+    }
+
+    strip_download_marks(config);
+    apply_download_domain_strategy(config);
+    if (length(array_or_empty(config.routing.balancers)) == 0)
+        delete config.routing.balancers;
+    if (type(config.observatory) == "object" && length(array_or_empty(config.observatory.subjectSelector)) == 0)
+        delete config.observatory;
+
+    let slash = rindex(output_path, "/");
+    let parent = slash > 0 ? substr(output_path, 0, slash) : "";
+    if (parent != "" && !ensure_dir(parent))
+        generate_fail("failed to create download socks directory");
+    if (!write_json_file(output_path, config))
+        generate_fail("failed to write download socks config");
+}
+
 let mode = ARGV[0] || "";
 if (mode == "generate-config")
     generate_config(ARGV[1] || "", ARGV[2] || "");
+else if (mode == "download-socks")
+    generate_download_socks(ARGV[1] || "", ARGV[2] || "", ARGV[3] || "");
 else if (mode == "enabled-sections")
     print(sprintf("%J", enabled_xray_sections()), "\n");
 else {

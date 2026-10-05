@@ -144,9 +144,12 @@ function ensureSharedCheckStyles() {
   border-left: 4px solid #3cae4a;
   border-radius: 8px;
   background: rgba(60, 174, 74, 0.06);
+  overflow: visible !important;
 }
 .fkp-shared-check > .cbi-value:not(.hidden) {
-  display: block !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
   float: none !important;
   width: 100% !important;
   max-width: 100% !important;
@@ -154,32 +157,37 @@ function ensureSharedCheckStyles() {
   padding: 0.75rem 0 !important;
   border: 0 !important;
   border-bottom: 1px solid var(--border-color-medium, rgba(127, 127, 127, .35)) !important;
+  overflow: visible !important;
 }
 .fkp-shared-check > .cbi-value.hidden {
   display: none !important;
 }
 .fkp-shared-check > .cbi-value > .cbi-value-title {
+  position: static !important;
   display: block !important;
   float: none !important;
-  flex: none !important;
-  width: 100% !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
   min-width: 0 !important;
-  max-width: none !important;
+  max-width: 100% !important;
   margin: 0 !important;
   padding: 0 0 0.4rem !important;
   text-align: left !important;
   font-weight: 700;
 }
 .fkp-shared-check > .cbi-value > .cbi-value-field {
+  position: relative !important;
+  z-index: 2 !important;
   display: block !important;
   float: none !important;
-  flex: none !important;
+  flex: 0 0 auto !important;
   width: 100% !important;
   min-width: 0 !important;
   max-width: none !important;
   margin: 0 !important;
   padding: 0 !important;
   text-align: left !important;
+  overflow: visible !important;
 }
 .fkp-shared-check > .fkp-shared-check__head > .cbi-value-title {
   font-size: 1.15rem;
@@ -206,7 +214,8 @@ function ensureSharedCheckStyles() {
 .fkp-shared-check > .fkp-shared-check__hint > .cbi-value-title {
   display: none !important;
 }
-.fkp-shared-check.fkp-shared-check--off {
+.fkp-shared-check.fkp-shared-check--off,
+.fkp-shared-check:not(:has(> .cbi-value:not(.hidden))) {
   display: none !important;
 }
 `,
@@ -283,6 +292,7 @@ function scheduleSharedCheckGroup(sectionId) {
   if (!key) {
     return;
   }
+  bindSharedCheckWatchers();
   const previous = scheduleSharedCheckGroup.timers.get(key);
   if (previous) {
     clearTimeout(previous.timer);
@@ -299,13 +309,135 @@ function scheduleSharedCheckGroup(sectionId) {
   };
   const timer = setTimeout(attempt, 0);
   scheduleSharedCheckGroup.timers.set(key, { timer });
+  [120, 400].forEach((delay) => {
+    setTimeout(() => mountSharedCheckGroup(key), delay);
+  });
 }
 scheduleSharedCheckGroup.timers = new Map();
 
+function bindSharedCheckWatchers() {
+  if (bindSharedCheckWatchers.done || typeof document === "undefined") {
+    return;
+  }
+  bindSharedCheckWatchers.done = true;
+  const kick = (event) => {
+    const target = event.target;
+    if (!target || typeof target.closest !== "function") {
+      return;
+    }
+    const dropdown = target.closest(".cbi-dropdown, select");
+    const id = dropdown && dropdown.id ? dropdown.id : "";
+    if (
+      !id.endsWith(".action") &&
+      !id.endsWith(".proxy_core") &&
+      !id.endsWith(".xray_balancer_strategy")
+    ) {
+      return;
+    }
+    const marker = `.${UCI_PACKAGE}.`;
+    const at = id.indexOf(marker);
+    if (at < 0) {
+      return;
+    }
+    const rest = id.slice(at + marker.length);
+    const dot = rest.indexOf(".");
+    const sectionId = dot < 0 ? rest : rest.slice(0, dot);
+    if (!sectionId) {
+      return;
+    }
+    [0, 60, 200].forEach((delay) => {
+      setTimeout(() => mountSharedCheckGroup(sectionId), delay);
+    });
+  };
+  document.addEventListener("cbi-dropdown-change", kick, true);
+  document.addEventListener("change", kick, true);
+}
+
+function watchSharedCheckParent(parent, sectionId) {
+  if (!parent || parent._fkpSharedWatch === sectionId || typeof MutationObserver !== "function") {
+    return;
+  }
+  parent._fkpSharedWatch = sectionId;
+  const observer = new MutationObserver((mutations) => {
+    if (mountSharedCheckGroup.busy) {
+      return;
+    }
+    const dropdownMotion = mutations.some((mutation) => {
+      const target = mutation.target;
+      if (!target || typeof target.closest !== "function") {
+        return false;
+      }
+      if (target.closest(".cbi-dropdown, select")) {
+        return true;
+      }
+      return (
+        target.classList && target.classList.contains("cbi-dropdown-open")
+      );
+    });
+    if (dropdownMotion) {
+      return;
+    }
+    setTimeout(() => mountSharedCheckGroup(sectionId), 0);
+  });
+  observer.observe(parent, {
+    attributes: true,
+    subtree: true,
+    attributeFilter: ["class"],
+  });
+}
+
+function dropdownChoice(node) {
+  if (!node || typeof node.querySelector !== "function") {
+    return "";
+  }
+  const selected = node.querySelector(
+    "li[data-value][selected], li[data-value].selected",
+  );
+  if (selected) {
+    return `${selected.getAttribute("data-value") || ""}`.trim();
+  }
+  return "";
+}
+
+function strategyMenuOpen(strategy) {
+  if (!strategy || typeof strategy.querySelector !== "function") {
+    return false;
+  }
+  const dropdown = strategy.querySelector(".cbi-dropdown, select");
+  if (!dropdown) {
+    return false;
+  }
+  const menu = dropdown.querySelector("ul");
+  if (!menu || typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
+    return false;
+  }
+  const style = window.getComputedStyle(menu);
+  return (
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    menu.getBoundingClientRect().height > 0
+  );
+}
+
 function mountSharedCheckGroup(sectionId) {
+  if (mountSharedCheckGroup.busy) {
+    return false;
+  }
+  mountSharedCheckGroup.busy = true;
+  try {
+    return mountSharedCheckGroupNow(sectionId);
+  } finally {
+    mountSharedCheckGroup.busy = false;
+  }
+}
+
+function mountSharedCheckGroupNow(sectionId) {
   const group = sharedCheckNodes(sectionId);
   const head = group.head;
   const strategy = group.strategy;
+  if (strategyMenuOpen(strategy)) {
+    return true;
+  }
   const hints = group.hints;
   const probes = group.probes;
   const anchor = strategy && strategy.parentNode ? strategy : null;
@@ -321,6 +453,7 @@ function mountSharedCheckGroup(sectionId) {
   if (!parent) {
     return false;
   }
+  watchSharedCheckParent(parent, sectionId);
 
   let box = currentParent.classList.contains("fkp-shared-check")
     ? currentParent
@@ -337,11 +470,15 @@ function mountSharedCheckGroup(sectionId) {
     });
   }
 
-  if (!sectionShowsSharedCheck(sectionId)) {
-    if (box) {
+  const show = sectionShowsSharedCheck(sectionId);
+  const hasFields = [head, strategy].some(
+    (node) => node && node.classList && !node.classList.contains("hidden"),
+  );
+  if (!show || !hasFields) {
+    if (box && !box.classList.contains("fkp-shared-check--off")) {
       box.classList.add("fkp-shared-check--off");
     }
-    return true;
+    return show ? false : true;
   }
 
   if (!head) {
@@ -358,13 +495,19 @@ function mountSharedCheckGroup(sectionId) {
     });
     parent.appendChild(box);
   }
-  box.classList.remove("fkp-shared-check--off");
+  if (box.classList.contains("fkp-shared-check--off")) {
+    box.classList.remove("fkp-shared-check--off");
+  }
 
-  [head, strategy].concat(hints, probes).forEach((node) => {
-    if (node && node.parentNode) {
-      box.appendChild(node);
-    }
+  const rows = [head, strategy].concat(hints, probes).filter((node) => node && node.parentNode);
+  rows.forEach((node) => {
+    node.querySelectorAll("label[for]").forEach((label) => {
+      label.removeAttribute("for");
+    });
   });
+  if (rows.some((node) => node.parentNode !== box)) {
+    rows.forEach((node) => box.appendChild(node));
+  }
   placeSharedCheckCard(box, parent);
   return head.parentNode === box && strategy.parentNode === box;
 }
@@ -398,8 +541,57 @@ function ensureSharedAnchor(parent, sectionId, beforeNode) {
   return anchor;
 }
 
+const proxyCoreTouched = new Set();
+
+function savedProxyCore(sectionId) {
+  return trimmedUci(sectionId, "proxy_core");
+}
+
+function resetUntouchedProxyCore(sectionId) {
+  if (!sectionId || proxyCoreTouched.has(sectionId) || savedProxyCore(sectionId)) {
+    return;
+  }
+  const node = document.getElementById(
+    `cbid.${UCI_PACKAGE}.${sectionId}.proxy_core`,
+  );
+  if (!node) {
+    return;
+  }
+  try {
+    node.value = "";
+  } catch (_error) {}
+  if (typeof node.querySelectorAll === "function") {
+    node.querySelectorAll("li[data-value]").forEach((item) => {
+      if ((item.getAttribute("data-value") || "") === "") {
+        item.setAttribute("selected", "selected");
+      } else {
+        item.removeAttribute("selected");
+      }
+    });
+  }
+}
+
+function sectionAction(sectionId) {
+  const node =
+    typeof document !== "undefined"
+      ? document.getElementById(`cbid.${UCI_PACKAGE}.${sectionId}.action`)
+      : null;
+  const choice = dropdownChoice(node);
+  if (choice) {
+    return choice;
+  }
+  const liveAction = liveWidgetValue("action", sectionId);
+  if (liveAction != null && liveAction !== "") {
+    return liveAction;
+  }
+  return trimmedUci(sectionId, "action");
+}
+
 function sectionShowsSharedCheck(sectionId) {
-  return settings.isXrayRoutingEngine(effectiveSectionEngine(null, sectionId));
+  if (!settings.isXrayRoutingEngine(effectiveSectionEngine(null, sectionId))) {
+    return false;
+  }
+  return sectionAction(sectionId) === "connection";
 }
 
 function releaseSharedUrlTest(sectionId, urltest, box, parent) {
@@ -428,7 +620,9 @@ function releaseSharedUrlTest(sectionId, urltest, box, parent) {
 }
 
 function placeSharedCheckCard(box, parent) {
-  parent.appendChild(box);
+  if (box.parentNode !== parent) {
+    parent.appendChild(box);
+  }
 
   const apply = () => {
     const row = Array.from(parent.children).find(
@@ -2252,12 +2446,17 @@ function subscriptionDownloadTargetChoices(section_id) {
     }));
 }
 
-function dnsTypeChoices() {
-  return [
-    { value: "doh", label: _("DNS over HTTPS (DoH)") },
-    { value: "dot", label: _("DNS over TLS (DoT)") },
-    { value: "udp", label: "UDP" },
-  ];
+function dnsTypeChoices(includeDoh3, includeDot) {
+  const choices = [{ value: "doh", label: _("DNS over HTTPS (DoH)") }];
+  if (includeDoh3 !== false) {
+    choices.push({ value: "doh3", label: _("DNS over HTTP/3 (DoH3)") });
+  }
+  choices.push({ value: "doq", label: _("DNS over QUIC (DoQ)") });
+  if (includeDot !== false) {
+    choices.push({ value: "dot", label: _("DNS over TLS (DoT)") });
+  }
+  choices.push({ value: "udp", label: "UDP" });
+  return choices;
 }
 
 function isConnectionNetworkInterfaceAllowed(deviceName, device) {
@@ -2545,8 +2744,13 @@ function effectiveSectionEngine(option, section_id) {
     return settings.currentRoutingEngine();
   }
 
+  const savedCore = savedProxyCore(owner);
   const liveCore = liveWidgetValue("proxy_core", owner);
-  const core = liveCore != null ? liveCore : trimmedUci(owner, "proxy_core");
+  const core = proxyCoreTouched.has(owner)
+    ? liveCore != null
+      ? liveCore
+      : savedCore
+    : savedCore;
   return core || settings.currentRoutingEngine();
 }
 
@@ -7825,6 +8029,11 @@ function createSectionContent(section) {
       return this.cfgvalue(section_id);
     });
   };
+  o.onchange = function (_event, section_id) {
+    resetUntouchedProxyCore(section_id);
+    refreshSectionEngineFields(this, section_id);
+    scheduleSharedCheckGroup(section_id);
+  };
 
   o = section.taboption("settings", form.DummyValue, "_dns_section_hint");
   o.depends("action", "dns");
@@ -7848,8 +8057,10 @@ function createSectionContent(section) {
       "Which core handles this section. Empty follows Settings → Routing engine. The other core is reached through a local SOCKS sidecar. Neither core is bundled; install from Components.",
     ),
   );
+  o.value("", _("Same as routing engine"));
   o.value("sing-box", "sing-box");
   o.value("xray", "Xray");
+  o.default = "";
   o.rmempty = true;
   o.modalonly = true;
   o.depends("action", "connection");
@@ -7857,6 +8068,7 @@ function createSectionContent(section) {
   o.depends("action", "outbound");
   o.depends("action", "vpn");
   o.onchange = function (_event, section_id) {
+    proxyCoreTouched.add(section_id);
     refreshSectionEngineFields(this, section_id);
     window.setTimeout(() => refreshSectionEngineFields(this, section_id), 0);
   };
@@ -7890,6 +8102,43 @@ function createSectionContent(section) {
   o.default = "udp";
   o.rmempty = false;
   o.modalonly = true;
+  const renderSectionDnsType = o.renderWidget;
+  o.renderWidget = function (section_id, option_index, cfgvalue) {
+    const xray = settings.isXrayRoutingEngine(settings.currentRoutingEngine());
+    const choices = dnsTypeChoices(!xray, !xray);
+    this.keylist = [];
+    this.vallist = [];
+    choices.forEach((choice) => this.value(choice.value, choice.label));
+    let selected = cfgvalue != null ? `${cfgvalue}`.trim() : "";
+    if (xray && selected === "doh3") {
+      selected = "doh";
+    }
+    return renderSectionDnsType.call(
+      this,
+      section_id,
+      option_index,
+      selected,
+    );
+  };
+
+  o = settings.restrictRoutingEngine(
+    section.taboption("settings", form.DummyValue, "_xray_doq_direct", _("DoQ")),
+    "xray",
+  );
+  o.depends({ action: "dns", dns_type: "doq" });
+  o.modalonly = true;
+  o.rawhtml = true;
+  o.cfgvalue = function () {
+    return (
+      '<span style="color:#c62828">' +
+      _(
+        "DoQ does not go through a section. Xray dials it directly from the router.",
+      ) +
+      "</span>"
+    );
+  };
+  o.write = function () {};
+  o.remove = function () {};
 
   o = section.taboption(
     "settings",
@@ -7908,6 +8157,31 @@ function createSectionContent(section) {
     }
     const validation = main.validateDNS(normalized);
     return validation.valid ? true : _("Enter a valid DNS server address");
+  };
+
+  o = section.taboption(
+    "settings",
+    form.Value,
+    "dns_server_name",
+    _("Certificate name"),
+    _(
+      "Name on the certificate when the server is a custom IP, for example dns.example.net. A hostname or a preset from the list does not need this.",
+    ),
+  );
+  o.depends({ action: "dns", dns_type: "doq" });
+  o.depends({ action: "dns", dns_type: "doh3" });
+  o.depends({ action: "dns", dns_type: "doh" });
+  o.depends({ action: "dns", dns_type: "dot" });
+  o.rmempty = true;
+  o.modalonly = true;
+  o.validate = function (_section_id, value) {
+    const name = `${value || ""}`.trim();
+    if (!name) {
+      return true;
+    }
+    return main.validateDomain(name).valid
+      ? true
+      : _("Certificate name must be a domain, for example dns.example.net");
   };
 
   o = section.taboption(
@@ -8963,6 +9237,187 @@ function createSectionContent(section) {
   o.depends({ action: "proxy", xray_finalmask: "1" });
   o.depends({ action: "outbound", xray_finalmask: "1" });
   o.depends({ action: "vpn", xray_finalmask: "1" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 10-20");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.ListValue,
+      "xray_finalmask_packets",
+      _("FinalMask packets"),
+      _(
+        "tlshello splits the TLS handshake. 1-3 splits the first TCP writes.",
+      ),
+    ),
+    "xray",
+  );
+  o.value("tlshello", _("TLS handshake"));
+  o.value("1-3", _("First TCP writes (1-3)"));
+  o.default = "tlshello";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1" });
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_max_split",
+      _("FinalMask max split"),
+      _(
+        "How many pieces one packet may be split into, for example 100-200. Use 0 for no limit.",
+      ),
+    ),
+    "xray",
+  );
+  o.default = "100-200";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 100-200");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Flag,
+      "xray_finalmask_noise",
+      _("FinalMask noise"),
+      _(
+        "Send extra bytes before the data. Xray applies this noise to UDP. The server does not need the same setting.",
+      ),
+    ),
+    "xray",
+  );
+  o.default = "0";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1" });
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.ListValue,
+      "xray_finalmask_noise_type",
+      _("Noise type"),
+    ),
+    "xray",
+  );
+  o.value("rand", _("Random bytes"));
+  o.value("str", _("Text"));
+  o.value("hex", _("Hex"));
+  o.value("base64", _("Base64"));
+  o.default = "rand";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1" });
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_noise_rand",
+      _("Noise length"),
+      _("Random byte length, for example 10-20."),
+    ),
+    "xray",
+  );
+  o.default = "10-20";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 10-20");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_noise_rand_range",
+      _("Noise byte range"),
+      _("Value of each random byte, for example 0-255."),
+    ),
+    "xray",
+  );
+  o.default = "0-255";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "rand" });
+  o.validate = function (_section_id, value) {
+    return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
+      ? true
+      : _("Use a number or a range like 0-255");
+  };
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_noise_packet",
+      _("Noise packet"),
+      _("Fixed noise data. Text, hex or base64, matching the type."),
+    ),
+    "xray",
+  );
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "str" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "str" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "str" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "str" });
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "hex" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "hex" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "hex" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "hex" });
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "base64" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "base64" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "base64" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1", xray_finalmask_noise_type: "base64" });
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      form.Value,
+      "xray_finalmask_noise_delay",
+      _("Noise delay"),
+      _("Pause after the noise, in milliseconds, for example 10-16."),
+    ),
+    "xray",
+  );
+  o.default = "10-16";
+  o.rmempty = false;
+  o.modalonly = true;
+  o.depends({ action: "connection", xray_finalmask: "1", xray_finalmask_noise: "1" });
+  o.depends({ action: "proxy", xray_finalmask: "1", xray_finalmask_noise: "1" });
+  o.depends({ action: "outbound", xray_finalmask: "1", xray_finalmask_noise: "1" });
+  o.depends({ action: "vpn", xray_finalmask: "1", xray_finalmask_noise: "1" });
   o.validate = function (_section_id, value) {
     return /^\d+(-\d+)?$/.test(`${value || ""}`.trim())
       ? true

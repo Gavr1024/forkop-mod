@@ -1,4 +1,4 @@
-prefer_ipv4, HTTPS/SVCB reject и конвертация списков (плоскость routing_engine=xray)
+prefer_ipv4, HTTPS/SVCB reject и конвертация списков (ядро routing_engine=xray)
 
 Лог без строк «nftables runtime model is ready» / «Preparing Xray» —
 на роутере СТАРЫЕ файлы. Проверка и копирование двух файлов:
@@ -27,7 +27,7 @@ prefer_ipv4, HTTPS/SVCB reject и конвертация списков (пло�
   [debug] Preparing Xray
   [info] Routing plane is Xray; sing-box sidecar is not required
 
-Полный список файлов плоскости Xray:
+Полный список файлов ядра Xray:
 
   cp forkop/files/usr/lib/xray/geodata.uc       /usr/lib/forkop/xray/geodata.uc
   cp forkop/files/usr/lib/xray/generator.uc     /usr/lib/forkop/xray/generator.uc

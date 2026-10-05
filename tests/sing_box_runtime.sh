@@ -1393,8 +1393,9 @@ assert(inbound(download, "service-mixed-in") != null, "service mixed inbound");
 assert(route_rule(download, r => r.inbound == "service-mixed-in" && r.outbound == "proxy-out") != null, "service mixed route");
 assert(inbound(download, "service-components-in") != null, "components service mixed inbound");
 assert(route_rule(download, r => r.inbound == "service-components-in" && r.outbound == "components_proxy-out") != null, "components service mixed route");
-assert(ruleset(download, "proxy-discord-community-ruleset").download_detour == "proxy-out", "download_detour on community ruleset");
-assert(ruleset_url(download, "https://example.com/rules.srs").download_detour == "proxy-out", "download_detour on custom remote ruleset");
+let community_ruleset = ruleset(download, "proxy-discord-community-ruleset");
+assert(community_ruleset && community_ruleset.type == "local" && community_ruleset.format == "source" && index(community_ruleset.path, "empty-ruleset.json") >= 0, "uncached community list must not be fetched by sing-box at start");
+assert(ruleset_url(download, "https://example.com/rules.srs") == null, "uncached custom list must not be fetched by sing-box at start");
 
 let fully = cfg("fully-routed");
 assert(route_rule(fully, r => r.outbound == "bypass-out" && contains(r.inbound, "tproxy-in") && contains(r.inbound, "tproxy6-in") && contains(r.source_ip_cidr, "192.168.1.20/32") && contains(r.source_ip_cidr, "192.168.1.30/32") && contains(r.source_ip_cidr, "2001:db8::20/128")) != null, "fully routed bypass IP route");

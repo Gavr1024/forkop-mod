@@ -1,13 +1,13 @@
 # Сборка пакетов Forkop-Mod
 
-Полное дерево исходников **1.0.8** плюс патчи, из которых собираются `ipk` (OpenWrt 24.10) и `apk` (OpenWrt 25.12).
+Полное дерево исходников **1.0.9** плюс патчи, из которых собираются `ipk` (OpenWrt 24.10) и `apk` (OpenWrt 25.12).
 
-Версия пакета **1.0.8**. Идентификатор opkg остаётся `forkop` (конфиг `/etc/config/forkop`, `/etc/init.d/forkop`, `/usr/lib/forkop`). В сведениях о пакете отображается **Forkop-Mod**. Над установленным стоковым 1.0.5 ставьте с `--force-reinstall`.
+Версия пакета **1.0.9**. Идентификатор opkg остаётся `forkop` (конфиг `/etc/config/forkop`, `/etc/init.d/forkop`, `/usr/lib/forkop`). В сведениях о пакете отображается **Forkop-Mod**. Над установленным стоковым 1.0.5 ставьте с `--force-reinstall`.
 
 ## Что внутри, чего не было в стоковом 1.0.5
 
-- Dual-core без родного ядра: в Settings выбирается **плоскость** `sing-box` или `Xray`. Пакет **не зависит** ни от одного ядра. После `opkg install forkop` ядра ставятся во вкладке **Компоненты**. Выбранное ядро владеет TPROXY `:1602`, FakeIP/FakeDNS и DNS `127.0.0.42`. Второе — SOCKS sidecar. Пустой `proxy_core` секции следует за плоскостью.
-- Списки itdoginfo и похожие на плоскости Xray **конвертируются** в `ext:allow-domains.dat:<tag>` / `geosite:` / inline matchers (decompile `.srs`).
+- Dual-core без родного ядра: в Settings выбирается **ядро** `sing-box` или `Xray`. Пакет **не зависит** ни от одного ядра. После `opkg install forkop` ядра ставятся во вкладке **Компоненты**. Выбранное ядро владеет TPROXY `:1602`, FakeIP/FakeDNS и DNS `127.0.0.42`. Второе — SOCKS sidecar. Пустой `proxy_core` секции следует за ядром.
+- Списки itdoginfo и похожие на ядре Xray **конвертируются** в `ext:allow-domains.dat:<tag>` / `geosite:` / inline matchers (decompile `.srs`).
 - Быстрый старт Xray при тёплом кэше: DAT и subnet-списки лежат в `/etc/forkop/list-cache/xray`. Повторный старт не качает GitHub, не генерирует `config.json` и не гоняет `xray -test`, если UCI и DAT не менялись.
 - `prefer_ipv4` / `prefer_ipv6` → DNS `queryStrategy: UseIP` + outbound `sockopt.domainStrategy: UseIPv4v6` / `UseIPv6v4`.
 - HTTPS/SVCB (типы 64/65) режутся в `dns-out` (`blockTypes` + `nonIPQuery: drop`), плюс FakeDNS `skipFallback` и dnsmasq `filter-rr`.
@@ -19,12 +19,12 @@
 
 ```
 dist/
-  forkop_1.0.8.ipk
-  luci-app-forkop_1.0.8.ipk
-  luci-i18n-forkop-ru_1.0.8.ipk
-  forkop_1.0.8.apk
-  luci-app-forkop_1.0.8.apk
-  luci-i18n-forkop-ru_1.0.8.apk
+  forkop_1.0.9.ipk
+  luci-app-forkop_1.0.9.ipk
+  luci-i18n-forkop-ru_1.0.9.ipk
+  forkop_1.0.9.apk
+  luci-app-forkop_1.0.9.apk
+  luci-i18n-forkop-ru_1.0.9.apk
 ```
 
 `forkop` — backend (ucode), в opkg info отображается как **Forkop-Mod**. `luci-app-forkop` — LuCI. `luci-i18n-forkop-ru` — русский.
@@ -61,10 +61,10 @@ export SDK_CACHE_DIR=/path/to/cache
 ## Сборка
 
 ```sh
-tar -xzf forkop-mod-1.0.8-src.tar.gz
-cd forkop-mod-1.0.8-src
+tar -xzf forkop-mod-1.0.9-src.tar.gz
+cd forkop-mod-1.0.9-src
 chmod +x build.sh
-./build.sh 1.0.8 ./dist
+./build.sh 1.0.9 ./dist
 ```
 
 Первый прогон долгий из-за скачивания SDK. Повторные — минуты.
@@ -76,17 +76,17 @@ chmod +x build.sh
 OpenWrt 24.x (`opkg`):
 
 ```sh
-opkg install --force-reinstall ./forkop_1.0.8.ipk
-opkg install --force-reinstall ./luci-app-forkop_1.0.8.ipk
-opkg install --force-reinstall ./luci-i18n-forkop-ru_1.0.8.ipk
+opkg install --force-reinstall ./forkop_1.0.9.ipk
+opkg install --force-reinstall ./luci-app-forkop_1.0.9.ipk
+opkg install --force-reinstall ./luci-i18n-forkop-ru_1.0.9.ipk
 ```
 
 OpenWrt 25.x (`apk`):
 
 ```sh
-apk add --allow-untrusted ./forkop_1.0.8.apk
-apk add --allow-untrusted ./luci-app-forkop_1.0.8.apk
-apk add --allow-untrusted ./luci-i18n-forkop-ru_1.0.8.apk
+apk add --allow-untrusted ./forkop_1.0.9.apk
+apk add --allow-untrusted ./luci-app-forkop_1.0.9.apk
+apk add --allow-untrusted ./luci-i18n-forkop-ru_1.0.9.apk
 ```
 
 После установки:
@@ -104,7 +104,7 @@ apk add --allow-untrusted ./luci-i18n-forkop-ru_1.0.8.apk
 grep -F 'XRAY_START_VERIFY_TIMEOUT' /usr/lib/forkop/service/lifecycle.uc
 ```
 
-Плоскость Xray:
+Ядро Xray:
 
 ```sh
 uci set forkop.settings.routing_engine='xray'

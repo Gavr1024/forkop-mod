@@ -158,8 +158,8 @@ msgstr "Весь трафик с этих IP-адресов будет напр�
 msgid "Allowed domain prefixes are full:, keyword:, and regex:"
 msgstr "Разрешённые префиксы доменов: full:, keyword: и regex:"
 
-msgid "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall. Works only with sing-box."
-msgstr "Обеспечивает доступ к YACD из WAN. Убедитесь, что в брандмауэре открыт соответствующий порт. Работает только с sing-box."
+msgid "Allows access to YACD from the WAN. Make sure to open the appropriate port in your firewall."
+msgstr "Обеспечивает доступ к YACD из WAN. Убедитесь, что в брандмауэре открыт соответствующий порт."
 
 msgid "Allows limiting the list of servers for URLTest"
 msgstr "Позволяет ограничить список серверов для URLTest"
@@ -314,14 +314,14 @@ msgstr "Каскадное подключение"
 msgid "Mux"
 msgstr "Mux"
 
-msgid "Pack many site connections into one TCP channel. VLESS Vision and Hysteria2 stay unchanged. Works only with Xray."
-msgstr "Несколько соединений сайта идут одним TCP-каналом. VLESS Vision и Hysteria2 не меняются. Работает только с Xray."
+msgid "Pack many site connections into one TCP channel. VLESS Vision and Hysteria2 stay unchanged."
+msgstr "Несколько соединений сайта идут одним TCP-каналом. VLESS Vision и Hysteria2 не меняются."
 
 msgid "Connections per channel"
 msgstr "Соединений в одном канале"
 
-msgid "How many connections share one channel. From 1 to 128. Works only with Xray."
-msgstr "Сколько соединений делят один канал. От 1 до 128. Работает только с Xray."
+msgid "How many connections share one channel. From 1 to 128."
+msgstr "Сколько соединений делят один канал. От 1 до 128."
 
 msgid "Use a number from 1 to 128"
 msgstr "Укажите число от 1 до 128"
@@ -329,14 +329,14 @@ msgstr "Укажите число от 1 до 128"
 msgid "XUDP"
 msgstr "XUDP"
 
-msgid "Carry UDP inside the same channel. Works only with Xray."
-msgstr "Передавать UDP в том же канале. Работает только с Xray."
+msgid "Carry UDP inside the same channel."
+msgstr "Передавать UDP в том же канале."
 
 msgid "UDP/443 through Mux"
 msgstr "UDP/443 через Mux"
 
-msgid "QUIC and some video traffic use UDP on port 443. Works only with Xray."
-msgstr "QUIC и часть видео идут по UDP на порт 443. Работает только с Xray."
+msgid "QUIC and some video traffic use UDP on port 443."
+msgstr "QUIC и часть видео идут по UDP на порт 443."
 
 msgid "Do not send"
 msgstr "Не пускать"
@@ -409,6 +409,24 @@ msgstr "Назад"
 
 msgid "Next"
 msgstr "Далее"
+
+msgid "OK"
+msgstr "ОК"
+
+msgid "Built-in lists"
+msgstr "Встроенные списки"
+
+msgid "Your lists"
+msgstr "Свои списки"
+
+msgid "Not a built-in list"
+msgstr "Не встроенный список"
+
+msgid "On the router"
+msgstr "На роутере"
+
+msgid "File not found"
+msgstr "Файл не найден"
 
 msgid "Close all connections"
 msgstr "Закрыть все подключения"
@@ -572,14 +590,26 @@ msgstr "Отключение перехвата несовместимо с acti
 msgid "Display name"
 msgstr "Отображаемое имя"
 
+msgid "Certificate name"
+msgstr "Имя сертификата"
+
+msgid "Certificate name must be a domain, for example dns.example.net"
+msgstr "Имя сертификата должно быть доменом, например dns.example.net"
+
 msgid "DNS Check Interval"
 msgstr "Период проверки DNS"
 
 msgid "DNS on router"
 msgstr "DNS на роутере"
 
+msgid "DNS over HTTP/3 (DoH3)"
+msgstr "DNS через HTTP/3 (DoH3)"
+
 msgid "DNS over HTTPS (DoH)"
 msgstr "DNS через HTTPS (DoH)"
+
+msgid "DNS over QUIC (DoQ)"
+msgstr "DNS через QUIC (DoQ)"
 
 msgid "DNS over TLS (DoT)"
 msgstr "DNS через TLS (DoT)"
@@ -667,6 +697,9 @@ msgstr "Резолвер доменов"
 
 msgid "Domains"
 msgstr "Домены"
+
+msgid "Subnets"
+msgstr "Подсети"
 
 msgid "Dont Touch My DHCP!"
 msgstr "Отключить управление DHCP"
@@ -767,9 +800,6 @@ msgstr "Включить выходной сетевой интерфейс"
 msgid "Enable YACD"
 msgstr "Включить YACD"
 
-msgid "Works only with sing-box."
-msgstr "Работает только с sing-box."
-
 msgid "Enable YACD WAN Access"
 msgstr "Включить доступ YACD WAN"
 
@@ -857,8 +887,8 @@ msgstr "Каждые 7 дней"
 msgid "Every day"
 msgstr "Каждый день"
 
-msgid "Expose this section as a local HTTP+SOCKS proxy. Works only with sing-box."
-msgstr "Открыть эту секцию как локальный HTTP+SOCKS прокси. Работает только с sing-box."
+msgid "Expose this section as a local HTTP+SOCKS proxy."
+msgstr "Открыть эту секцию как локальный HTTP+SOCKS прокси."
 
 msgid "External nfqws config files bypass Forkop queue management and explicit validation."
 msgstr "Внешние конфиги nfqws обходят управление очередями и явную валидацию Forkop."
@@ -908,8 +938,8 @@ msgstr "Интервал поиска более быстрого сервера
 msgid "Fastest"
 msgstr "Самый быстрый"
 
-msgid "Filter the servers that will be displayed on the dashboard. Works only with sing-box."
-msgstr "Отфильтровать серверы, которые будут отображаться в дашборде. Работает только с sing-box."
+msgid "Filter the servers that will be displayed on the dashboard."
+msgstr "Отфильтровать серверы, которые будут отображаться в дашборде."
 
 msgid "Firewall WAN port"
 msgstr "Порт в firewall для WAN"
@@ -1064,11 +1094,11 @@ msgstr "Как часто проверять верхние уровни при�
 msgid "How often the currently selected server is checked"
 msgstr "Как часто проверяется текущий выбранный сервер"
 
-msgid "How often to check the active DNS servers. Works only with sing-box."
-msgstr "Как часто проверять активные DNS-серверы. Работает только с sing-box."
+msgid "How often to check the active DNS servers."
+msgstr "Как часто проверять активные DNS-серверы."
 
-msgid "How often to check whether a higher-priority DNS server has recovered. Works only with sing-box."
-msgstr "Как часто проверять, восстановился ли DNS-сервер с более высоким приоритетом. Работает только с sing-box."
+msgid "How often to check whether a higher-priority DNS server has recovered."
+msgstr "Как часто проверять, восстановился ли DNS-сервер с более высоким приоритетом."
 
 msgid "How often to fetch new lists. If lists are already downloaded, start does not hit GitHub until this interval has passed. Never turns off automatic updates; the dashboard button still downloads them."
 msgstr "Как часто скачивать новые списки. Если списки уже скачаны, при старте GitHub не трогается, пока не истечёт этот интервал. «Никогда» отключает автообновление, кнопка на информационной панели по-прежнему скачивает их."
@@ -1448,8 +1478,8 @@ msgstr "Совпадение по IP-адресам или подсетям на
 msgid "Match destination ports. Use a single port or a range"
 msgstr "Совпадение по портам назначения. Используйте одиночный порт или диапазон"
 
-msgid "Maximum time to wait for example.com to resolve during a DNS health check. Works only with sing-box."
-msgstr "Максимальное время ожидания разрешения example.com при проверке доступности DNS. Работает только с sing-box."
+msgid "Maximum time to wait for example.com to resolve during a DNS health check."
+msgstr "Максимальное время ожидания разрешения example.com при проверке доступности DNS."
 
 msgid "Memory Usage"
 msgstr "Использование памяти"
@@ -1492,6 +1522,9 @@ msgstr "Имя, которое отображается в дашборде"
 
 msgid "Name shown in the priority level list"
 msgstr "Имя, которое отображается в списке уровней приоритета"
+
+msgid "Name on the certificate when the server is a custom IP, for example dns.example.net. A hostname or a preset from the list does not need this."
+msgstr "Имя в сертификате, если сервер — свой IP, например dns.example.net. Для имени сервера или пресета из списка это не нужно."
 
 msgid "Network Interface"
 msgstr "Сетевой интерфейс"
@@ -1766,6 +1799,9 @@ msgstr "Протокол"
 msgid "Proxy core"
 msgstr "Ядро прокси"
 
+msgid "Same as routing engine"
+msgstr "Как в настройках"
+
 msgid "Proxy link is unavailable"
 msgstr "Ссылка прокси недоступна"
 
@@ -1817,8 +1853,8 @@ msgstr "Исключить из уровня указанные серверы."
 msgid "Require a username and password for the local mixed proxy"
 msgstr "Требовать логин и пароль для локального смешанного прокси"
 
-msgid "Resolve domain names before routing so sing-box can use real destination IPs. Works only with sing-box."
-msgstr "Разрешать доменные имена перед маршрутизацией, чтобы sing-box использовал реальные IP-адреса назначения. Работает только с sing-box."
+msgid "Resolve domain names before routing so sing-box can use real destination IPs."
+msgstr "Разрешать доменные имена перед маршрутизацией, чтобы sing-box использовал реальные IP-адреса назначения."
 
 msgid "Resolve real IP for routing"
 msgstr "Разрешать реальный IP для маршрутизации"
@@ -1946,8 +1982,8 @@ msgstr "Сколько секунд подождать после успешно
 msgid "Secret"
 msgstr "Секрет"
 
-msgid "Secret key for authenticating remote access to YACD when WAN access is enabled. Works only with sing-box."
-msgstr "Секретный ключ для аутентификации удаленного доступа к YACD при включенном доступе через WAN. Работает только с sing-box."
+msgid "Secret key for authenticating remote access to YACD when WAN access is enabled."
+msgstr "Секретный ключ для аутентификации удаленного доступа к YACD при включенном доступе через WAN."
 
 msgid "Section"
 msgstr "Секция"
@@ -1994,11 +2030,11 @@ msgstr "Выберите сетевой интерфейс для VPN-подкл
 msgid "Select or enter a User-Agent"
 msgstr "Выберите или введите User-Agent"
 
-msgid "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing. Works only with sing-box."
-msgstr "Выберите или введите путь к файлу кеша sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете. Работает только с sing-box."
+msgid "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing."
+msgstr "Выберите или введите путь к файлу кеша sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете."
 
-msgid "Select path for sing-box config file. Change this ONLY if you know what you are doing. Works only with sing-box."
-msgstr "Выберите путь к файлу конфигурации sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете. Работает только с sing-box."
+msgid "Select path for sing-box config file. Change this ONLY if you know what you are doing."
+msgstr "Выберите путь к файлу конфигурации sing-box. Изменяйте это, ТОЛЬКО если вы знаете, что делаете."
 
 msgid "Select the fastest node"
 msgstr "Выбирать самый быстрый узел"
@@ -2042,8 +2078,8 @@ msgstr "Фильтрация серверов"
 msgid "Server group for automatic lowest-latency selection"
 msgstr "Группа серверов для автоматического выбора по наименьшей задержке"
 
-msgid "Server group for priority failover. Works only with sing-box."
-msgstr "Группа автоматически выбирает рабочий узел на основе установленного приоритета. Работает только с sing-box."
+msgid "Server group for priority failover."
+msgstr "Группа автоматически выбирает рабочий узел на основе установленного приоритета."
 
 msgid "Server information"
 msgstr "Информация о сервере"
@@ -2534,8 +2570,8 @@ msgstr "Настройки URLTest"
 msgid "Use 32 hex characters"
 msgstr "Укажите 32 hex-символа"
 
-msgid "Accepted share of failed probes, from 0 to 1. Works only with Xray."
-msgstr "Допустимая доля неудачных проверок, от 0 до 1. Работает только с Xray."
+msgid "Accepted share of failed probes, from 0 to 1."
+msgstr "Допустимая доля неудачных проверок, от 0 до 1."
 
 msgid "Auto"
 msgstr "Авто"
@@ -2552,8 +2588,8 @@ msgstr "Общая проверка"
 msgid "One server check"
 msgstr "Одна проверка серверов"
 
-msgid "URLTest and the balancer strategy use one server check. The address and interval from URLTest apply to Auto, Least ping and Least load. Without URLTest, Auto picks a server at random, and the probe uses the built-in address every 3 minutes. Works only with Xray."
-msgstr "URLTest и стратегия балансировщика используют одну проверку серверов. Адрес и интервал из URLTest действуют на Авто, Least ping и Least load. Если URLTest нет, Авто выбирает случайный сервер, а проверка идёт на встроенный адрес каждые 3 минуты. Работает только с Xray."
+msgid "URLTest and the balancer strategy use one server check. The address and interval from URLTest apply to Auto, Least ping and Least load. Without URLTest, Auto picks a server at random, and the probe uses the built-in address every 3 minutes."
+msgstr "URLTest и стратегия балансировщика используют одну проверку серверов. Адрес и интервал из URLTest действуют на Авто, Least ping и Least load. Если URLTest нет, Авто выбирает случайный сервер, а проверка идёт на встроенный адрес каждые 3 минуты."
 
 msgid "URLTest · shared check"
 msgstr "URLTest · общая проверка"
@@ -2561,11 +2597,11 @@ msgstr "URLTest · общая проверка"
 msgid "Off"
 msgstr "Выключен"
 
-msgid "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected. Works only with Xray."
-msgstr "Балансировщик выключен. Трафик идёт на выбранный сервер, а если он не выбран — на первый. Работает только с Xray."
+msgid "The balancer is off. Traffic stays on the selected server, or on the first one if none is selected."
+msgstr "Балансировщик выключен. Трафик идёт на выбранный сервер, а если он не выбран — на первый."
 
-msgid "URLTest uses least ping. Without URLTest, Xray picks a server at random. Works only with Xray."
-msgstr "URLTest выбирает сервер с наименьшей задержкой. Без URLTest Xray берёт сервер случайно. Работает только с Xray."
+msgid "URLTest uses least ping. Without URLTest, Xray picks a server at random."
+msgstr "URLTest выбирает сервер с наименьшей задержкой. Без URLTest Xray берёт сервер случайно."
 
 msgid "Least ping and Least load test servers with one observatory check. The address and interval below are that check. Auto, Random and Round robin do not test servers."
 msgstr "Least ping и Least load проверяют серверы одной проверкой observatory. Адрес и интервал ниже относятся к ней. Авто, Random и Round robin серверы не проверяют."
@@ -2594,29 +2630,29 @@ msgstr "Проверять серверы одновременно, а не по
 msgid "Use a duration like 10s, 3m or 1h"
 msgstr "Укажите длительность, например 10s, 3m или 1h"
 
-msgid "Xray picks a server at random. Works only with Xray."
-msgstr "Xray выбирает сервер случайно. Работает только с Xray."
+msgid "Xray picks a server at random."
+msgstr "Xray выбирает сервер случайно."
 
-msgid "Xray walks the servers in order. Works only with Xray."
-msgstr "Xray идёт по серверам по очереди. Работает только с Xray."
+msgid "Xray walks the servers in order."
+msgstr "Xray идёт по серверам по очереди."
 
-msgid "Xray picks the server with the lowest delay. Servers are probed first. Works only with Xray."
-msgstr "Xray берёт сервер с наименьшей задержкой. Серверы сначала проверяются. Работает только с Xray."
+msgid "Xray picks the server with the lowest delay. Servers are probed first."
+msgstr "Xray берёт сервер с наименьшей задержкой. Серверы сначала проверяются."
 
-msgid "Xray picks the most stable servers. Set how many share traffic, the maximum RTT, and how many failed probes are allowed. Works only with Xray."
-msgstr "Xray берёт самые стабильные серверы. Ниже задаются число серверов, которые делят трафик, максимальный RTT и доля допустимых неудачных проверок. Работает только с Xray."
+msgid "Xray picks the most stable servers. Set how many share traffic, the maximum RTT, and how many failed probes are allowed."
+msgstr "Xray берёт самые стабильные серверы. Ниже задаются число серверов, которые делят трафик, максимальный RTT и доля допустимых неудачных проверок."
 
 msgid "Fallback server"
 msgstr "Запасной сервер"
 
-msgid "How many stable servers share new connections. Works only with Xray."
-msgstr "Сколько стабильных серверов делят новые соединения. Работает только с Xray."
+msgid "How many stable servers share new connections."
+msgstr "Сколько стабильных серверов делят новые соединения."
 
 msgid "Domains in this section get a real address, not a FakeIP. A section below cannot take their traffic: if the site name is not visible, it follows full routing or goes direct."
 msgstr "Домены этой секции получают настоящий адрес, а не FakeIP. Секция ниже не заберёт их трафик: если имя сайта не видно, он уйдёт в полную маршрутизацию или напрямую."
 
-msgid "How Xray picks a server in this section. Works only with Xray."
-msgstr "Как Xray выбирает сервер в этой секции. Работает только с Xray."
+msgid "How Xray picks a server in this section."
+msgstr "Как Xray выбирает сервер в этой секции."
 
 msgid "Least load group size"
 msgstr "Размер группы least load"
@@ -2627,11 +2663,11 @@ msgstr "Максимальный RTT least load"
 msgid "Least load tolerance"
 msgstr "Допуск least load"
 
-msgid "One server from another section, used when the rest are dead. Works only with Xray."
-msgstr "Один сервер из другой секции, если остальные не отвечают. Работает только с Xray."
+msgid "One server from another section, used when the rest are dead."
+msgstr "Один сервер из другой секции, если остальные не отвечают."
 
-msgid "Slowest accepted probe, such as 1s or 500ms. Works only with Xray."
-msgstr "Самая медленная допустимая проверка, например 1s или 500ms. Работает только с Xray."
+msgid "Slowest accepted probe, such as 1s or 500ms."
+msgstr "Самая медленная допустимая проверка, например 1s или 500ms."
 
 msgid "Use a duration like 500ms or 1s"
 msgstr "Укажите длительность, например 500ms или 1s"
@@ -2843,14 +2879,14 @@ msgstr "sing-box outbound для Zapret2 не настроен"
 msgid "Fragment direct connections"
 msgstr "Фрагментировать прямые подключения"
 
-msgid "Split the TLS handshake on direct Xray connections so filters do not see the site name in one packet. Works only with Xray."
-msgstr "Резать TLS-рукопожатие на прямых подключениях Xray, чтобы фильтр не видел имя сайта в одном пакете. Работает только с Xray."
+msgid "Split the TLS handshake on direct Xray connections so filters do not see the site name in one packet."
+msgstr "Резать TLS-рукопожатие на прямых подключениях Xray, чтобы фильтр не видел имя сайта в одном пакете."
 
 msgid "Fragment length"
 msgstr "Длина фрагмента"
 
-msgid "Byte size of each piece, for example 100-200. Works only with Xray."
-msgstr "Размер куска в байтах, например 100-200. Работает только с Xray."
+msgid "Byte size of each piece, for example 100-200."
+msgstr "Размер куска в байтах, например 100-200."
 
 msgid "Use a number or a range like 100-200"
 msgstr "Укажите число или диапазон, например 100-200"
@@ -2858,8 +2894,8 @@ msgstr "Укажите число или диапазон, например 100-
 msgid "Fragment interval"
 msgstr "Интервал фрагментации"
 
-msgid "Pause between pieces, in milliseconds, for example 10-20. Works only with Xray."
-msgstr "Пауза между кусками в миллисекундах, например 10-20. Работает только с Xray."
+msgid "Pause between pieces, in milliseconds, for example 10-20."
+msgstr "Пауза между кусками в миллисекундах, например 10-20."
 
 msgid "Use a number or a range like 10-20"
 msgstr "Укажите число или диапазон, например 10-20"
@@ -2867,8 +2903,8 @@ msgstr "Укажите число или диапазон, например 10-2
 msgid "FinalMask"
 msgstr "FinalMask"
 
-msgid "Split the TLS handshake toward servers in this section. The server does not need the same setting. Works only with Xray."
-msgstr "Резать TLS-рукопожатие к серверам этой секции. На сервере такая же настройка не нужна. Работает только с Xray."
+msgid "Split the TLS handshake toward servers in this section. The server does not need the same setting."
+msgstr "Резать TLS-рукопожатие к серверам этой секции. На сервере такая же настройка не нужна."
 
 msgid "FinalMask length"
 msgstr "Длина FinalMask"
@@ -2876,80 +2912,77 @@ msgstr "Длина FinalMask"
 msgid "FinalMask interval"
 msgstr "Интервал FinalMask"
 
-msgid "All remaining servers means every server not already assigned to a higher-priority level. Works only with sing-box."
-msgstr "Добавляет все серверы, которые не попали в уровни с более высоким приоритетом. Работает только с sing-box."
+msgid "FinalMask packets"
+msgstr "Пакеты фрагментации"
 
-msgid "Allows limiting the list of servers for URLTest Works only with sing-box."
-msgstr "Позволяет ограничить список серверов для URLTest Работает только с sing-box."
+msgid "tlshello splits the TLS handshake. 1-3 splits the first TCP writes."
+msgstr "tlshello режет TLS-рукопожатие. 1-3 режет первые записи TCP."
 
-msgid "Check timeout after which the server is considered dead Works only with sing-box."
-msgstr "Таймаут проверки, после которого сервер считается мёртвым Работает только с sing-box."
+msgid "TLS handshake"
+msgstr "TLS-рукопожатие"
 
-msgid "Enable built-in DNS resolver for domains handled by this section Works only with sing-box."
-msgstr "Включить встроенный DNS-резолвер для доменов, обрабатываемых этой секцией Работает только с sing-box."
+msgid "First TCP writes (1-3)"
+msgstr "Первые записи TCP (1-3)"
 
-msgid "Hide individual nodes that are already included in imported subscription URLTest groups Works only with sing-box."
-msgstr "Скрывать отдельные узлы, которые уже входят в импортированные URLTest группы подписки Работает только с sing-box."
+msgid "FinalMask max split"
+msgstr "Максимальное разделение"
 
-msgid "Hide intermediate nodes used as detours by other subscription nodes Works only with sing-box."
-msgstr "Скрывать промежуточные узлы, которые используются как detour для других узлов подписки Работает только с sing-box."
+msgid "How many pieces one packet may be split into, for example 100-200. Use 0 for no limit."
+msgstr "На сколько частей можно разрезать один пакет, например 100-200. 0 снимает ограничение."
 
-msgid "How often higher priority levels are checked while a lower level is active Works only with sing-box."
-msgstr "Как часто проверять верхние уровни приоритета, пока активен нижний уровень Работает только с sing-box."
+msgid "FinalMask noise"
+msgstr "Шум"
 
-msgid "How often the currently selected server is checked Works only with sing-box."
-msgstr "Как часто проверяется текущий выбранный сервер Работает только с sing-box."
+msgid "Send extra bytes before the data. Xray applies this noise to UDP. The server does not need the same setting."
+msgstr "Отправить лишние байты перед данными. Xray применяет этот шум к UDP. На сервере такая же настройка не нужна."
 
-msgid "Import URLTest groups returned by this subscription provider Works only with sing-box."
-msgstr "Импортировать URLTest группы, если провайдер подписки возвращает их Работает только с sing-box."
+msgid "Send extra bytes before a direct connection. This is TCP noise on the direct outbound."
+msgstr "Отправить лишние байты перед прямым соединением. Это TCP-шум на прямом исходящем."
 
-msgid "Interrupt connections when priority failover switches server Works only with sing-box."
-msgstr "Разрывать соединения при переключении сервера приоритетом Работает только с sing-box."
+msgid "Noise type"
+msgstr "Тип шума"
 
-msgid "Interrupt connections when URLTest switches the selected server Works only with sing-box."
-msgstr "Прерывать соединения, когда URLTest переключает выбранный сервер Работает только с sing-box."
+msgid "Random bytes"
+msgstr "Случайные байты"
 
-msgid "Keep Priority before latency-sorted servers Works only with sing-box."
-msgstr "Показывать Priority перед серверами, отсортированными по задержке Работает только с sing-box."
+msgid "Text"
+msgstr "Текст"
 
-msgid "Minimum latency difference in milliseconds that triggers switching to a faster server. Works only with sing-box."
-msgstr "Минимальная разница задержки в миллисекундах, при которой произойдет переключение на более быстрый сервер. Работает только с sing-box."
+msgid "Hex"
+msgstr "Hex"
 
-msgid "Name shown in the priority level list Works only with sing-box."
-msgstr "Имя, которое отображается в списке уровней приоритета Работает только с sing-box."
+msgid "Base64"
+msgstr "Base64"
 
-msgid "Periodically check the current level and switch to a faster server even when the current one works. Works only with sing-box."
-msgstr "Периодически проверять текущий уровень и переключаться на более быстрый сервер, даже если текущий работает. Работает только с sing-box."
+msgid "Noise length"
+msgstr "Длина шума"
 
-msgid "Port for the local mixed proxy of this section Works only with sing-box."
-msgstr "Порт локального смешанного прокси для этой секции Работает только с sing-box."
+msgid "Random byte length, for example 10-20."
+msgstr "Длина случайных байтов, например 10-20."
 
-msgid "Require a username and password for the local mixed proxy Works only with sing-box."
-msgstr "Требовать логин и пароль для локального смешанного прокси Работает только с sing-box."
+msgid "Noise byte range"
+msgstr "Диапазон байтов шума"
 
-msgid "Stop checking when URLTest group is not used. Use sing-box duration format like 1d, 12h or 30m. Works only with sing-box."
-msgstr "Останавливать проверку если URLTest группа не используется. Используйте формат длительности sing-box, например 1d, 12h или 30m. Работает только с sing-box."
+msgid "Value of each random byte, for example 0-255."
+msgstr "Значение каждого случайного байта, например 0-255."
 
-msgid "Top level has the highest priority; lower levels are used as fallback Works only with sing-box."
-msgstr "Верхний уровень имеет самый высокий приоритет; нижние уровни используются как резерв Работает только с sing-box."
+msgid "Use a number or a range like 0-255"
+msgstr "Укажите число или диапазон, например 0-255"
 
-msgid "Traffic for this level goes directly. Works only with sing-box."
-msgstr "Трафик этого уровня пойдёт напрямую. Работает только с sing-box."
+msgid "Noise packet"
+msgstr "Содержимое шума"
 
-msgid "URL used to check whether a server is alive Works only with sing-box."
-msgstr "URL, который используется для проверки, что сервер жив Работает только с sing-box."
+msgid "Fixed noise data. Text, hex or base64, matching the type."
+msgstr "Фиксированные данные шума: текст, hex или base64, в зависимости от типа."
 
-msgid "When switching to another level, test every server and select the fastest instead of the first working one. Works only with sing-box."
-msgstr "При переходе на другой уровень тестировать все сервера и выбирать самый быстрый, а не первый работающий. Работает только с sing-box."
+msgid "Noise delay"
+msgstr "Задержка шума"
 
-msgid "Name displayed on the dashboard Works only with sing-box."
-msgstr "Имя, которое отображается в дашборде Работает только с sing-box."
+msgid "Pause after the noise, in milliseconds, for example 10-16."
+msgstr "Пауза после шума, в миллисекундах, например 10-16."
 
-msgid "Use sing-box duration format like 1d, 12h or 30m Works only with sing-box."
-msgstr "Используйте формат длительности sing-box, например 1d, 12h или 30m Работает только с sing-box."
+msgid "DNS protocol used by this interface."
+msgstr "Протокол DNS этого интерфейса."
 
-msgid "DNS protocol used by this interface. Works only with sing-box."
-msgstr "Протокол DNS этого интерфейса. Работает только с sing-box."
-
-msgid "DNS server used by this interface. Works only with sing-box."
-msgstr "DNS-сервер этого интерфейса. Работает только с sing-box."
+msgid "DNS server used by this interface."
+msgstr "DNS-сервер этого интерфейса."

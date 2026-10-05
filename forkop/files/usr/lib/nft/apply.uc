@@ -10,6 +10,7 @@ let connections = require("config.connections");
 let routing_rulesets = require("routing.rulesets");
 let runtime_constants = require("singbox.constants");
 let engine = require("core.engine");
+let hostresolve = require("core.hostresolve");
 let xray_constants = require("xray.constants");
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const DNS_SOURCE_SET = "forkop_dns_sources";
@@ -2381,45 +2382,6 @@ function resolve_host_is_fake_or_self(addr, dns_server) {
     return false;
 }
 
-function lookup_host_via_server(host, dns_server) {
-    let raw = command_output_quiet_from_args([ "timeout", "3", "nslookup", host, dns_server ]);
-    if (raw == "")
-        raw = command_output_quiet_from_args([ "nslookup", host, dns_server ]);
-    let ips = [];
-    let seen = {};
-    for (let line in split(raw, /\n/)) {
-        line = trim(replace(as_string(line), /\r/g, ""));
-        let addr = "";
-        let matched = match(line, /^Address[ \t]*[0-9]*:[ \t]*([^ \t]+)/);
-        if (matched)
-            addr = trim(as_string(matched[1]));
-        else
-            addr = line;
-        let v4port = match(addr, /^([0-9]+(\.[0-9]+){3}):[0-9]+$/);
-        if (v4port)
-            addr = as_string(v4port[1]);
-        if (!valid_ipv4(addr) && !core_ip.valid_ipv6(addr))
-            continue;
-        if (resolve_host_is_fake_or_self(addr, dns_server) || seen[addr])
-            continue;
-        seen[addr] = true;
-        push(ips, addr);
-    }
-    return ips;
-}
-
-function resolve_host_ips(host) {
-    host = trim(as_string(host));
-    if (host == "" || match(host, /^[A-Za-z0-9._-]+$/) == null)
-        return [];
-    for (let dns_server in [ "8.8.8.8", "77.88.8.8", "1.1.1.1" ]) {
-        let ips = lookup_host_via_server(host, dns_server);
-        if (length(ips) > 0)
-            return ips;
-    }
-    return [];
-}
-
 function nft_add_resolved_section_domains(section, table) {
     if (!engine.is_xray_primary())
         return true;
@@ -2428,19 +2390,25 @@ function nft_add_resolved_section_domains(section, table) {
         if (length(hosts) == 0)
             return true;
         let sets = section_priority_sets(section);
+        let resolved = hostresolve.resolve_hosts(hosts);
+        let addresses = [];
         let found = [];
+        let missed = 0;
         for (let host in hosts) {
-            let ips = resolve_host_ips(host);
-            if (length(ips) == 0) {
-                log_debug("Xray domain " + host + " did not resolve for nft intercept");
+            let ips = resolved[host];
+            if (type(ips) != "array" || length(ips) == 0) {
+                missed++;
                 continue;
             }
-            if (!nft_add_csv_chunks_to_family_sets(join(",", ips), table, sets.subnets, sets.subnets6, "ips", "", 5000)) {
-                log_debug("Xray domain nft intercept failed for " + host + " (" + join(",", ips) + ")");
-                continue;
-            }
+            for (let ip in ips)
+                push(addresses, ip);
             push(found, host + "=" + join("/", ips));
         }
+        if (length(addresses) > 0 &&
+            !nft_add_csv_chunks_to_family_sets(join(",", addresses), table, sets.subnets, sets.subnets6, "ips", "", 5000))
+            log_debug("Xray domain nft intercept failed for " + as_string(section[".name"]));
+        if (missed > 0)
+            log_debug("Xray domain nft intercept missed " + as_string(missed) + " host(s) in " + as_string(section[".name"]));
         if (length(found) > 0)
             log_debug("Xray domain nft intercept: " + join(", ", found));
     } catch (e) {

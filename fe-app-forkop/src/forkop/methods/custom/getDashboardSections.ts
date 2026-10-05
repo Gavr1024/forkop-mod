@@ -92,20 +92,40 @@ type PriorityLevelConfig = {
 type ItemSettingsValue = string | string[] | PriorityLevelConfig[] | undefined;
 type ItemSettings = Record<string, ItemSettingsValue>;
 
-function getSectionProxyCore(
-  section: Forkop.ConfigSection,
-): NonNullable<Forkop.OutboundGroup['proxyCore']> {
-  const value = String(section.proxy_core || '')
+function configuredRoutingEngine(
+  configSections: Forkop.ConfigSection[],
+): 'xray' | 'sing-box' {
+  const settings = configSections.find(
+    (section) => section['.type'] === 'settings',
+  );
+  const value = String(settings?.routing_engine || '')
     .trim()
     .toLowerCase();
   return value === 'xray' || value === 'xray-core' ? 'xray' : 'sing-box';
 }
 
+function getSectionProxyCore(
+  section: Forkop.ConfigSection,
+  routingEngine: 'xray' | 'sing-box' = 'sing-box',
+): NonNullable<Forkop.OutboundGroup['proxyCore']> {
+  const value = String(section.proxy_core || '')
+    .trim()
+    .toLowerCase();
+  if (value === 'xray' || value === 'xray-core') {
+    return 'xray';
+  }
+  if (value === 'sing-box' || value === 'singbox') {
+    return 'sing-box';
+  }
+  return routingEngine;
+}
+
 function withProxyCore(
   section: Forkop.ConfigSection,
+  routingEngine: 'xray' | 'sing-box',
   group: Forkop.OutboundGroup,
 ): Forkop.OutboundGroup {
-  const proxyCore = getSectionProxyCore(section);
+  const proxyCore = getSectionProxyCore(section, routingEngine);
 
   return {
     ...group,
@@ -1532,7 +1552,8 @@ function mergeXrayNodesIntoClashProxies(
       (section) =>
         section.enabled !== '0' &&
         isConnectionAction(section.action) &&
-        getSectionProxyCore(section) === 'xray',
+        getSectionProxyCore(section, configuredRoutingEngine(configSections)) ===
+          'xray',
     )
     .forEach((section) => {
       const sectionName = section['.name'];
@@ -1612,6 +1633,7 @@ export async function getDashboardSections(
     };
   }
 
+  const routingEngine = configuredRoutingEngine(configSections);
   const proxies = Object.entries(mergedProxies).map(([key, value]) => ({
     code: key,
     value,
@@ -1655,7 +1677,7 @@ export async function getDashboardSections(
               cachedProxyLinks,
             );
 
-          return withProxyCore(section, {
+          return withProxyCore(section, routingEngine, {
             withTagSelect: true,
             code: selector?.code || sectionName,
             sectionName,
@@ -1674,7 +1696,7 @@ export async function getDashboardSections(
           const outboundTag = getOutboundTagBySection(sectionName);
           const outbound = proxies.find((proxy) => proxy.code === outboundTag);
 
-          return withProxyCore(section, {
+          return withProxyCore(section, routingEngine, {
             withTagSelect: false,
             code: outbound?.code || sectionName,
             sectionName,
@@ -1699,7 +1721,7 @@ export async function getDashboardSections(
           const outboundTag = getOutboundTagBySection(sectionName);
           const outbound = proxies.find((proxy) => proxy.code === outboundTag);
 
-          return withProxyCore(section, {
+          return withProxyCore(section, routingEngine, {
             withTagSelect: false,
             code: outbound?.code || sectionName,
             sectionName,
@@ -1721,7 +1743,7 @@ export async function getDashboardSections(
           });
         }
 
-        return withProxyCore(section, {
+        return withProxyCore(section, routingEngine, {
           withTagSelect: false,
           code: sectionName,
           sectionName,

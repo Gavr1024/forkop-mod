@@ -899,10 +899,30 @@ function validate_required_duration_option(value, label) {
     validate_duration_option(value, label);
 }
 
+function dns_hostname_valid(value) {
+    value = lc(trim(as_string(value)));
+    if (value == "")
+        return true;
+    return length(value) <= 253 &&
+        index(value, ".") > 0 &&
+        substr(value, 0, 1) != "." &&
+        substr(value, length(value) - 1, 1) != "." &&
+        match(value, /^[a-z0-9._-]+$/) != null;
+}
+
 function dns_server_value_valid(value) {
     value = trim(as_string(value));
     if (value == "" || match(value, /[ \t\r\n@]/) != null)
         return false;
+
+    let hash = index(value, "#");
+    if (hash >= 0) {
+        if (!dns_hostname_valid(substr(value, hash + 1)))
+            return false;
+        value = trim(substr(value, 0, hash));
+        if (value == "")
+            return false;
+    }
 
     let host = core_url.host(value);
     if (host == "")
@@ -934,8 +954,8 @@ function dns_setting_values(settings, key) {
 
 function validate_dns_settings(settings, sections, context) {
     let dns_type = option(settings, "dns_type", "udp");
-    if (!contains([ "udp", "dot", "doh" ], dns_type))
-        fail_validation("Unsupported DNS protocol type '" + dns_type + "'. Use udp, dot, or doh. Aborted.");
+    if (!contains([ "udp", "dot", "doh", "doh3", "doq" ], dns_type))
+        fail_validation("Unsupported DNS protocol type '" + dns_type + "'. Use udp, dot, doh, doh3, or doq. Aborted.");
 
     let dns_strategy = option(settings, "dns_strategy", "prefer_ipv4");
     if (!contains([ "prefer_ipv4", "ipv4_only", "prefer_ipv6", "ipv6_only" ], dns_strategy))
@@ -953,6 +973,8 @@ function validate_dns_settings(settings, sections, context) {
     for (let value in bootstrap_servers)
         if (!dns_server_value_valid(value))
             fail_validation("Invalid Bootstrap DNS server '" + value + "'. Aborted.");
+    if (!dns_hostname_valid(option(settings, "dns_certificate_name", "")))
+        fail_validation("DNS certificate name must be a domain like dns.example.net. Aborted.");
 
     if (length(main_servers) > 1 || length(bootstrap_servers) > 1) {
         validate_required_duration_option(option(settings, "dns_check_interval", "10s"), "settings.dns_check_interval");
@@ -1413,11 +1435,13 @@ function dns_action_has_domain_matchers(section) {
 function validate_dns_action(section, sections, context) {
     let name = section_name(section);
     let dns_type = option(section, "dns_type", "udp");
-    if (!contains([ "udp", "dot", "doh" ], dns_type))
-        fail_validation("DNS rule '" + name + "' uses unsupported protocol '" + dns_type + "'. Use udp, dot, or doh. Aborted.");
+    if (!contains([ "udp", "dot", "doh", "doh3", "doq" ], dns_type))
+        fail_validation("DNS rule '" + name + "' uses unsupported protocol '" + dns_type + "'. Use udp, dot, doh, doh3, or doq. Aborted.");
     let dns_server = option(section, "dns_server", "");
     if (!dns_server_value_valid(dns_server))
         fail_validation("DNS rule '" + name + "' has an invalid DNS server '" + dns_server + "'. Aborted.");
+    if (!dns_hostname_valid(option(section, "dns_server_name", "")))
+        fail_validation("DNS rule '" + name + "' has an invalid certificate name. Aborted.");
     if (length(connections.rule_sets_with_subnets(section)) > 0)
         fail_validation("DNS rule '" + name + "' can use domain-only rule sets, but subnet extraction is enabled. Disable 'Include IP addresses and subnets'. Aborted.");
     if (!dns_action_has_domain_matchers(section) && length(list_option(section, "fully_routed_ips")) == 0)

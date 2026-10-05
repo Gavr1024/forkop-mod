@@ -16,12 +16,83 @@ const DNS_FAILOVER_STATE_FILE = getenv("FORKOP_DNS_FAILOVER_STATE_FILE") || "/va
 const DNS_HEALTH_ADDRESS = getenv("FORKOP_DNS_HEALTH_ADDRESS") || "127.0.0.42";
 const DNS_HEALTH_PORT_BASE = int(getenv("FORKOP_DNS_HEALTH_PORT_BASE") || "10053");
 
+function doq_server_name(value) {
+    let host = lc(trim(as_string(value)));
+    if (host == "9.9.9.9" || host == "149.112.112.112" || host == "dns.quad9.net")
+        return "dns.quad9.net";
+    if (host == "9.9.9.11" || host == "149.112.112.11" || host == "dns11.quad9.net")
+        return "dns11.quad9.net";
+    if (host == "223.5.5.5" || host == "223.6.6.6" || host == "dns.alidns.com")
+        return "dns.alidns.com";
+    if (host == "94.140.14.14" || host == "94.140.15.15" || host == "dns.adguard-dns.com")
+        return "dns.adguard-dns.com";
+    if (host == "94.140.14.140" || host == "94.140.15.141" || host == "unfiltered.adguard-dns.com")
+        return "unfiltered.adguard-dns.com";
+    if (host == "94.140.14.15" || host == "94.140.15.16" || host == "family.adguard-dns.com")
+        return "family.adguard-dns.com";
+    return "";
+}
+
+function doh3_server_name(value) {
+    let host = lc(trim(as_string(value)));
+    if (host == "8.8.8.8" || host == "8.8.4.4" || host == "dns.google")
+        return "dns.google";
+    if (host == "1.1.1.1" || host == "1.0.0.1" || host == "cloudflare-dns.com")
+        return "cloudflare-dns.com";
+    if (host == "9.9.9.9" || host == "149.112.112.112" || host == "dns.quad9.net")
+        return "dns.quad9.net";
+    if (host == "9.9.9.11" || host == "149.112.112.11" || host == "dns11.quad9.net")
+        return "dns11.quad9.net";
+    if (host == "223.5.5.5" || host == "223.6.6.6" || host == "dns.alidns.com")
+        return "dns.alidns.com";
+    if (host == "94.140.14.14" || host == "94.140.15.15" || host == "dns.adguard-dns.com")
+        return "dns.adguard-dns.com";
+    if (host == "94.140.14.140" || host == "94.140.15.141" || host == "unfiltered.adguard-dns.com")
+        return "unfiltered.adguard-dns.com";
+    if (host == "94.140.14.15" || host == "94.140.15.16" || host == "family.adguard-dns.com")
+        return "family.adguard-dns.com";
+    return "";
+}
+
+function explicit_certificate_name(value) {
+    value = trim(as_string(value));
+    let hash = index(value, "#");
+    if (hash < 0)
+        return "";
+    return lc(trim(substr(value, hash + 1)));
+}
+
+function preset_tls_name(dns_type, host) {
+    dns_type = lc(trim(as_string(dns_type)));
+    if (dns_type == "doq")
+        return doq_server_name(host);
+    if (dns_type == "doh3")
+        return doh3_server_name(host);
+    return "";
+}
+
+function with_certificate_name(value, dns_type, extra_name) {
+    value = trim(as_string(value));
+    extra_name = lc(trim(as_string(extra_name)));
+    if (value == "" || extra_name == "" || explicit_certificate_name(value) != "")
+        return value;
+    let host = runtime_url.host(value);
+    if (host == "")
+        host = value;
+    if (!core_ip.valid_ip(host) || preset_tls_name(dns_type, host) != "")
+        return value;
+    return value + "#" + extra_name;
+}
+
 function server_list(settings, key, fallback) {
     let result = [];
+    let cert = key == "dns_server" ? option(settings, "dns_certificate_name", "") : "";
+    let dns_type = option(settings, "dns_type", "udp");
     for (let value in list_option(settings, key)) {
         value = trim(as_string(value));
-        if (value != "")
-            push(result, value);
+        if (value == "")
+            continue;
+        push(result, with_certificate_name(value, dns_type, cert));
     }
     if (length(result) == 0)
         push(result, fallback);
@@ -96,6 +167,31 @@ function active_values(settings, override_state) {
     };
 }
 
+function dns_pinned_ip(name) {
+    name = lc(trim(as_string(name)));
+    if (name == "dns.quad9.net")
+        return "9.9.9.9";
+    if (name == "dns11.quad9.net")
+        return "9.9.9.11";
+    if (name == "dns.google")
+        return "8.8.8.8";
+    if (name == "cloudflare-dns.com" || name == "one.one.one.one")
+        return "1.1.1.1";
+    if (name == "dns.alidns.com")
+        return "223.5.5.5";
+    if (name == "dns.adguard-dns.com")
+        return "94.140.14.14";
+    if (name == "unfiltered.adguard-dns.com")
+        return "94.140.14.140";
+    if (name == "family.adguard-dns.com")
+        return "94.140.14.15";
+    if (name == "doh.opendns.com" || name == "dns.opendns.com")
+        return "208.67.222.222";
+    if (name == "common.dot.dns.yandex.net")
+        return "77.88.8.8";
+    return "";
+}
+
 function server_from_options(tag_name, dns_type, dns_server, detour) {
     let server = runtime_url.host(dns_server);
     let port = runtime_url.port(dns_server);
@@ -121,11 +217,47 @@ function server_from_options(tag_name, dns_type, dns_server, detour) {
         if (path != "")
             result.path = path;
     }
+    else if (dns_type == "doq") {
+        result.type = "quic";
+        result.server_port = port != "" ? int(port, 10) : 853;
+        let explicit = explicit_certificate_name(dns_server);
+        let name = doq_server_name(server);
+        if (name == "" && explicit != "")
+            name = explicit;
+        if (name == "")
+            name = server;
+        let pin = core_ip.valid_ip(server) ? server : dns_pinned_ip(name);
+        if (pin != "")
+            result.server = pin;
+        else if (name != "")
+            result.server = name;
+        if (name != "" && !core_ip.valid_ip(name))
+            result.tls = { enabled: true, server_name: name };
+    }
+    else if (dns_type == "doh3") {
+        result.type = "h3";
+        result.server_port = port != "" ? int(port, 10) : 443;
+        let path = runtime_url.path(dns_server);
+        result.path = path != "" && path != "/" ? path : "/dns-query";
+        let explicit = explicit_certificate_name(dns_server);
+        let name = doh3_server_name(server);
+        if (name == "" && explicit != "")
+            name = explicit;
+        if (name == "")
+            name = server;
+        let pin = core_ip.valid_ip(server) ? server : dns_pinned_ip(name);
+        if (pin != "")
+            result.server = pin;
+        else if (name != "")
+            result.server = name;
+        if (name != "" && !core_ip.valid_ip(name))
+            result.tls = { enabled: true, server_name: name };
+    }
     else {
         return { unsupported: "unsupported dns_type " + dns_type };
     }
 
-    if (!core_ip.valid_ip(server))
+    if (!core_ip.valid_ip(result.server))
         result.domain_resolver = runtime_constants.BOOTSTRAP_DNS_SERVER_TAG;
     if (as_string(detour) != "")
         result.detour = as_string(detour);
@@ -309,6 +441,7 @@ return {
     runtime_state,
     server_config,
     server_from_options,
+    with_certificate_name,
     server_list,
     state_matches,
     state_template
