@@ -1284,6 +1284,47 @@ function migrate_http_connection_urls(ctx) {
     }
 }
 
+function migrate_openconnect_clients(ctx) {
+    for (let section in ctx.model.sections) {
+        let server = trim(option(section, "openconnect_server", ""));
+        if (server == "")
+            continue;
+
+        let parent = section_name(section);
+        let exists = false;
+        if (type(ctx.model.openconnect) == "array") {
+            for (let child in ctx.model.openconnect)
+                if (option(child, "section", "") == parent)
+                    exists = true;
+        }
+        if (!exists) {
+            let child = create_child_for_section(ctx, section, "openconnect");
+            set_option(ctx, child, "name", "OpenConnect");
+            set_option(ctx, child, "server", server);
+            let flavor = option(section, "openconnect_flavor", "");
+            if (flavor != "")
+                set_option(ctx, child, "flavor", flavor);
+            let username = option(section, "openconnect_username", "");
+            if (username != "")
+                set_option(ctx, child, "username", username);
+            let password = option(section, "openconnect_password", "");
+            if (password != "")
+                set_option(ctx, child, "password", password);
+            let auth_group = option(section, "openconnect_auth_group", "");
+            if (auth_group != "")
+                set_option(ctx, child, "auth_group", auth_group);
+            if (bool_option(section, "openconnect_insecure", false))
+                set_option(ctx, child, "insecure", "1");
+        }
+        delete_option(ctx, section, "openconnect_server");
+        delete_option(ctx, section, "openconnect_flavor");
+        delete_option(ctx, section, "openconnect_username");
+        delete_option(ctx, section, "openconnect_password");
+        delete_option(ctx, section, "openconnect_auth_group");
+        delete_option(ctx, section, "openconnect_insecure");
+    }
+}
+
 function migrate_router_traffic_section(ctx) {
     let settings = ctx.model.settings;
     if (!bool_option(settings, "route_router_traffic", false)) {
@@ -1300,7 +1341,8 @@ const MIGRATIONS = [
     { id: "interface_sections", run: migrate_interface_sections },
     { id: "enable_component_checks", run: migrate_enable_component_checks },
     { id: "http_connection_urls", run: migrate_http_connection_urls },
-    { id: "router_traffic_section", run: migrate_router_traffic_section }
+    { id: "router_traffic_section", run: migrate_router_traffic_section },
+    { id: "openconnect_clients", run: migrate_openconnect_clients }
 ];
 
 function apply_migrations(ctx) {
@@ -1330,8 +1372,8 @@ function apply_migrations(ctx) {
     if (added)
         set_list_option(ctx, ctx.model.settings, APPLIED_MIGRATIONS_OPTION, applied);
 
-    if (release_at_most(ctx, "1.0.8"))
-        set_option(ctx, ctx.model.settings, CONFIG_VERSION_OPTION, "1.0.9");
+    if (release_at_most(ctx, "1.0.9"))
+        set_option(ctx, ctx.model.settings, CONFIG_VERSION_OPTION, "1.0.10");
 }
 
 function migrate_podkop_model(model, constants) {

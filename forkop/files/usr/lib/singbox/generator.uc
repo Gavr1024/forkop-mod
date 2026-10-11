@@ -17,6 +17,7 @@ let list_cache = require("routing.list_cache");
 let rule_config = require("config.rule");
 let connections = require("config.connections");
 let core_ip = require("core.ip");
+let hostresolve = require("core.hostresolve");
 let engine = require("core.engine");
 let subscription_share_link = require("subscription.share_link");
 let uci = null;
@@ -107,7 +108,7 @@ function fixture_get_section(section_name) {
     if (section_name == "settings" && type(fixture.settings) == "object")
         return fixture.settings;
 
-    for (let type_name in [ "settings", "server", "section", "subscription_url", "section_interface", "urltest", "priority_group", "priority_level" ]) {
+    for (let type_name in [ "settings", "server", "section", "subscription_url", "section_interface", "openconnect", "openvpn", "urltest", "priority_group", "priority_level" ]) {
         for (let section in fixture_section_list(type_name)) {
             if (as_string(section[".name"]) == section_name)
                 return section;
@@ -331,11 +332,11 @@ function read_command_output(command) {
 
 function parse_sing_box_core_version(text) {
     text = as_string(text);
-    let m = match(text, /sing-box version[ \t]+([0-9]+)\.([0-9]+)/);
+    let m = match(text, /sing-box version[ \t]+v?([0-9]+)\.([0-9]+)/);
     if (m != null)
         return { major: int(m[1]), minor: int(m[2]) };
 
-    m = match(text, /(^|[ \t\/])([0-9]+)\.([0-9]+)\.[0-9]+-extended/);
+    m = match(text, /(^|[ \t\/])v?([0-9]+)\.([0-9]+)\.[0-9]+/);
     if (m != null)
         return { major: int(m[2]), minor: int(m[3]) };
 
@@ -382,6 +383,11 @@ function purge_incompatible_sing_box_cache() {
 function sing_box_at_least_1_14() {
     let v = sing_box_major_minor();
     return v.major > 1 || (v.major == 1 && v.minor >= 14);
+}
+
+function sing_box_at_least_1_15() {
+    let v = sing_box_major_minor();
+    return v.major > 1 || (v.major == 1 && v.minor >= 15);
 }
 
 const RULESET_HTTP_CLIENT_TAG = "ruleset-http";
@@ -2310,6 +2316,1102 @@ function add_connection_interfaces(config, state, section, taken, selector_tags,
         add_interface_connection_outbound(config, state, section, i + 1, items[i], taken, selector_tags, urltest_candidate_tags);
 }
 
+function openconnect_peer_fingerprint(value) {
+    value = trim(as_string(value));
+    value = replace(value, /[ \t]/g, "");
+    if (value == "")
+        return "";
+    let lower = lc(value);
+    if (substr(lower, 0, 11) == "pin-sha256:")
+        return value;
+    return replace(value, /:/g, "");
+}
+
+function openconnect_flavor(section) {
+    let flavor = lc(option(section, "flavor", ""));
+    if (flavor == "")
+        flavor = lc(option(section, "openconnect_flavor", "anyconnect"));
+    for (let item in [ "anyconnect", "gp", "fortinet", "f5", "pulse", "nc" ])
+        if (item == flavor)
+            return flavor;
+    return "anyconnect";
+}
+
+function openconnect_shell_quote(value) {
+    return "'" + replace(as_string(value), /'/g, "'\\''") + "'";
+}
+
+function openconnect_is_ipv4(value) {
+    return match(trim(as_string(value)), /^[0-9]+(\.[0-9]+){3}$/) != null;
+}
+
+function openconnect_server_target(value) {
+    value = trim(as_string(value));
+    value = replace(value, /^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "");
+    let slash = index(value, "/");
+    if (slash >= 0)
+        value = substr(value, 0, slash);
+    let host = value;
+    let port = "";
+    let matched = match(value, /^(.*):([0-9]+)$/);
+    if (matched) {
+        let parsed_port = int(matched[2], 10);
+        if (parsed_port > 0 && parsed_port < 65536) {
+            host = matched[1];
+            port = as_string(parsed_port);
+        }
+    }
+    return { host: host, port: port };
+}
+
+function openconnect_bootstrap_resolvers() {
+    let resolvers = [];
+    for (let value in list_option(runtime_settings(), "bootstrap_dns_server")) {
+        value = trim(as_string(value));
+        let hash = index(value, "#");
+        if (hash >= 0)
+            value = substr(value, 0, hash);
+        value = replace(value, /^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "");
+        if (openconnect_is_ipv4(value))
+            push(resolvers, value);
+    }
+    if (length(resolvers) == 0)
+        push(resolvers, "77.88.8.8");
+    return resolvers;
+}
+
+function openconnect_nslookup_ipv4(host, resolver) {
+    let stamp = clock();
+    let path = sprintf("/tmp/forkop/oc-dns-%d-%d.out", stamp[0], stamp[1]);
+    system("mkdir -p /tmp/forkop");
+    system(
+        "nslookup " + openconnect_shell_quote(host) + " " + openconnect_shell_quote(resolver) +
+        " </dev/null >" + openconnect_shell_quote(path) + " 2>/dev/null & " +
+        "pid=$!; i=0; " +
+        "while [ \"$i\" -lt 5 ]; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; i=$((i+1)); done; " +
+        "kill \"$pid\" 2>/dev/null; wait \"$pid\" 2>/dev/null"
+    );
+    let raw = "";
+    try {
+        raw = fs.readfile(path);
+    }
+    catch (e) {
+        raw = "";
+    }
+    fs.unlink(path);
+    for (let ip in hostresolve.parse_nslookup(raw, resolver))
+        if (openconnect_is_ipv4(ip))
+            return ip;
+    return "";
+}
+
+function openconnect_direct_ipv4(host) {
+    host = lc(trim(host));
+    if (openconnect_is_ipv4(host))
+        return host;
+    if (host == "" || match(host, /^[a-z0-9._-]+$/) == null)
+        return "";
+
+    for (let resolver in openconnect_bootstrap_resolvers()) {
+        let ip = openconnect_nslookup_ipv4(host, resolver);
+        if (ip != "")
+            return ip;
+    }
+    return "";
+}
+
+function openconnect_log(message) {
+    system("logger -t forkop " + openconnect_shell_quote("[error] " + as_string(message)) + " >/dev/null 2>&1");
+}
+
+function openconnect_notice(message) {
+    system("logger -t forkop " + openconnect_shell_quote("[info] " + as_string(message)) + " >/dev/null 2>&1");
+}
+
+function openconnect_parse_cookie(raw) {
+    for (let line in split(as_string(raw), "\n")) {
+        line = trim(line);
+        let matched = match(line, /^COOKIE=(.*)$/);
+        if (!matched)
+            continue;
+        let value = trim(matched[1]);
+        let quote = substr(value, 0, 1);
+        if ((quote == "'" || quote == "\"") && substr(value, -1) == quote && length(value) >= 2)
+            value = substr(value, 1, length(value) - 2);
+        return trim(value);
+    }
+    return "";
+}
+
+function openconnect_parse_sha(raw) {
+    for (let line in split(as_string(raw), "\n")) {
+        let pin = match(line, /pin-sha256:[A-Za-z0-9+/=]+/);
+        if (pin)
+            return openconnect_peer_fingerprint(pin[0]);
+        let labeled = match(line, /SHA256:[ \t]*([0-9A-Fa-f:]+)/);
+        if (labeled && length(replace(labeled[1], /:/g, "")) >= 32)
+            return openconnect_peer_fingerprint(labeled[1]);
+        let plain = match(line, /sha256:([0-9A-Fa-f]+)/);
+        if (plain && length(plain[1]) >= 32)
+            return openconnect_peer_fingerprint(plain[1]);
+    }
+    return "";
+}
+
+function openconnect_peer_key(server) {
+    return lc(trim(as_string(server)));
+}
+
+function openconnect_peer_store() {
+    let parsed = null;
+    try {
+        parsed = json(fs.readfile("/etc/forkop/oc-peer.json"));
+    }
+    catch (e) {
+        parsed = null;
+    }
+    if (type(parsed) != "object" || parsed == null)
+        return {};
+    return parsed;
+}
+
+function openconnect_peer_get(server) {
+    let item = openconnect_peer_store()[openconnect_peer_key(server)];
+    if (type(item) != "object" || item == null)
+        return {};
+    return item;
+}
+
+function openconnect_peer_put(server, patch) {
+    let key = openconnect_peer_key(server);
+    if (key == "")
+        return;
+    let all = openconnect_peer_store();
+    let item = all[key];
+    if (type(item) != "object" || item == null)
+        item = {};
+    patch = object_or_empty(patch);
+    for (let field in patch)
+        item[field] = patch[field];
+    all[key] = item;
+    system("mkdir -p /etc/forkop >/dev/null 2>&1");
+    fs.writefile("/etc/forkop/oc-peer.json", sprintf("%J\n", all));
+}
+
+function openconnect_cookie_auto(client) {
+    return bool_option(client, "cookie_auto", true);
+}
+
+function openconnect_servers_without_cookie() {
+    let disabled = {};
+    uci_cursor().load(CONFIG_NAME);
+    for (let section in enabled_sections("")) {
+        for (let client in connections.openconnect_clients(section)) {
+            if (openconnect_cookie_auto(client))
+                continue;
+            let server = trim(option(client, "server", ""));
+            if (server == "")
+                continue;
+            let target = openconnect_server_target(server);
+            let key = target.port == "" ? target.host : target.host + ":" + target.port;
+            disabled[openconnect_peer_key(key)] = true;
+        }
+    }
+    return disabled;
+}
+
+function openconnect_servercert(fingerprint) {
+    fingerprint = trim(as_string(fingerprint));
+    if (fingerprint == "")
+        return "";
+    let lower = lc(fingerprint);
+    if (substr(lower, 0, 11) == "pin-sha256:" || substr(lower, 0, 7) == "sha256:")
+        return fingerprint;
+    return "sha256:" + fingerprint;
+}
+
+function openconnect_failure_text(raw, password) {
+    let lines = [];
+    for (let line in split(as_string(raw), "\n")) {
+        if (index(line, "COOKIE=") >= 0)
+            continue;
+        if (password != "" && index(line, password) >= 0)
+            line = replace(line, password, "***");
+        line = trim(line);
+        if (line != "")
+            push(lines, line);
+    }
+    let reason = join(" ", lines);
+    if (length(reason) > 180)
+        reason = substr(reason, 0, 180);
+    return reason;
+}
+
+function openconnect_port_from_map(path, name) {
+    let parsed = null;
+    try {
+        parsed = json(fs.readfile(path));
+    }
+    catch (e) {
+        return 0;
+    }
+    if (type(parsed) != "object" || parsed == null)
+        return 0;
+    let port = int(parsed[name] || 0);
+    if (port <= 0 || port >= 65536)
+        return 0;
+    return port;
+}
+
+function openconnect_detour_socks_port(section) {
+    let name = trim(option(section, "outbound_detour_section", ""));
+    if (name == "")
+        return 0;
+    let cascade = openconnect_port_from_map("/var/run/forkop/openconnect-cascade.json", name);
+    if (cascade > 0)
+        return cascade;
+    return openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+}
+
+function openconnect_duration(value) {
+    value = trim(as_string(value));
+    if (match(value, /^[0-9]+(ms|s|m|h)$/) == null)
+        return "";
+    return value;
+}
+
+function openconnect_fetch_cookie(label, server, username, password, auth_group, fingerprint, proxy_port, flavor, soft) {
+    if (trim(username) == "" || password == "") {
+        if (!soft)
+            openconnect_log("OpenConnect '" + label + "' was not started: username and password are required to obtain a session cookie.");
+        return "";
+    }
+    let stamp = clock();
+    let suffix = sprintf("%d-%d", stamp[0], stamp[1]);
+    let out_path = "/tmp/forkop/oc-auth-" + suffix + ".out";
+    let pass_path = "/tmp/forkop/oc-auth-" + suffix + ".pass";
+    system("mkdir -p /tmp/forkop");
+    if (fs.writefile(pass_path, password + "\n") == null) {
+        if (!soft)
+            openconnect_log("OpenConnect '" + label + "' was not started: could not store credentials for openconnect.");
+        return "";
+    }
+    system("chmod 600 " + openconnect_shell_quote(pass_path) + " >/dev/null 2>&1");
+    let protocol = trim(as_string(flavor));
+    if (protocol == "")
+        protocol = "anyconnect";
+    let command = "openconnect --protocol=" + openconnect_shell_quote(protocol) +
+        " --authenticate --non-inter --passwd-on-stdin --user=" +
+        openconnect_shell_quote(username);
+    if (trim(auth_group) != "")
+        command += " --authgroup=" + openconnect_shell_quote(auth_group);
+    let servercert = openconnect_servercert(fingerprint);
+    if (servercert != "")
+        command += " --servercert=" + openconnect_shell_quote(servercert);
+    proxy_port = int(proxy_port || 0);
+    if (proxy_port > 0)
+        command += " --proxy=" + openconnect_shell_quote("socks5://127.0.0.1:" + proxy_port);
+    command += " " + openconnect_shell_quote(server) +
+        " <" + openconnect_shell_quote(pass_path) +
+        " >" + openconnect_shell_quote(out_path) + " 2>&1 & " +
+        "pid=$!; i=0; " +
+        "while [ \"$i\" -lt 25 ]; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; i=$((i+1)); done; " +
+        "kill \"$pid\" 2>/dev/null; wait \"$pid\" 2>/dev/null";
+    system(command);
+    let raw = "";
+    try {
+        raw = fs.readfile(out_path);
+    }
+    catch (e) {
+        raw = "";
+    }
+    system("rm -f " + openconnect_shell_quote(pass_path) + " " + openconnect_shell_quote(out_path) + " >/dev/null 2>&1");
+    let learned = openconnect_parse_sha(raw);
+    if (learned != "")
+        openconnect_peer_put(server, { sha: learned });
+    let cookie = openconnect_parse_cookie(raw);
+    if (cookie == "" && trim(as_string(fingerprint)) == "" && learned != "") {
+        openconnect_notice("OpenConnect '" + label + "' learned the server certificate SHA256 and will retry.");
+        return openconnect_fetch_cookie(label, server, username, password, auth_group, learned, proxy_port, flavor, soft);
+    }
+    if (cookie == "") {
+        let reason = openconnect_failure_text(raw, password);
+        let message = "OpenConnect '" + label + "' " + (soft ? "could not obtain a direct session cookie." : "was not started: openconnect did not return a session cookie.");
+        if (reason != "")
+            message += " " + reason;
+        if (soft)
+            openconnect_notice(message);
+        else
+            openconnect_log(message);
+        return "";
+    }
+    openconnect_notice("OpenConnect '" + label + "' obtained a session cookie.");
+    return cookie;
+}
+
+function add_openconnect_connection(config, state, section, taken, selector_tags, urltest_candidate_tags) {
+    if (!sing_box_at_least_1_14())
+        return;
+
+    let index = 0;
+    for (let client in connections.openconnect_clients(section)) {
+        index++;
+        let server = trim(option(client, "server", ""));
+        if (server == "")
+            continue;
+
+        let label = trim(option(client, "name", ""));
+        if (label == "")
+            label = "OpenConnect " + index;
+        let tag_name = unique_tag(section[".name"] + "-openconnect-" + index, taken);
+        let endpoint = {
+            type: "openconnect",
+            tag: tag_name,
+            system: false,
+            server: server,
+            flavor: openconnect_flavor(client),
+            routing_mark: runtime_constants.OUTBOUND_MARK,
+            domain_resolver: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+        };
+        let username = option(client, "username", "");
+        if (username == "")
+            username = option(client, "openconnect_username", "");
+        if (username != "")
+            endpoint.username = username;
+        let password = option(client, "password", "");
+        if (password == "")
+            password = option(client, "openconnect_password", "");
+        if (password != "")
+            endpoint.password = password;
+        let auth_group = option(client, "auth_group", "");
+        if (auth_group == "")
+            auth_group = option(client, "openconnect_auth_group", "");
+        if (auth_group != "")
+            endpoint.auth_group = auth_group;
+        if (bool_option(client, "insecure", false) || bool_option(client, "openconnect_insecure", false))
+            endpoint.tls = { insecure: true };
+        let fingerprint = openconnect_peer_fingerprint(option(client, "server_sha", ""));
+        let saved_target = openconnect_server_target(server);
+        let saved_key = saved_target.port == "" ? saved_target.host : saved_target.host + ":" + saved_target.port;
+        if (fingerprint == "")
+            fingerprint = openconnect_peer_fingerprint(openconnect_peer_get(saved_key).sha);
+        if (fingerprint != "") {
+            if (type(endpoint.tls) != "object")
+                endpoint.tls = {};
+            endpoint.tls.peer_fingerprint = fingerprint;
+        }
+        if (bool_option(client, "advanced", false)) {
+            if (openconnect_cookie_auto(client)) {
+                let cookie = trim(option(client, "cookie", ""));
+                if (cookie != "")
+                    endpoint.cookie = cookie;
+            }
+            if (bool_option(client, "no_udp", false))
+                endpoint.no_udp = true;
+            if (bool_option(client, "disable_ipv6", false))
+                endpoint.ipv6_disabled = true;
+            let mtu = int(option(client, "mtu", "0"));
+            if (mtu > 0)
+                endpoint.mtu = mtu;
+            let dpd_interval = openconnect_duration(option(client, "dpd_interval", ""));
+            if (dpd_interval != "")
+                endpoint.dpd_interval = dpd_interval;
+            let reconnect_timeout = openconnect_duration(option(client, "reconnect_timeout", ""));
+            if (reconnect_timeout != "")
+                endpoint.reconnect_timeout = reconnect_timeout;
+            if (bool_option(client, "keepalive", false))
+                endpoint.tcp_keep_alive_enabled = true;
+            if (bool_option(client, "compression_disabled", false))
+                endpoint.compression_disabled = true;
+            if (bool_option(client, "on_demand", false) && sing_box_at_least_1_15())
+                endpoint.on_demand = true;
+            let server_name = trim(option(client, "server_name", ""));
+            if (server_name != "") {
+                if (type(endpoint.tls) != "object")
+                    endpoint.tls = {};
+                endpoint.tls.server_name = server_name;
+            }
+            let cert = trim(option(client, "client_certificate", ""));
+            let key = trim(option(client, "client_key", ""));
+            if (cert != "" && key != "") {
+                if (type(endpoint.tls) != "object")
+                    endpoint.tls = {};
+                endpoint.tls.client_certificate = [ cert ];
+                endpoint.tls.client_key = [ key ];
+                let key_password = option(client, "client_key_password", "");
+                if (key_password != "")
+                    endpoint.tls.client_key_password = key_password;
+            }
+        }
+        let detour_tag = outbound_detour_tag_for_section(section);
+        if (detour_tag != "") {
+            let target = openconnect_server_target(server);
+            let ip = openconnect_direct_ipv4(target.host);
+            if (ip == "") {
+                openconnect_log("OpenConnect '" + label + "' was not started: direct DNS did not resolve " + target.host + ".");
+                continue;
+            }
+            endpoint.server = target.port == "" ? ip : "https://" + ip + ":" + target.port;
+            endpoint.detour = detour_tag;
+            let existing_name = type(endpoint.tls) == "object" ? trim(as_string(endpoint.tls.server_name || "")) : "";
+            if (existing_name == "" && !openconnect_is_ipv4(target.host)) {
+                if (type(endpoint.tls) != "object")
+                    endpoint.tls = {};
+                endpoint.tls.server_name = target.host;
+            }
+            if (trim(as_string(endpoint.cookie || "")) == "" && openconnect_cookie_auto(client)) {
+                let auth_host = openconnect_is_ipv4(target.host) && existing_name != "" ? existing_name : target.host;
+                if (type(endpoint.tls) == "object") {
+                    let configured_name = trim(as_string(endpoint.tls.server_name || ""));
+                    if (configured_name != "" && openconnect_is_ipv4(target.host))
+                        auth_host = configured_name;
+                }
+                let auth_server = target.port == "" ? auth_host : auth_host + ":" + target.port;
+                let proxy_port = openconnect_detour_socks_port(section);
+                if (proxy_port <= 0) {
+                    openconnect_log("OpenConnect '" + label + "' was not started: cascade SOCKS port is not ready.");
+                    continue;
+                }
+                let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, proxy_port, openconnect_flavor(client), false);
+                if (cookie == "")
+                    continue;
+                endpoint.cookie = cookie;
+                let learned_sha = openconnect_peer_fingerprint(openconnect_peer_get(saved_key).sha);
+                if (option(client, "server_sha", "") == "" && learned_sha != "") {
+                    if (type(endpoint.tls) != "object")
+                        endpoint.tls = {};
+                    endpoint.tls.peer_fingerprint = learned_sha;
+                }
+            }
+        }
+        else if (trim(as_string(endpoint.cookie || "")) == "" && username != "" && password != "" &&
+            openconnect_cookie_auto(client)) {
+            let target = openconnect_server_target(server);
+            let auth_host = target.host;
+            if (type(endpoint.tls) == "object") {
+                let configured_name = trim(as_string(endpoint.tls.server_name || ""));
+                if (configured_name != "" && openconnect_is_ipv4(target.host))
+                    auth_host = configured_name;
+            }
+            let auth_server = target.port == "" ? auth_host : auth_host + ":" + target.port;
+            let flavor = openconnect_flavor(client);
+            let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, 0, flavor, true);
+            if (cookie == "" && trim(auth_group) == "")
+                cookie = openconnect_fetch_cookie(label, auth_server, username, password, "all", fingerprint, 0, flavor, true);
+            if (cookie != "")
+                endpoint.cookie = cookie;
+            let learned_sha = openconnect_peer_fingerprint(openconnect_peer_get(saved_key).sha);
+            if (option(client, "server_sha", "") == "" && learned_sha != "") {
+                if (type(endpoint.tls) != "object")
+                    endpoint.tls = {};
+                endpoint.tls.peer_fingerprint = learned_sha;
+            }
+        }
+        if (type(config.endpoints) != "array")
+            config.endpoints = [];
+        push(config.endpoints, endpoint);
+        push(selector_tags, tag_name);
+        push(urltest_candidate_tags, tag_name);
+        runtime_subscription.remember_outbound_metadata(state, tag_name, label, { type: "OpenConnect" });
+        let probe_port = int(config.__oc_probe_next || 0);
+        if (probe_port < 4700)
+            probe_port = 4700;
+        config.__oc_probe_next = probe_port + 1;
+        if (type(config.__oc_probe_ports) != "object" || config.__oc_probe_ports == null)
+            config.__oc_probe_ports = {};
+        config.__oc_probe_ports[tag_name] = probe_port;
+        if (type(config.inbounds) != "array")
+            config.inbounds = [];
+        let probe_tag = "oc-probe-" + tag_name;
+        push(config.inbounds, {
+            type: "mixed",
+            tag: probe_tag,
+            listen: "127.0.0.1",
+            listen_port: probe_port
+        });
+        if (type(config.route) != "object" || config.route == null)
+            config.route = { rules: [] };
+        if (type(config.route.rules) != "array")
+            config.route.rules = [];
+        push(config.route.rules, {
+            action: "route",
+            inbound: probe_tag,
+            outbound: tag_name
+        });
+    }
+}
+
+function openvpn_extract_block(text, tag_name) {
+    let start = "<" + tag_name + ">";
+    let from = index(text, start);
+    if (from < 0)
+        return "";
+    let rest = substr(text, from + length(start));
+    let end_at = index(rest, "</" + tag_name + ">");
+    if (end_at < 0)
+        return "";
+    return trim(substr(rest, 0, end_at));
+}
+
+function openvpn_tokens(line) {
+    let parts = [];
+    for (let part in split(line, /[ \t]+/)) {
+        part = trim(as_string(part));
+        if (part != "")
+            push(parts, part);
+    }
+    return parts;
+}
+
+function openvpn_network(value) {
+    value = lc(trim(as_string(value)));
+    if (index(value, "tcp") == 0)
+        return "tcp";
+    if (index(value, "udp") == 0)
+        return "udp";
+    return "";
+}
+
+function openvpn_seconds(value) {
+    value = trim(as_string(value));
+    if (match(value, /^[0-9]+$/) == null)
+        return "";
+    return value + "s";
+}
+
+function openvpn_pem_blocks(value) {
+    let text = replace(as_string(value), /\r/g, "");
+    let blocks = [];
+    while (index(text, "-----BEGIN ") >= 0) {
+        let start = index(text, "-----BEGIN ");
+        let rest = substr(text, start);
+        let end_at = index(rest, "-----END ");
+        if (end_at < 0)
+            break;
+        let tail = substr(rest, end_at);
+        let line_end = index(tail, "\n");
+        let block = line_end < 0 ? rest : substr(rest, 0, end_at + line_end);
+        block = trim(block);
+        if (index(block, "-----BEGIN ") >= 0 && index(block, "-----END ") >= 0)
+            push(blocks, block);
+        text = line_end < 0 ? "" : substr(rest, end_at + line_end + 1);
+    }
+    return blocks;
+}
+
+function openvpn_pem_or_empty(value) {
+    value = trim(as_string(value));
+    if (index(value, "-----BEGIN ") < 0)
+        return "";
+    return value;
+}
+
+function openvpn_parse_config(text) {
+    text = replace(as_string(text), /\r/g, "");
+    let parsed = {
+        remotes: [],
+        remote_random: false,
+        username: "",
+        password: "",
+        ca: openvpn_extract_block(text, "ca"),
+        cert: openvpn_extract_block(text, "cert"),
+        key: openvpn_extract_block(text, "key"),
+        secret: openvpn_extract_block(text, "secret"),
+        control_type: "",
+        control_key: "",
+        key_direction: "",
+        ca_path: "",
+        cert_path: "",
+        key_path: "",
+        secret_path: "",
+        control_path: "",
+        network: "",
+        data_ciphers: [],
+        data_ciphers_fallback: "",
+        auth: "",
+        mtu: 0,
+        ping: "",
+        ping_restart: "",
+        route_no_pull: false,
+        server_name: "",
+        server_name_type: "",
+        remote_certificate_tls: "",
+        compression: "",
+        compression_lzo: "",
+        block_ipv6: false,
+        local_address: "",
+        peer_address: "",
+        default_port: 1194
+    };
+    let auth_block = openvpn_extract_block(text, "auth-user-pass");
+    if (auth_block != "") {
+        let auth_lines = split(auth_block, "\n");
+        parsed.username = trim(as_string(auth_lines[0] || ""));
+        parsed.password = trim(as_string(auth_lines[1] || ""));
+    }
+    for (let tag_name in [ "tls-crypt-v2", "tls-crypt", "tls-auth" ]) {
+        let block = openvpn_extract_block(text, tag_name);
+        if (block == "")
+            continue;
+        parsed.control_type = replace(tag_name, /-/g, "_");
+        parsed.control_key = block;
+        break;
+    }
+
+    let skipping = false;
+    for (let line in split(text, "\n")) {
+        line = trim(replace(as_string(line), /\r/g, ""));
+        let opener = match(line, /^<([A-Za-z0-9_-]+)>/);
+        if (opener) {
+            let tag_name = lc(as_string(opener[1]));
+            if (tag_name != "connection")
+                skipping = true;
+            continue;
+        }
+        if (match(line, /^<\//) != null) {
+            skipping = false;
+            continue;
+        }
+        if (skipping || line == "" || match(line, /^[#;]/) != null)
+            continue;
+        let tokens = openvpn_tokens(line);
+        if (length(tokens) == 0)
+            continue;
+        let key_name = lc(tokens[0]);
+        if (key_name == "remote" && length(tokens) >= 2) {
+            let network = length(tokens) >= 4 ? openvpn_network(tokens[3]) : "";
+            let port = length(tokens) >= 3 ? int(tokens[2]) : 0;
+            push(parsed.remotes, {
+                server: tokens[1],
+                port: port,
+                network: network
+            });
+        }
+        else if (key_name == "port" && length(tokens) >= 2)
+            parsed.default_port = int(tokens[1]);
+        else if (key_name == "proto" && length(tokens) >= 2) {
+            let network = openvpn_network(tokens[1]);
+            if (network != "")
+                parsed.network = network;
+        }
+        else if (key_name == "remote-random")
+            parsed.remote_random = true;
+        else if (key_name == "ca" && length(tokens) >= 2 && parsed.ca == "")
+            parsed.ca_path = tokens[1];
+        else if (key_name == "cert" && length(tokens) >= 2 && parsed.cert == "")
+            parsed.cert_path = tokens[1];
+        else if (key_name == "key" && length(tokens) >= 2 && parsed.key == "")
+            parsed.key_path = tokens[1];
+        else if (key_name == "secret" && length(tokens) >= 2 && parsed.secret == "")
+            parsed.secret_path = tokens[1];
+        else if ((key_name == "tls-auth" || key_name == "tls-crypt" || key_name == "tls-crypt-v2") && parsed.control_key == "") {
+            parsed.control_type = replace(key_name, /-/g, "_");
+            if (length(tokens) >= 2)
+                parsed.control_path = tokens[1];
+            if (key_name == "tls-auth" && length(tokens) >= 3)
+                parsed.key_direction = tokens[2] == "0" ? "server" : "client";
+        }
+        else if (key_name == "key-direction" && length(tokens) >= 2)
+            parsed.key_direction = tokens[1] == "0" ? "server" : "client";
+        else if (key_name == "data-ciphers" && length(tokens) >= 2) {
+            for (let cipher in split(tokens[1], ":")) {
+                cipher = trim(cipher);
+                if (cipher != "")
+                    push(parsed.data_ciphers, cipher);
+            }
+        }
+        else if (key_name == "data-ciphers-fallback" && length(tokens) >= 2)
+            parsed.data_ciphers_fallback = tokens[1];
+        else if (key_name == "cipher" && length(tokens) >= 2 && length(parsed.data_ciphers) == 0)
+            push(parsed.data_ciphers, tokens[1]);
+        else if (key_name == "auth" && length(tokens) >= 2)
+            parsed.auth = tokens[1];
+        else if (key_name == "tun-mtu" && length(tokens) >= 2)
+            parsed.mtu = int(tokens[1]);
+        else if (key_name == "ping" && length(tokens) >= 2)
+            parsed.ping = openvpn_seconds(tokens[1]);
+        else if (key_name == "ping-restart" && length(tokens) >= 2)
+            parsed.ping_restart = openvpn_seconds(tokens[1]);
+        else if (key_name == "route-nopull")
+            parsed.route_no_pull = true;
+        else if (key_name == "block-ipv6")
+            parsed.block_ipv6 = true;
+        else if (key_name == "remote-cert-tls" && length(tokens) >= 2)
+            parsed.remote_certificate_tls = lc(tokens[1]);
+        else if (key_name == "verify-x509-name" && length(tokens) >= 2) {
+            parsed.server_name = tokens[1];
+            parsed.server_name_type = length(tokens) >= 3 ? lc(tokens[2]) : "name";
+        }
+        else if (key_name == "compress" && length(tokens) >= 2)
+            parsed.compression = lc(tokens[1]);
+        else if (key_name == "comp-lzo")
+            parsed.compression_lzo = length(tokens) >= 2 ? lc(tokens[1]) : "adaptive";
+        else if (key_name == "ifconfig" && length(tokens) >= 3) {
+            parsed.local_address = tokens[1];
+            parsed.peer_address = tokens[2];
+        }
+    }
+    let fallback_port = int(parsed.default_port || 0);
+    if (fallback_port <= 0)
+        fallback_port = 1194;
+    let filled = [];
+    for (let remote in parsed.remotes) {
+        remote = object_or_empty(remote);
+        if (int(remote.port || 0) <= 0)
+            remote.port = fallback_port;
+        push(filled, remote);
+    }
+    parsed.remotes = filled;
+    return parsed;
+}
+
+function openvpn_assign_material(target, inline_key, path_key, inline_value, path_value) {
+    let blocks = openvpn_pem_blocks(inline_value);
+    path_value = trim(as_string(path_value));
+    if (length(blocks) > 0)
+        target[inline_key] = blocks;
+    else if (path_value != "")
+        target[path_key] = path_value;
+}
+
+function openvpn_fill_tls(endpoint, parsed, client) {
+    if (type(endpoint.tls) != "object")
+        endpoint.tls = {};
+    openvpn_assign_material(endpoint.tls, "certificate", "certificate_path", parsed.ca, parsed.ca_path);
+    openvpn_assign_material(endpoint.tls, "client_certificate", "client_certificate_path", parsed.cert, parsed.cert_path);
+    openvpn_assign_material(endpoint.tls, "client_key", "client_key_path", parsed.key, parsed.key_path);
+    let has_cert = endpoint.tls.client_certificate != null || trim(as_string(endpoint.tls.client_certificate_path || "")) != "";
+    let has_key = endpoint.tls.client_key != null || trim(as_string(endpoint.tls.client_key_path || "")) != "";
+    if (has_cert != has_key) {
+        delete endpoint.tls.client_certificate;
+        delete endpoint.tls.client_certificate_path;
+        delete endpoint.tls.client_key;
+        delete endpoint.tls.client_key_path;
+    }
+    let key_password = option(client, "client_key_password", "");
+    if (key_password != "")
+        endpoint.tls.client_key_password = key_password;
+    if (parsed.server_name != "") {
+        endpoint.tls.server_name = parsed.server_name;
+        if (parsed.server_name_type == "subject" || parsed.server_name_type == "name" || parsed.server_name_type == "name-prefix")
+            endpoint.tls.server_name_type = parsed.server_name_type;
+    }
+    if (parsed.remote_certificate_tls == "server" || parsed.remote_certificate_tls == "client" || parsed.remote_certificate_tls == "none")
+        endpoint.tls.remote_certificate_tls = parsed.remote_certificate_tls;
+    if (parsed.control_key != "" || parsed.control_path != "") {
+        let wrap = { type: parsed.control_type != "" ? parsed.control_type : "tls_auth" };
+        openvpn_assign_material(wrap, "key", "key_path", parsed.control_key, parsed.control_path);
+        if (wrap.key == null && trim(as_string(wrap.key_path || "")) == "")
+            wrap = null;
+        if (wrap != null && wrap.type == "tls_auth" && (parsed.key_direction == "server" || parsed.key_direction == "client"))
+            wrap.direction = parsed.key_direction;
+        if (wrap != null)
+            endpoint.tls.control_wrap = wrap;
+    }
+}
+
+function openvpn_apply_common(endpoint, parsed, client) {
+    let static_key = as_string(endpoint.mode) == "static_key";
+    if (!static_key) {
+        if (parsed.username != "")
+            endpoint.username = parsed.username;
+        if (parsed.password != "")
+            endpoint.password = parsed.password;
+        let username = trim(option(client, "username", ""));
+        let password = option(client, "password", "");
+        if (username != "")
+            endpoint.username = username;
+        if (password != "")
+            endpoint.password = password;
+        if (length(parsed.data_ciphers) > 0)
+            endpoint.data_ciphers = parsed.data_ciphers;
+        if (parsed.data_ciphers_fallback != "")
+            endpoint.data_ciphers_fallback = parsed.data_ciphers_fallback;
+        if (parsed.auth != "")
+            endpoint.auth = parsed.auth;
+    }
+    else if (length(parsed.data_ciphers) > 0) {
+        endpoint.cipher = parsed.data_ciphers[0];
+    }
+    if (parsed.remote_random)
+        endpoint.remote_random = true;
+    if (parsed.network != "")
+        endpoint.network = parsed.network;
+    if (parsed.mtu > 0)
+        endpoint.mtu = parsed.mtu;
+    if (parsed.ping != "")
+        endpoint.ping_interval = parsed.ping;
+    if (parsed.ping_restart != "")
+        endpoint.ping_restart = parsed.ping_restart;
+    if (parsed.route_no_pull)
+        endpoint.route_no_pull = true;
+    if (parsed.block_ipv6)
+        endpoint.block_ipv6 = true;
+    if (parsed.compression != "")
+        endpoint.compression = parsed.compression;
+    if (parsed.compression_lzo != "")
+        endpoint.compression_lzo = parsed.compression_lzo;
+    if (parsed.compression != "" && parsed.compression != "none" && parsed.compression != "no" && parsed.compression != "disabled" && parsed.compression != "off")
+        endpoint.allow_compression = "yes";
+    if (parsed.compression_lzo != "" && parsed.compression_lzo != "none" && parsed.compression_lzo != "no" && parsed.compression_lzo != "disabled" && parsed.compression_lzo != "off")
+        endpoint.allow_compression = "yes";
+    endpoint.route_no_pull = true;
+    if (bool_option(client, "advanced", false)) {
+        let mtu = int(option(client, "mtu", "0"));
+        if (mtu > 0)
+            endpoint.mtu = mtu;
+        if (bool_option(client, "on_demand", false) && sing_box_at_least_1_15())
+            endpoint.on_demand = true;
+        if (bool_option(client, "allow_compression", false))
+            endpoint.allow_compression = "yes";
+        let ping_interval = openconnect_duration(option(client, "ping_interval", ""));
+        if (ping_interval != "")
+            endpoint.ping_interval = ping_interval;
+        let ping_restart = openconnect_duration(option(client, "ping_restart", ""));
+        if (ping_restart != "")
+            endpoint.ping_restart = ping_restart;
+    }
+}
+
+function openvpn_from_parsed(parsed, client) {
+    if (parsed.secret != "" || parsed.secret_path != "") {
+        if (parsed.local_address == "" || parsed.peer_address == "")
+            return null;
+        let endpoint = {
+            type: "openvpn-client",
+            mode: "static_key",
+            system: false,
+            address: [ parsed.local_address + "/32" ],
+            peer_address: parsed.peer_address,
+            topology: "p2p",
+            routing_mark: runtime_constants.OUTBOUND_MARK,
+            domain_resolver: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+        };
+        openvpn_assign_material(endpoint, "static_key", "static_key_path", parsed.secret, parsed.secret_path);
+        if (parsed.key_direction == "server" || parsed.key_direction == "client")
+            endpoint.key_direction = parsed.key_direction;
+        openvpn_apply_common(endpoint, parsed, client);
+        return endpoint;
+    }
+    let endpoint = {
+        type: "openvpn-client",
+        mode: "tls",
+        system: false,
+        routing_mark: runtime_constants.OUTBOUND_MARK,
+        domain_resolver: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+    };
+    openvpn_fill_tls(endpoint, parsed, client);
+    if (endpoint.tls.certificate == null && trim(as_string(endpoint.tls.certificate_path || "")) == "")
+        return null;
+    openvpn_apply_common(endpoint, parsed, client);
+    return endpoint;
+}
+
+function openvpn_set_remotes(endpoint, remotes, network) {
+    let usable = [];
+    for (let remote in remotes) {
+        remote = object_or_empty(remote);
+        let server = trim(as_string(remote.server || ""));
+        let port = int(remote.port || 0);
+        if (server == "" || port <= 0 || port >= 65536)
+            continue;
+        let item = { server: server, server_port: port };
+        let item_network = remote.network != "" ? remote.network : network;
+        if (item_network == "tcp" || item_network == "udp")
+            item.network = item_network;
+        push(usable, item);
+    }
+    if (length(usable) == 0)
+        return false;
+    if (length(usable) == 1) {
+        endpoint.server = usable[0].server;
+        endpoint.server_port = usable[0].server_port;
+        if (usable[0].network)
+            endpoint.network = usable[0].network;
+        return true;
+    }
+    endpoint.servers = usable;
+    return true;
+}
+
+function openvpn_endpoint_from_client(client) {
+    let source = lc(trim(option(client, "source", "config")));
+    if (source == "manual") {
+        let parsed = {
+            remotes: [{
+                server: trim(option(client, "server", "")),
+                port: int(option(client, "server_port", "1194")),
+                network: openvpn_network(option(client, "network", "udp"))
+            }],
+            remote_random: false,
+            username: "",
+            password: "",
+            ca: option(client, "ca", ""),
+            cert: option(client, "client_certificate", ""),
+            key: option(client, "client_key", ""),
+            secret: "",
+            control_type: "",
+            control_key: "",
+            key_direction: "",
+            ca_path: "",
+            cert_path: "",
+            key_path: "",
+            secret_path: "",
+            control_path: "",
+            network: openvpn_network(option(client, "network", "udp")),
+            data_ciphers: [],
+            data_ciphers_fallback: "",
+            auth: "",
+            mtu: 0,
+            ping: "",
+            ping_restart: "",
+            route_no_pull: false,
+            server_name: "",
+            server_name_type: "",
+            remote_certificate_tls: "server",
+            compression: "",
+            compression_lzo: "",
+            block_ipv6: false,
+            local_address: "",
+            peer_address: ""
+        };
+        let ciphers = trim(option(client, "data_ciphers", ""));
+        if (ciphers != "") {
+            for (let cipher in split(replace(ciphers, /[ \t]+/g, ""), ":"))
+                if (trim(cipher) != "")
+                    push(parsed.data_ciphers, trim(cipher));
+        }
+        parsed.auth = trim(option(client, "auth", ""));
+        if (bool_option(client, "advanced", false)) {
+            let control_type = lc(trim(option(client, "control_type", "")));
+            if (control_type == "tls_auth" || control_type == "tls_crypt" || control_type == "tls_crypt_v2") {
+                parsed.control_type = control_type;
+                parsed.control_key = option(client, "control_key", "");
+                parsed.key_direction = lc(trim(option(client, "key_direction", "")));
+            }
+            parsed.server_name = trim(option(client, "server_name", ""));
+        }
+        let endpoint = openvpn_from_parsed(parsed, client);
+        if (endpoint == null || !openvpn_set_remotes(endpoint, parsed.remotes, parsed.network))
+            return null;
+        return endpoint;
+    }
+    let parsed = openvpn_parse_config(option(client, "config", ""));
+    if (length(parsed.remotes) == 0 && parsed.secret == "" && parsed.secret_path == "")
+        return null;
+    let endpoint = openvpn_from_parsed(parsed, client);
+    if (endpoint == null)
+        return null;
+    if (parsed.secret == "" && parsed.secret_path == "" && !openvpn_set_remotes(endpoint, parsed.remotes, parsed.network))
+        return null;
+    if ((parsed.secret != "" || parsed.secret_path != "") && length(parsed.remotes) > 0)
+        openvpn_set_remotes(endpoint, parsed.remotes, parsed.network);
+    return endpoint;
+}
+
+function openvpn_detour_section(name) {
+    let found = [];
+    uci_cursor().load(CONFIG_NAME);
+    uci_cursor().foreach(CONFIG_NAME, "section", function(section) {
+        if (as_string(section[".name"]) == name)
+            push(found, section);
+    });
+    return length(found) > 0 ? found[length(found) - 1] : null;
+}
+
+function openvpn_apply_detour(config, section, taken, endpoint, label) {
+    let detour_tag = outbound_detour_tag_for_section(section);
+    if (detour_tag == "")
+        return true;
+    let name = trim(option(section, "outbound_detour_section", ""));
+    let target = openvpn_detour_section(name);
+    if (target != null && connections.proxy_core(target) == "xray") {
+        let port = openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+        if (port <= 0) {
+            openconnect_log("OpenVPN '" + label + "' was not started: cascade SOCKS port is not ready.");
+            return false;
+        }
+        if (type(config.__ovpn_via) != "object" || config.__ovpn_via == null)
+            config.__ovpn_via = {};
+        let existing = as_string(config.__ovpn_via[name] || "");
+        if (existing != "") {
+            endpoint.detour = existing;
+            return true;
+        }
+        let via_tag = unique_tag("ovpn-via-" + name, taken);
+        push(config.outbounds, {
+            type: "socks",
+            tag: via_tag,
+            server: "127.0.0.1",
+            server_port: port,
+            version: "5",
+            udp_fragment: true,
+            routing_mark: runtime_constants.OUTBOUND_MARK
+        });
+        config.__ovpn_via[name] = via_tag;
+        endpoint.detour = via_tag;
+        return true;
+    }
+    endpoint.detour = detour_tag;
+    return true;
+}
+
+function openvpn_add_probe(config, tag_name) {
+    let probe_port = int(config.__oc_probe_next || 0);
+    if (probe_port < 4700)
+        probe_port = 4700;
+    config.__oc_probe_next = probe_port + 1;
+    if (type(config.__oc_probe_ports) != "object" || config.__oc_probe_ports == null)
+        config.__oc_probe_ports = {};
+    config.__oc_probe_ports[tag_name] = probe_port;
+    if (type(config.inbounds) != "array")
+        config.inbounds = [];
+    let probe_tag = "ovpn-probe-" + tag_name;
+    push(config.inbounds, {
+        type: "mixed",
+        tag: probe_tag,
+        listen: "127.0.0.1",
+        listen_port: probe_port
+    });
+    if (type(config.route) != "object" || config.route == null)
+        config.route = { rules: [] };
+    if (type(config.route.rules) != "array")
+        config.route.rules = [];
+    push(config.route.rules, {
+        action: "route",
+        inbound: probe_tag,
+        outbound: tag_name
+    });
+}
+
+function add_openvpn_connection(config, state, section, taken, selector_tags, urltest_candidate_tags) {
+    if (!sing_box_at_least_1_14())
+        return;
+    let index = 0;
+    for (let client in connections.openvpn_clients(section)) {
+        index++;
+        let label = trim(option(client, "name", ""));
+        if (label == "")
+            label = "OpenVPN " + index;
+        let endpoint = openvpn_endpoint_from_client(client);
+        if (endpoint == null) {
+            openconnect_log("OpenVPN '" + label + "' was not started: configuration is incomplete.");
+            continue;
+        }
+        let tag_name = unique_tag(section[".name"] + "-openvpn-" + index, taken);
+        endpoint.tag = tag_name;
+        if (!openvpn_apply_detour(config, section, taken, endpoint, label))
+            continue;
+        if (type(config.endpoints) != "array")
+            config.endpoints = [];
+        push(config.endpoints, endpoint);
+        push(selector_tags, tag_name);
+        push(urltest_candidate_tags, tag_name);
+        runtime_subscription.remember_outbound_metadata(state, tag_name, label, { type: "OpenVPN" });
+        openvpn_add_probe(config, tag_name);
+    }
+}
+
 function parse_outbound_json(value) {
     try {
         value = json(as_string(value));
@@ -2586,6 +3688,8 @@ function add_connections_outbound(config, section, taken) {
         outbound_detour_tag_for_section(section)
     );
     add_connection_interfaces(config, state, section, taken, selector_tags, urltest_candidate_tags);
+    add_openconnect_connection(config, state, section, taken, selector_tags, urltest_candidate_tags);
+    add_openvpn_connection(config, state, section, taken, selector_tags, urltest_candidate_tags);
     add_connection_json_outbounds(config, state, section, taken, selector_tags, urltest_candidate_tags);
 
     if (length(selector_tags) == 0)
@@ -3634,6 +4738,28 @@ function add_fully_routed_ips_rules(config, section) {
     if (target.unsupported)
         runtime_generate_unsupported(target.unsupported);
 
+    if (engine.is_xray_primary() && connections.proxy_core(section) == "sing-box") {
+        let spec = engine.fullroute_sidecar_spec(section[".name"]);
+        if (spec == null)
+            return;
+        push(config.inbounds, {
+            type: "mixed",
+            tag: spec.inbound_tag,
+            listen: "127.0.0.1",
+            listen_port: spec.port,
+            tcp_fast_open: true,
+            udp_fragment: true
+        });
+        let route_rule = {
+            action: target.action,
+            inbound: spec.inbound_tag
+        };
+        if (target.outbound)
+            route_rule.outbound = target.outbound;
+        push(config.route.rules, route_rule);
+        return;
+    }
+
     let route_rule = {
         action: target.action,
         inbound: tproxy_inbound_matcher()
@@ -3871,6 +4997,46 @@ function section_by_name(sections, name) {
     return null;
 }
 
+function sidecar_inbound_exists(config, tag_name) {
+    tag_name = as_string(tag_name);
+    for (let inbound in array_or_empty(config.inbounds))
+        if (type(inbound) == "object" && as_string(inbound.tag) == tag_name)
+            return true;
+    return false;
+}
+
+function ensure_dns_detour_sidecars(config, sections) {
+    if (!engine.is_xray_primary())
+        return;
+    let extra = [];
+    for (let spec in engine.fullroute_sidecar_specs()) {
+        let section = section_by_name(sections, spec.name);
+        if (section == null)
+            continue;
+        if (!sidecar_inbound_exists(config, spec.inbound_tag)) {
+            push(config.inbounds, {
+                type: "mixed",
+                tag: spec.inbound_tag,
+                listen: "127.0.0.1",
+                listen_port: spec.port,
+                tcp_fast_open: true,
+                udp_fragment: true
+            });
+        }
+        let target = runtime_route.target(section, outbound_tag(spec.name));
+        if (target.unsupported)
+            continue;
+        let rule = {
+            action: target.action,
+            inbound: spec.inbound_tag
+        };
+        if (target.outbound)
+            rule.outbound = target.outbound;
+        push(extra, rule);
+    }
+    insert_route_rules_after_system(config, extra);
+}
+
 function add_server_routes(config, servers, sections) {
     for (let server in servers) {
         runtime_servers.add_sniff_rule(config, server);
@@ -3917,6 +5083,14 @@ function add_server_routes(config, servers, sections) {
     }
 }
 
+function write_openconnect_probe_ports(config) {
+    let ports = type(config) == "object" ? object_or_empty(config.__oc_probe_ports) : {};
+    let dir = "/var/run/forkop";
+    if (fs.stat(dir) == null)
+        system("mkdir -p " + dir + " >/dev/null 2>&1");
+    fs.writefile(dir + "/openconnect-probe.json", sprintf("%J\n", ports));
+}
+
 function generate_config(output_path, service_address, mwan3_active, supports_xhttp, deferred_sections) {
     runtime_supports_xhttp = supports_xhttp == null || as_string(supports_xhttp) == ""
         ? true
@@ -3952,10 +5126,12 @@ function generate_config(output_path, service_address, mwan3_active, supports_xh
     for (let section in sections)
         add_mixed_proxy_for_section(config, section, service_address);
     add_xray_cascade_inbounds(config);
+    ensure_dns_detour_sidecars(config, sections);
     add_router_traffic_redirect(config, settings);
 
     assert_unique_outbound_tags(config);
     apply_http_clients(config);
+    write_openconnect_probe_ports(config);
     strip_internal_fields(config);
     strip_redirect_inbound_network(config);
     if (!write_json_file(output_path, config)) {
@@ -4178,7 +5354,7 @@ function section_detour_chain(section) {
 }
 
 // Local SOCKS for one section. No TPROXY, DNS listen, nft, or routing marks.
-function generate_download_socks(section_name, output_path, listen_port) {
+function generate_download_socks(section_name, output_path, listen_port, keep_marks) {
     section_name = trim(as_string(section_name));
     output_path = as_string(output_path);
     listen_port = int(listen_port, 10);
@@ -4244,10 +5420,346 @@ function generate_download_socks(section_name, output_path, listen_port) {
         add_connections_outbound(config, chain[i], taken);
     add_connections_outbound(config, section, taken);
     drop_missing_download_detours(config);
-    strip_download_routing_marks(config);
+    if (keep_marks)
+        config.route.default_mark = runtime_constants.OUTBOUND_MARK;
+    else
+        strip_download_routing_marks(config);
     strip_internal_fields(config);
     if (!ensure_parent_dir(output_path) || !write_json_file(output_path, config))
         runtime_generate_unsupported("failed to write download socks config");
+}
+
+function openconnect_cascade_dir() {
+    return "/var/run/forkop/oc-cascade";
+}
+
+function openconnect_tcp_listening(port) {
+    port = int(port || 0);
+    if (port <= 0)
+        return false;
+    let needle = ":" + sprintf("%04X", port);
+    for (let path in [ "/proc/net/tcp", "/proc/net/tcp6" ]) {
+        let data = fs.readfile(path);
+        if (data == null)
+            continue;
+        for (let line in split(as_string(data), "\n")) {
+            if (index(line, needle) < 0)
+                continue;
+            if (match(line, /[ \t]0A[ \t]/) != null)
+                return true;
+        }
+    }
+    return false;
+}
+
+function openconnect_shell_join(args) {
+    let parts = [];
+    for (let arg in args)
+        push(parts, openconnect_shell_quote(arg));
+    return join(" ", parts);
+}
+
+function openconnect_client_needs_cascade_cookie(client) {
+    if (trim(option(client, "server", "")) == "")
+        return false;
+    if (bool_option(client, "advanced", false) && trim(option(client, "cookie", "")) != "")
+        return false;
+    if (trim(option(client, "username", option(client, "openconnect_username", ""))) == "" ||
+        option(client, "password", option(client, "openconnect_password", "")) == "")
+        return false;
+    return openconnect_cookie_auto(client);
+}
+
+function openconnect_singbox_detour_names() {
+    let names = [];
+    let seen = {};
+    uci_cursor().load(CONFIG_NAME);
+    for (let section in enabled_sections("")) {
+        if (!bool_option(section, "outbound_detour_enabled", false))
+            continue;
+        if (!connections.is_connections_action(option(section, "action", "")))
+            continue;
+        let target_name = trim(option(section, "outbound_detour_section", ""));
+        if (target_name == "" || seen[target_name])
+            continue;
+        let needs_cookie = false;
+        for (let client in connections.openconnect_clients(section)) {
+            if (openconnect_client_needs_cascade_cookie(client)) {
+                needs_cookie = true;
+                break;
+            }
+        }
+        if (!needs_cookie)
+            continue;
+        let target = uci_section_by_name(target_name);
+        if (target == null || connections.proxy_core(target) != "sing-box")
+            continue;
+        if (!section_enabled(target) || !connections.is_connections_action(option(target, "action", "")))
+            continue;
+        seen[target_name] = true;
+        push(names, target_name);
+    }
+    return names;
+}
+
+function stop_openconnect_cascade() {
+    let dir = openconnect_cascade_dir();
+    let raw = "";
+    try {
+        raw = fs.readfile(dir + "/pids");
+    }
+    catch (e) {
+        raw = "";
+    }
+    for (let pid in split(as_string(raw), "\n")) {
+        pid = trim(pid);
+        if (match(pid, /^[0-9]+$/) == null)
+            continue;
+        system("kill " + pid + " >/dev/null 2>&1");
+    }
+    system("mkdir -p /var/run/forkop " + openconnect_shell_quote(dir) + " >/dev/null 2>&1");
+    fs.writefile("/var/run/forkop/openconnect-cascade.json", "{}\n");
+    try {
+        fs.unlink(dir + "/pids");
+    }
+    catch (e) { }
+}
+
+function prepare_openconnect_cascade() {
+    stop_openconnect_cascade();
+    let names = openconnect_singbox_detour_names();
+    if (length(names) == 0)
+        return 0;
+    let bin = getenv("FORKOP_SING_BOX_BIN") || getenv("SING_BOX_BIN") || "/usr/bin/sing-box";
+    if (fs.stat(bin) == null) {
+        openconnect_log("OpenConnect cascade proxy was not started: sing-box binary is missing.");
+        return 1;
+    }
+    let dir = openconnect_cascade_dir();
+    system("mkdir -p " + openconnect_shell_quote(dir) + " >/dev/null 2>&1");
+    let ports = {};
+    let pids = [];
+    let index = 0;
+    for (let name in names) {
+        let port = 39220 + index;
+        index++;
+        let cfg = dir + "/" + name + ".json";
+        let log_path = dir + "/" + name + ".log";
+        let pid_path = dir + "/" + name + ".pid";
+        generate_download_socks(name, cfg, port, true);
+        if (system(openconnect_shell_join([ bin, "check", "-c", cfg ]) + " >" + openconnect_shell_quote(log_path) + " 2>&1") != 0) {
+            openconnect_log("OpenConnect cascade proxy for '" + name + "' was rejected by sing-box.");
+            stop_openconnect_cascade();
+            return 1;
+        }
+        let started = system(
+            "setsid " + openconnect_shell_join([ bin, "run", "-c", cfg, "-D", dir ]) +
+            " >>" + openconnect_shell_quote(log_path) + " 2>&1 1000>&- & echo $! > " +
+            openconnect_shell_quote(pid_path)
+        );
+        if (started != 0) {
+            openconnect_log("OpenConnect cascade proxy for '" + name + "' failed to start.");
+            stop_openconnect_cascade();
+            return 1;
+        }
+        let ready = false;
+        let attempt = 0;
+        while (attempt < 8) {
+            if (openconnect_tcp_listening(port)) {
+                ready = true;
+                break;
+            }
+            system("sleep 1");
+            attempt++;
+        }
+        if (!ready) {
+            openconnect_log("OpenConnect cascade proxy for '" + name + "' is not listening.");
+            stop_openconnect_cascade();
+            return 1;
+        }
+        ports[name] = port;
+        let pid = trim(as_string(fs.readfile(pid_path)));
+        if (pid != "")
+            push(pids, pid);
+        openconnect_notice("OpenConnect cascade proxy for '" + name + "' is listening on port " + port + ".");
+    }
+    if (fs.writefile("/var/run/forkop/openconnect-cascade.json", sprintf("%J\n", ports)) == null) {
+        openconnect_log("OpenConnect cascade proxy ports could not be saved.");
+        stop_openconnect_cascade();
+        return 1;
+    }
+    fs.writefile(dir + "/pids", join("\n", pids) + "\n");
+    return 0;
+}
+
+function openconnect_detour_name(tag_name) {
+    tag_name = as_string(tag_name);
+    if (length(tag_name) > 4 && substr(tag_name, length(tag_name) - 4) == "-out")
+        return substr(tag_name, 0, length(tag_name) - 4);
+    return tag_name;
+}
+
+function openconnect_endpoint_key(endpoint) {
+    let target = openconnect_server_target(as_string(endpoint.server || ""));
+    let host = target.host;
+    if (type(endpoint.tls) == "object") {
+        let name = trim(as_string(endpoint.tls.server_name || ""));
+        if (name != "")
+            host = name;
+    }
+    return target.port == "" ? host : host + ":" + target.port;
+}
+
+function openconnect_recent_log() {
+    let pipe = fs.popen("logread -e sing-box 2>/dev/null | tail -n 250", "r");
+    if (!pipe)
+        return "";
+    let data = pipe.read("all");
+    pipe.close();
+    return data == null ? "" : as_string(data);
+}
+
+function openconnect_endpoint_failed(log_text, tag_name) {
+    let failed = false;
+    let healthy = false;
+    let needle = "endpoint/openconnect[" + tag_name + "]";
+    for (let line in split(log_text, "\n")) {
+        if (index(line, needle) < 0)
+            continue;
+        let lower = lc(line);
+        if (index(lower, "cstp remains active") >= 0)
+            healthy = true;
+        if (index(lower, "not ready") >= 0)
+            continue;
+        if (index(lower, "handshake") >= 0 || index(lower, "authentication") >= 0 ||
+            index(lower, "certificate") >= 0 || index(lower, "cstp tls") >= 0)
+            failed = true;
+    }
+    return failed && !healthy;
+}
+
+function openconnect_proxy_port_for_detour(name) {
+    if (trim(as_string(name)) == "")
+        return 0;
+    let cascade = openconnect_port_from_map("/var/run/forkop/openconnect-cascade.json", name);
+    if (cascade > 0)
+        return cascade;
+    return openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+}
+
+function openconnect_singbox_config_path() {
+    runtime_settings_cache = null;
+    let path = trim(option(runtime_settings(), "config_path", ""));
+    if (path == "")
+        path = "/etc/sing-box/config.json";
+    return path;
+}
+
+function repair_openconnect_auth() {
+    system("mkdir -p /var/run/forkop >/dev/null 2>&1");
+    if (fs.stat("/var/run/forkop/oc-auth-repaired") != null)
+        return 0;
+    fs.writefile("/var/run/forkop/oc-auth-repaired", "1\n");
+    if (system("command -v openconnect >/dev/null 2>&1") != 0) {
+        openconnect_notice("OpenConnect helper package is not installed; sing-box will log in by itself.");
+        return 0;
+    }
+    let path = openconnect_singbox_config_path();
+    let config = null;
+    try {
+        config = json(fs.readfile(path));
+    }
+    catch (e) {
+        config = null;
+    }
+    if (type(config) != "object" || config == null)
+        return 0;
+    let no_cookie = openconnect_servers_without_cookie();
+    let waiting = false;
+    for (let endpoint in array_or_empty(config.endpoints)) {
+        if (type(endpoint) != "object" || as_string(endpoint.type) != "openconnect")
+            continue;
+        if (no_cookie[openconnect_peer_key(openconnect_endpoint_key(endpoint))])
+            continue;
+        if (trim(as_string(endpoint.cookie || "")) == "" && trim(as_string(endpoint.username || "")) != "")
+            waiting = true;
+    }
+    if (!waiting)
+        return 0;
+    system("sleep 3");
+    let log_text = openconnect_recent_log();
+    let pending = [];
+    for (let endpoint in array_or_empty(config.endpoints)) {
+        if (type(endpoint) != "object" || as_string(endpoint.type) != "openconnect")
+            continue;
+        let tag_name = as_string(endpoint.tag || "");
+        if (tag_name == "" || trim(as_string(endpoint.cookie || "")) != "")
+            continue;
+        if (trim(as_string(endpoint.username || "")) == "" || as_string(endpoint.password || "") == "")
+            continue;
+        if (no_cookie[openconnect_peer_key(openconnect_endpoint_key(endpoint))])
+            continue;
+        if (!openconnect_endpoint_failed(log_text, tag_name))
+            continue;
+        push(pending, endpoint);
+    }
+    if (length(pending) == 0)
+        return 0;
+    let need_proxy = false;
+    for (let endpoint in pending) {
+        if (trim(as_string(endpoint.detour || "")) == "")
+            continue;
+        openconnect_peer_put(openconnect_endpoint_key(endpoint), { helper: true });
+        need_proxy = true;
+    }
+    if (need_proxy)
+        prepare_openconnect_cascade();
+    let changed = false;
+    for (let endpoint in pending) {
+        let key = openconnect_endpoint_key(endpoint);
+        let label = as_string(endpoint.tag || key);
+        let detour_name = openconnect_detour_name(endpoint.detour);
+        let proxy_port = 0;
+        if (trim(as_string(endpoint.detour || "")) != "") {
+            proxy_port = openconnect_proxy_port_for_detour(detour_name);
+            if (proxy_port <= 0) {
+                openconnect_log("OpenConnect '" + label + "' helper skipped: cascade SOCKS port is not ready.");
+                continue;
+            }
+        }
+        let fingerprint = type(endpoint.tls) == "object" ? trim(as_string(endpoint.tls.peer_fingerprint || "")) : "";
+        let flavor = trim(as_string(endpoint.flavor || "anyconnect"));
+        let auth_group = trim(as_string(endpoint.auth_group || ""));
+        let cookie = openconnect_fetch_cookie(
+            label, key, endpoint.username, endpoint.password, auth_group, fingerprint, proxy_port, flavor, proxy_port <= 0
+        );
+        if (cookie == "" && auth_group == "")
+            cookie = openconnect_fetch_cookie(
+                label, key, endpoint.username, endpoint.password, "all", fingerprint, proxy_port, flavor, proxy_port <= 0
+            );
+        let learned_sha = openconnect_peer_fingerprint(openconnect_peer_get(key).sha);
+        if (fingerprint == "" && learned_sha != "") {
+            if (type(endpoint.tls) != "object")
+                endpoint.tls = {};
+            endpoint.tls.peer_fingerprint = learned_sha;
+            changed = true;
+        }
+        if (cookie != "") {
+            endpoint.cookie = cookie;
+            openconnect_peer_put(key, { helper: true });
+            changed = true;
+        }
+    }
+    if (need_proxy)
+        stop_openconnect_cascade();
+    if (!changed)
+        return 0;
+    if (fs.writefile(path, sprintf("%J\n", config)) == null) {
+        openconnect_log("OpenConnect helper could not update the sing-box configuration.");
+        return 1;
+    }
+    openconnect_notice("OpenConnect helper filled in a session cookie or certificate after sing-box could not log in.");
+    return 2;
 }
 
 let mode = ARGV[0] || "";
@@ -4258,6 +5770,12 @@ else if (mode == "generate-config-fixture")
     generate_config_fixture(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6] || "");
 else if (mode == "download-socks")
     generate_download_socks(ARGV[1] || "", ARGV[2] || "", ARGV[3] || "");
+else if (mode == "prepare-openconnect-cascade")
+    exit(prepare_openconnect_cascade());
+else if (mode == "repair-openconnect-auth")
+    exit(repair_openconnect_auth());
+else if (mode == "stop-openconnect-cascade")
+    stop_openconnect_cascade();
 else if (mode == "stdin-length")
     stdin_length();
 else if (mode == "stdin-contains")

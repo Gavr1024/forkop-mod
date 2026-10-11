@@ -1194,7 +1194,9 @@ function nft_create_runtime_base(table, localv4_set, common_set, port_set, ip_po
     if (arg_bool(exclude_ntp) && !nft_insert_rule(table, "mangle_output", [ "udp", "dport", "123", "return" ]))
         return false;
 
-    return nft_install_xray_fakeip_tproxy(table, interface_set, fakeip_range, fakeip6_range, tproxy6_address, fakeip_mark);
+    if (!nft_install_xray_fakeip_tproxy(table, interface_set, fakeip_range, fakeip6_range, tproxy6_address, fakeip_mark))
+        return false;
+    return true;
 }
 
 function nft_create_runtime_base_from_uci(table, localv4_set, common_set, port_set, ip_port_set, interface_set, fakeip_mark, outbound_mark, fakeip_range, tproxy_port, localv6_set, common6_set, ip_port6_set, fakeip6_range, tproxy6_address) {

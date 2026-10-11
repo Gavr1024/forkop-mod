@@ -482,8 +482,10 @@ extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'XRAY_DNS_REMOTE_TAG' ||
   fail "Xray DNS servers must be tagged so DoH can be routed through the proxy section"
 extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'bootstrap_dns_server' ||
   fail "Xray DoH hostnames must be resolved via bootstrap DNS"
-extract_fn "$XRAY_GEN" "dns_proxy_target" | grep -Fq 'dns_detour_enabled' ||
-  fail "DNS through proxy (BLESS) must be implemented on the Xray plane"
+extract_fn "$XRAY_GEN" "dns_proxy_target" | grep -Fq 'singbox_forced_outbound' ||
+  fail "DNS through a sing-box section must use that section's own SOCKS entrance"
+extract_fn "$LIB/core/engine.uc" "fullroute_sidecar_specs" | grep -Fq 'section_is_dns_detour_target' ||
+  fail "a sing-box DNS detour section needs its own sidecar even without full routing"
 extract_fn "$XRAY_GEN" "generate_config" | grep -Fq 'apply_dns_client_routes' ||
   fail "DNS client routes must be applied after section outbounds exist"
 extract_fn "$XRAY_GEO" "community_matchers" | grep -Fq 'v2fly_geosite_tag' ||
@@ -812,6 +814,12 @@ extract_fn "$DIAG_RT" "check_dns_available" | grep -Fq 'is_xray_primary' ||
   fail "DNS diagnostic must not use sing-box health ports when Xray is primary"
 extract_fn "$DIAG_RT" "check_sing_box" | grep -Fq 'sing_box_required' ||
   fail "sing-box diagnostic must report sidecar-not-required on Xray-only"
+extract_fn "$DIAG_RT" "check_sing_box" | grep -Fq 'sing_box_sidecar_ports_listening' ||
+  fail "sing-box diagnostic must check the sidecar port, not TPROXY, when Xray is primary"
+extract_fn "$DIAG_RT" "sing_box_sidecar_ports_listening" | grep -Fq 'XRAY_PLANE_MIXED_INBOUND_PORT' ||
+  fail "sidecar port check must require the mixed inbound"
+extract_fn "$DIAG_RT" "check_nft_rules" | grep -Fq 'priority_rules' ||
+  fail "mangle counter warning must accept traffic counted in priority_rules"
 extract_fn "$DIAG_RT" "check_fakeip" | grep -Fq 'engine' ||
   fail "FakeIP diagnostic must report xray vs sing-box engine"
 extract_fn "$DIAG_RT" "clash_api" | grep -Fq 'xray_proxy_latency_ok' ||

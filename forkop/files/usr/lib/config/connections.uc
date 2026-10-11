@@ -11,6 +11,8 @@ const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const ITEM_TYPES = [
     "subscription_url",
     "section_interface",
+    "openconnect",
+    "openvpn",
     "urltest",
     "priority_group",
     "priority_level"
@@ -352,6 +354,31 @@ function interfaces(section) {
             push(result, value);
     }
     return result;
+}
+
+function openconnect_clients(section) {
+    let items = child_items(section, "openconnect");
+    if (length(items) > 0)
+        return items;
+
+    let server = trim(option(section, "openconnect_server", ""));
+    if (server == "")
+        return [];
+
+    return [{
+        ".name": section_name(section) + "-openconnect",
+        name: "OpenConnect",
+        server: server,
+        flavor: option(section, "openconnect_flavor", "anyconnect"),
+        username: option(section, "openconnect_username", ""),
+        password: option(section, "openconnect_password", ""),
+        auth_group: option(section, "openconnect_auth_group", ""),
+        insecure: bool_option(section, "openconnect_insecure", false) ? "1" : "0"
+    }];
+}
+
+function openvpn_clients(section) {
+    return child_items(section, "openvpn");
 }
 
 function outbound_jsons(section) {
@@ -1118,6 +1145,8 @@ return {
     connection_urls,
     subscription_urls,
     interfaces,
+    openconnect_clients,
+    openvpn_clients,
     outbound_jsons,
     urltests,
     dashboard_filter_mode,

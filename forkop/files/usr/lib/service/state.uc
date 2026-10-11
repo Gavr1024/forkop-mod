@@ -1102,6 +1102,69 @@ function dashboard_filter_signature(section) {
     });
 }
 
+function openconnect_signature(section) {
+    let result = [];
+    for (let client in connections.openconnect_clients(section)) {
+        push(result, {
+            name: option(client, "name", ""),
+            server: option(client, "server", option(client, "openconnect_server", "")),
+            flavor: option(client, "flavor", option(client, "openconnect_flavor", "")),
+            username: option(client, "username", option(client, "openconnect_username", "")),
+            password: option(client, "password", option(client, "openconnect_password", "")),
+            auth_group: option(client, "auth_group", option(client, "openconnect_auth_group", "")),
+            server_sha: option(client, "server_sha", ""),
+            insecure: bool_option(client, "insecure", false) || bool_option(client, "openconnect_insecure", false) ? "1" : "0",
+            advanced: bool_option(client, "advanced", false) ? "1" : "0",
+            client_certificate: option(client, "client_certificate", ""),
+            client_key: option(client, "client_key", ""),
+            client_key_password: option(client, "client_key_password", ""),
+            cookie: option(client, "cookie", ""),
+            cookie_auto: bool_option(client, "cookie_auto", true) ? "1" : "0",
+            server_name: option(client, "server_name", ""),
+            no_udp: bool_option(client, "no_udp", false) ? "1" : "0",
+            disable_ipv6: bool_option(client, "disable_ipv6", false) ? "1" : "0",
+            mtu: option(client, "mtu", ""),
+            dpd_interval: option(client, "dpd_interval", ""),
+            reconnect_timeout: option(client, "reconnect_timeout", ""),
+            keepalive: bool_option(client, "keepalive", false) ? "1" : "0",
+            compression_disabled: bool_option(client, "compression_disabled", false) ? "1" : "0",
+            on_demand: bool_option(client, "on_demand", false) ? "1" : "0"
+        });
+    }
+    return sprintf("%J", result);
+}
+
+function openvpn_signature(section) {
+    let result = [];
+    for (let client in connections.openvpn_clients(section)) {
+        push(result, {
+            name: option(client, "name", ""),
+            source: option(client, "source", ""),
+            config: option(client, "config", ""),
+            server: option(client, "server", ""),
+            server_port: option(client, "server_port", ""),
+            network: option(client, "network", ""),
+            username: option(client, "username", ""),
+            password: option(client, "password", ""),
+            ca: option(client, "ca", ""),
+            client_certificate: option(client, "client_certificate", ""),
+            client_key: option(client, "client_key", ""),
+            client_key_password: option(client, "client_key_password", ""),
+            advanced: bool_option(client, "advanced", false) ? "1" : "0",
+            control_type: option(client, "control_type", ""),
+            control_key: option(client, "control_key", ""),
+            key_direction: option(client, "key_direction", ""),
+            data_ciphers: option(client, "data_ciphers", ""),
+            auth: option(client, "auth", ""),
+            server_name: option(client, "server_name", ""),
+            allow_compression: bool_option(client, "allow_compression", false) ? "1" : "0",
+            mtu: option(client, "mtu", ""),
+            on_demand: bool_option(client, "on_demand", false) ? "1" : "0"
+        });
+    }
+    return sprintf("%J", result);
+}
+
 function urltests_signature(section) {
     let result = [];
     for (let entry in connections.urltests(section)) {
@@ -1358,6 +1421,8 @@ function append_sing_box_rule_signature_body(body, section, sections, settings) 
         body = signature_add_value(body, prefix + ".connection_urls", connection_urls_signature(section));
         body = signature_add_value(body, prefix + ".subscription_urls", subscription_urls_signature(section));
         body = signature_add_value(body, prefix + ".interfaces", interfaces_signature(section));
+        body = signature_add_value(body, prefix + ".openconnect", openconnect_signature(section));
+        body = signature_add_value(body, prefix + ".openvpn", openvpn_signature(section));
         body = signature_add_value(body, prefix + ".outbound_jsons", option(section, "outbound_jsons", ""));
         body = signature_add_value(body, prefix + ".legacy_interface", option(section, "interface", ""));
         body = signature_add_value(body, prefix + ".legacy_outbound_json", option(section, "outbound_json", ""));

@@ -376,6 +376,11 @@ function forkop_config_masked_line(line) {
     line = mask_after_token(line, "option server_uuid");
     line = mask_after_token(line, "option server_username");
     line = mask_after_token(line, "option server_password");
+    line = mask_after_token(line, "option openconnect_password");
+    line = mask_after_token(line, "option password");
+    line = mask_after_token(line, "option client_key");
+    line = mask_after_token(line, "option client_key_password");
+    line = mask_after_token(line, "option cookie");
     line = mask_after_token(line, "option mtproto_secret");
     line = mask_after_token_space(line, "option mtproto_faketls");
     line = mask_after_token_space(line, "option mtproto_domain_fronting_ip");

@@ -5,6 +5,7 @@ let constants = require("core.constants");
 let core_ip = require("core.ip");
 let uci_core = require("core.uci");
 let engine = require("core.engine");
+let sb_constants = require("singbox.constants");
 let runtime_dns = require("singbox.dns");
 let netstat = require("core.netstat");
 
@@ -1477,6 +1478,14 @@ function check_nft_rules() {
             let status = nft_chain_counter_status("mangle");
             rules_mangle_exist = status[0];
             rules_mangle_counters = status[1];
+            // Fully routed traffic is marked in priority_rules and accepted
+            // there, so the later mangle counters stay at zero.
+            if (!rules_mangle_counters &&
+                command_success_from_args([ "nft", "list", "chain", "inet", NFT_TABLE_NAME, "priority_rules" ])) {
+                let priority = nft_chain_counter_status("priority_rules");
+                if (priority[1])
+                    rules_mangle_counters = 1;
+            }
         }
         if (command_success_from_args([ "nft", "list", "chain", "inet", NFT_TABLE_NAME, "mangle_output" ])) {
             let status = nft_chain_counter_status("mangle_output");
@@ -1531,6 +1540,23 @@ function sing_box_standard_ports_listening(netstat_data) {
     );
 }
 
+function netstat_has_local_port(netstat_data, port) {
+    let suffix = ":" + port;
+    netstat_data = as_string(netstat_data);
+    return index(netstat_data, "127.0.0.1" + suffix) >= 0 ||
+        index(netstat_data, "0.0.0.0" + suffix) >= 0;
+}
+
+function sing_box_sidecar_ports_listening(netstat_data) {
+    if (!netstat_has_local_port(netstat_data, sb_constants.XRAY_PLANE_MIXED_INBOUND_PORT))
+        return false;
+    for (let spec in engine.fullroute_sidecar_specs()) {
+        if (!netstat_has_local_port(netstat_data, spec.port))
+            return false;
+    }
+    return true;
+}
+
 function sing_box_standard_ports_listening_fixture() {
     exit(sing_box_standard_ports_listening(read_stdin()) ? 0 : 1);
 }
@@ -1574,7 +1600,12 @@ function check_sing_box() {
     if (sing_box_process_is_running())
         sing_box_process_running = 1;
 
-    if (sing_box_standard_ports_listening(command_output_from_args([ "netstat", "-ln" ])))
+    let listen_table = command_output_from_args([ "netstat", "-ln" ]);
+    if (engine.is_xray_primary()) {
+        if (sing_box_sidecar_ports_listening(listen_table))
+            sing_box_ports_listening = 1;
+    }
+    else if (sing_box_standard_ports_listening(listen_table))
         sing_box_ports_listening = 1;
 
     write_json({
@@ -1697,6 +1728,9 @@ function connection_chains(conn) {
         if (tag != "")
             push(chains, tag);
     }
+    let inbound = trim(as_string(meta.inbound || meta.Inbound || ""));
+    if (inbound != "")
+        push(chains, inbound);
     return chains;
 }
 
@@ -1709,10 +1743,12 @@ function matching_sections(chains, names) {
             continue;
         let prefix = name + "-";
         let tag = prefix + "out";
+        let fullroute = "fullroute-in-" + name;
+        let sidecar = "sb-full-" + name;
         let matched = false;
         for (let chain in chains) {
             chain = as_string(chain);
-            if (chain == tag || index(chain, prefix) == 0) {
+            if (chain == tag || chain == fullroute || chain == sidecar || index(chain, prefix) == 0) {
                 matched = true;
                 break;
             }
@@ -1732,13 +1768,81 @@ function empty_section_traffic(names) {
     return sections;
 }
 
+function traffic_state_file() {
+    return RUNTIME_STATE_DIR + "/singbox-section-traffic.json";
+}
+
+function traffic_lock_dir() {
+    return RUNTIME_STATE_DIR + "/singbox-section-traffic.lock";
+}
+
+function traffic_lock_acquire() {
+    ensure_dir(RUNTIME_STATE_DIR);
+    let lock_dir = traffic_lock_dir();
+    let tries = 0;
+    while (tries < 6) {
+        if (command_success_from_args([ "mkdir", lock_dir ]))
+            return true;
+        tries++;
+        system("sleep 1");
+    }
+    let stat = fs.stat(lock_dir);
+    let age = stat != null ? int(clock()[0]) - int(stat.mtime || 0) : 0;
+    if (age < 15)
+        return false;
+    command_success_from_args([ "rmdir", lock_dir ]);
+    return command_success_from_args([ "mkdir", lock_dir ]);
+}
+
+function traffic_lock_release() {
+    command_success_from_args([ "rmdir", traffic_lock_dir() ]);
+}
+
+function write_traffic_state(path, state) {
+    let stamp = clock();
+    let tmp = sprintf("%s.%d.%d.tmp", path, stamp[0], stamp[1]);
+    if (fs.writefile(tmp, sprintf("%J\n", state)) == null) {
+        remove_file(tmp);
+        return false;
+    }
+    if (!fs.rename(tmp, path)) {
+        remove_file(tmp);
+        return false;
+    }
+    return true;
+}
+
 function singbox_section_traffic_json() {
-    let traffic_file = RUNTIME_STATE_DIR + "/singbox-section-traffic.json";
+    let traffic_file = traffic_state_file();
     let names = connection_section_names();
+    if (!traffic_lock_acquire()) {
+        let current = read_json_file(traffic_file);
+        let sections = type(current) == "object" && type(current.sections) == "object" ? current.sections : {};
+        write_json({ success: type(current) == "object", sections: sections });
+        return 0;
+    }
+
     let pid = singbox_pid();
-    let state = read_json_file(traffic_file);
-    if (type(state) != "object" || as_string(state.pid || "") != pid)
+    let raw = fs.readfile(traffic_file);
+    let state = null;
+    let raw_text = raw == null ? "" : trim(as_string(raw));
+    if (raw_text != "") {
+        try {
+            state = json(raw);
+        }
+        catch (e) {
+            state = null;
+        }
+    }
+    if (raw_text != "" && type(state) != "object") {
+        traffic_lock_release();
+        write_json({ success: false, sections: {} });
+        return 0;
+    }
+    if (type(state) != "object")
         state = { pid: pid, seen: {}, sections: empty_section_traffic(names) };
+    if (pid != "" && as_string(state.pid || "") != "" && as_string(state.pid || "") != pid)
+        state.seen = {};
     if (type(state.seen) != "object")
         state.seen = {};
     if (type(state.sections) != "object")
@@ -1754,6 +1858,7 @@ function singbox_section_traffic_json() {
     push(args, "http://" + clash_api_url() + "/connections");
     let parsed = parse_json_or_null(command_output_from_args(args));
     if (type(parsed) != "object" || (parsed.connections == null && parsed.Connections == null)) {
+        traffic_lock_release();
         write_json({ success: false, sections: state.sections });
         return 0;
     }
@@ -1793,9 +1898,11 @@ function singbox_section_traffic_json() {
         live[id] = { upload: upload, download: download };
     }
     state.seen = live;
-    state.pid = pid;
+    if (pid != "")
+        state.pid = pid;
     if (ensure_dir(RUNTIME_STATE_DIR))
-        fs.writefile(traffic_file, sprintf("%J\n", state));
+        write_traffic_state(traffic_file, state);
+    traffic_lock_release();
     write_json({ success: true, sections: state.sections });
     return 0;
 }
@@ -1897,6 +2004,99 @@ function latency_test_url() {
     return value == "" ? DEFAULT_LATENCY_TEST_URL : value;
 }
 
+function fullroute_spec_for_tag(tag) {
+    tag = trim(as_string(tag));
+    if (tag == "")
+        return null;
+    for (let spec in engine.fullroute_sidecar_specs()) {
+        let name = as_string(spec.name || "");
+        if (name == "")
+            continue;
+        if (tag == name || tag == as_string(spec.outbound_tag || "") || tag == name + "-out")
+            return spec;
+    }
+    return null;
+}
+
+function probe_socks_delay(port, timeout_ms) {
+    port = int(port || 0);
+    if (port <= 0)
+        return 0;
+    timeout_ms = int(timeout_ms || 5000);
+    let seconds = int(timeout_ms / 1000);
+    if (seconds < 1)
+        seconds = 1;
+    let out = trim(command_output_from_args([
+        "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code} %{time_total}",
+        "--connect-timeout", as_string(seconds),
+        "--max-time", as_string(seconds),
+        "-x", "socks5h://127.0.0.1:" + as_string(port),
+        latency_test_url()
+    ]));
+    let parts = split(replace(out, /[ \t]+/g, " "), " ");
+    if (length(parts) < 2)
+        return 0;
+    if (as_string(parts[0]) == "" || as_string(parts[0]) == "000")
+        return 0;
+    let time_parts = split(as_string(parts[1]), ".");
+    let frac = as_string(time_parts[1] || "0");
+    while (length(frac) < 3)
+        frac += "0";
+    let delay = int(time_parts[0] || 0) * 1000 + int(substr(frac, 0, 3));
+    return delay > 0 ? delay : 1;
+}
+
+function openconnect_probe_port(tag) {
+    tag = trim(as_string(tag));
+    if (tag == "" || (index(tag, "-openconnect-") < 0 && index(tag, "-openvpn-") < 0))
+        return 0;
+    let parsed = null;
+    try {
+        parsed = json(fs.readfile("/var/run/forkop/openconnect-probe.json"));
+    }
+    catch (e) {
+        return 0;
+    }
+    if (type(parsed) != "object" || parsed == null)
+        return 0;
+    return int(parsed[tag] || 0);
+}
+
+function openconnect_probe_delay(tag, timeout_ms) {
+    let port = openconnect_probe_port(tag);
+    if (port <= 0)
+        return null;
+    return probe_socks_delay(port, timeout_ms);
+}
+
+function fullroute_probe_delay(tag, timeout_ms) {
+    let spec = fullroute_spec_for_tag(tag);
+    if (spec == null)
+        return null;
+    return probe_socks_delay(spec.port, timeout_ms);
+}
+
+function remember_probe_delay(tag, delay, force) {
+    tag = trim(as_string(tag));
+    if (tag == "")
+        return;
+    let path = "/var/run/forkop/xray-latency.json";
+    let delays = {};
+    try {
+        let parsed = json(fs.readfile(path));
+        if (type(parsed) == "object" && parsed != null)
+            delays = parsed;
+    }
+    catch (e) {
+        delays = {};
+    }
+    let next = int(delay || 0);
+    if (!force && next <= 0 && int(delays[tag] || 0) > 0)
+        return;
+    delays[tag] = next;
+    fs.writefile(path, sprintf("%J\n", delays));
+}
+
 function clash_api(action, arg1, arg2, arg3) {
     let base_url = clash_api_url();
     let test_url = latency_test_url();
@@ -1921,6 +2121,24 @@ function clash_api(action, arg1, arg2, arg3) {
             return clash_json_error("proxy_tag required");
         if (xray_proxy_latency_ok(arg1, arg2))
             return 0;
+        let openconnect_delay = openconnect_probe_delay(arg1, arg2);
+        if (openconnect_delay != null) {
+            remember_probe_delay(arg1, openconnect_delay, true);
+            if (openconnect_delay > 0) {
+                print(sprintf("%J\n", { delay: openconnect_delay }));
+                return 0;
+            }
+            return clash_json_error("timeout");
+        }
+        let fullroute_delay = fullroute_probe_delay(arg1, arg2);
+        if (fullroute_delay != null) {
+            remember_probe_delay(arg1, fullroute_delay);
+            if (fullroute_delay > 0) {
+                print(sprintf("%J\n", { delay: fullroute_delay }));
+                return 0;
+            }
+            return clash_json_error("timeout");
+        }
         let xray_only = false;
         try {
             xray_only = engine.is_xray_primary() && !engine.need_singbox_sidecar();
@@ -1972,6 +2190,16 @@ function clash_api(action, arg1, arg2, arg3) {
                 push(ordered_proxy_tags, proxy_tag);
 
         for (let proxy_tag in ordered_proxy_tags) {
+            let openconnect_delay = openconnect_probe_delay(proxy_tag, arg2);
+            if (openconnect_delay != null) {
+                remember_probe_delay(proxy_tag, openconnect_delay, true);
+                if (openconnect_delay <= 0)
+                    failed++;
+                count++;
+                if (progress_path != "")
+                    module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed ]);
+                continue;
+            }
             let args = [ "curl", "-G", "-s", clash_latency_endpoint(base_url, proxy_tag, proxy_types[proxy_tag]) ];
             for (let item in auth) push(args, item);
             push(args, "--data-urlencode");

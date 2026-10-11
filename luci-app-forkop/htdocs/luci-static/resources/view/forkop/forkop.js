@@ -25,6 +25,9 @@
 // Diagnostic
 "require view.forkop.diagnostic as diagnostic";
 
+// ByeDPI strategy check
+"require view.forkop.byedpi_strategy as byedpiStrategy";
+
 // Updates
 "require view.forkop.updates as updates";
 
@@ -109,6 +112,8 @@ const EntryPoint = {
       singBoxExtended: false,
       singBoxTiny: false,
       singBoxTailscale: true,
+      singBoxOpenConnect: false,
+      singBoxVersion: "",
       zapretInstalled: false,
       zapret2Installed: false,
       byedpiInstalled: false,
@@ -131,6 +136,8 @@ const EntryPoint = {
               zapret2Installed: uiCapabilities.zapret2Installed,
               byedpiInstalled: uiCapabilities.byedpiInstalled,
               xrayInstalled: uiCapabilities.xrayInstalled,
+              singBoxOpenConnect: uiCapabilities.singBoxOpenConnect,
+              singBoxVersion: uiCapabilities.singBoxVersion,
             },
           }),
         );
@@ -190,6 +197,10 @@ const EntryPoint = {
       uiCapabilities.xrayInstalled = Boolean(
         Number(data?.xray_installed) === 1,
       );
+      uiCapabilities.singBoxOpenConnect = Boolean(
+        Number(data?.sing_box_openconnect) === 1,
+      );
+      uiCapabilities.singBoxVersion = `${data?.sing_box_version || ""}`.trim();
       const serverInboundsEnabledCount =
         typeof data?.server_inbounds_enabled_count !== "undefined"
           ? Number(data.server_inbounds_enabled_count)
@@ -467,6 +478,18 @@ const EntryPoint = {
     };
     diagnostic.createDiagnosticContent(diagnosticSection);
 
+    const byedpiStrategySection = forkopMap.section(
+      form.TypedSection,
+      "byedpi_strategy",
+      _("ByeDPI"),
+    );
+    byedpiStrategySection.anonymous = true;
+    byedpiStrategySection.addremove = false;
+    byedpiStrategySection.cfgsections = function () {
+      return ["byedpi_strategy"];
+    };
+    byedpiStrategy.createByedpiStrategyContent(byedpiStrategySection);
+
     const dashboardSection = forkopMap.section(
       form.TypedSection,
       "dashboard",
@@ -504,6 +527,54 @@ const EntryPoint = {
     updates.createUpdatesContent(updatesSection);
 
     let syncingRoutingTabs = false;
+
+    function syncByedpiStrategyTab() {
+      const visible = uiCapabilities.byedpiInstalled === true;
+      const tabs = document.querySelectorAll(
+        '.cbi-tabmenu [data-tab="byedpi_strategy"]',
+      );
+
+      tabs.forEach((tab) => {
+        tab.style.display = visible ? "" : "none";
+      });
+
+      if (visible) {
+        return;
+      }
+
+      const active = document.querySelector(
+        '.cbi-tabmenu [data-tab="byedpi_strategy"]',
+      );
+
+      if (!active || active.classList.contains("cbi-tab-disabled")) {
+        return;
+      }
+
+      const fallback =
+        document.querySelector('.cbi-tabmenu [data-tab="section"] a') ||
+        document.querySelector(".cbi-tabmenu a");
+
+      if (fallback && typeof fallback.click === "function") {
+        fallback.click();
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.addEventListener(
+        main.FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT,
+        (event) => {
+          if (
+            event &&
+            event.detail &&
+            typeof event.detail.byedpiInstalled !== "undefined"
+          ) {
+            uiCapabilities.byedpiInstalled = Boolean(event.detail.byedpiInstalled);
+          }
+
+          syncByedpiStrategyTab();
+        },
+      );
+    }
     function refreshOpenModalMaps() {
       document.querySelectorAll("#modal_overlay .cbi-map").forEach((node) => {
         if (node.classList.contains("hidden")) {
@@ -539,6 +610,7 @@ const EntryPoint = {
       syncingRoutingTabs = true;
       try {
         refreshOpenModalMaps();
+        syncByedpiStrategyTab();
         if (serverSectionRef) {
           server.applyServerCapabilities(serverSectionRef, uiCapabilities);
         }
@@ -560,6 +632,7 @@ const EntryPoint = {
       return Promise.resolve(originalRender.apply(this, arguments)).then(
         (node) => {
           syncRoutingEngineTabs();
+          syncByedpiStrategyTab();
           return node;
         },
       );

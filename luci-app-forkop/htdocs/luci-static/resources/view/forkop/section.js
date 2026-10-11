@@ -1149,6 +1149,16 @@ const REGION_NAME_FALLBACKS = {
 };
 let regionDisplayNamesCache = {};
 
+function singBoxVersionSupportsOpenConnect(version) {
+  const match = `${version || ""}`.match(/(\d+)\.(\d+)/);
+  if (!match) {
+    return false;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 1 || (major === 1 && minor >= 14);
+}
+
 function updateActionProvidersAvailabilityState(nextState) {
   if (!nextState) {
     return;
@@ -1174,6 +1184,19 @@ function updateActionProvidersAvailabilityState(nextState) {
     );
   }
 
+  if (
+    typeof nextState.singBoxOpenConnect !== "undefined" ||
+    typeof nextState.singBoxVersion !== "undefined"
+  ) {
+    if (typeof nextState.singBoxVersion === "string") {
+      singBoxInstalledVersion = nextState.singBoxVersion;
+    }
+    singBoxOpenConnectAvailable =
+      Boolean(nextState.singBoxOpenConnect) ||
+      singBoxVersionSupportsOpenConnect(nextState.singBoxVersion);
+    refreshOpenConnectVisibility();
+  }
+
   actionProvidersAvailabilityPromise = null;
 }
 
@@ -1182,11 +1205,20 @@ function updateActionProvidersAvailabilityFromSystemInfo(systemInfo) {
     return;
   }
 
-  updateActionProvidersAvailabilityState({
+  const version = `${systemInfo.sing_box_version || ""}`.trim();
+  const versionKnown =
+    version !== "" && !/^(loading|unknown|not installed)/i.test(version);
+  const openConnectFlag = Number(systemInfo.sing_box_openconnect) === 1;
+  const payload = {
     zapretInstalled: Boolean(systemInfo.zapret_installed),
     zapret2Installed: Boolean(systemInfo.zapret2_installed),
     byedpiInstalled: Boolean(systemInfo.byedpi_installed),
-  });
+  };
+  if (versionKnown || openConnectFlag) {
+    payload.singBoxVersion = version;
+    payload.singBoxOpenConnect = openConnectFlag;
+  }
+  updateActionProvidersAvailabilityState(payload);
 }
 
 function setActionProvidersAvailabilityLoader(loader) {
@@ -2752,6 +2784,59 @@ function effectiveSectionEngine(option, section_id) {
       : savedCore
     : savedCore;
   return core || settings.currentRoutingEngine();
+}
+
+let singBoxOpenConnectAvailable = false;
+let singBoxInstalledVersion = "";
+let openConnectAnchor = null;
+
+function singBoxVersionAtLeast(majorNeed, minorNeed) {
+  const match = `${singBoxInstalledVersion || ""}`.match(/(\d+)\.(\d+)/);
+  if (!match) {
+    return false;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > majorNeed || (major === majorNeed && minor >= minorNeed);
+}
+
+function refreshOpenConnectVisibility() {
+  if (!openConnectAnchor || !openConnectAnchor.section) {
+    return;
+  }
+
+  const ids =
+    typeof openConnectAnchor.section.cfgsections === "function"
+      ? openConnectAnchor.section.cfgsections()
+      : [];
+  if (!ids.length) {
+    refreshSectionEngineFields(openConnectAnchor, "");
+    return;
+  }
+
+  ids.forEach((id) => refreshSectionEngineFields(openConnectAnchor, id));
+}
+
+function restrictOpenConnect(option) {
+  restrictSectionEngine(option, "sing-box");
+  const previous = option.checkDepends;
+  option.checkDepends = function (section_id) {
+    if (!singBoxOpenConnectAvailable) {
+      return false;
+    }
+
+    return typeof previous === "function"
+      ? previous.call(this, section_id)
+      : true;
+  };
+  option.depends("action", "connection");
+  option.depends("action", "proxy");
+  option.depends("action", "outbound");
+  option.depends("action", "vpn");
+  if (!openConnectAnchor) {
+    openConnectAnchor = option;
+  }
+  return option;
 }
 
 function restrictSectionEngine(option, engine, parentSectionId) {
@@ -4633,6 +4718,932 @@ function showInterfaceSettingsModal(_section_id, itemValue, option) {
   });
 }
 
+function validOpenConnectDuration(value) {
+  const raw = `${value || ""}`.trim();
+  if (!raw) {
+    return true;
+  }
+  return /^[0-9]+(ms|s|m|h)$/.test(raw)
+    ? true
+    : _("Use a duration like 10s, 3m or 1h");
+}
+
+function validOpenConnectPem(value, message) {
+  const raw = `${value || ""}`.trim();
+  if (!raw) {
+    return true;
+  }
+  if (raw.includes("-----BEGIN ") && raw.includes("-----END ")) {
+    return true;
+  }
+  return message;
+}
+
+function openConnectSettingsKeys() {
+  return [
+    "name",
+    "server",
+    "flavor",
+    "username",
+    "password",
+    "auth_group",
+    "server_sha",
+    "insecure",
+    "advanced",
+    "client_certificate",
+    "client_key",
+    "client_key_password",
+    "cookie_auto",
+    "cookie",
+    "server_name",
+    "no_udp",
+    "disable_ipv6",
+    "mtu",
+    "dpd_interval",
+    "reconnect_timeout",
+    "keepalive",
+    "compression_disabled",
+    "on_demand",
+  ];
+}
+
+function defaultOpenConnectSettings() {
+  return {
+    name: "",
+    server: "",
+    flavor: "anyconnect",
+    username: "",
+    password: "",
+    auth_group: "",
+    server_sha: "",
+    insecure: "0",
+    advanced: "0",
+    client_certificate: "",
+    client_key: "",
+    client_key_password: "",
+    cookie_auto: "1",
+    cookie: "",
+    server_name: "",
+    no_udp: "0",
+    disable_ipv6: "0",
+    mtu: "",
+    dpd_interval: "",
+    reconnect_timeout: "",
+    keepalive: "0",
+    compression_disabled: "0",
+    on_demand: "0",
+  };
+}
+
+function addOpenConnectItemOptions(itemSection) {
+  let o = itemSection.option(
+    form.Value,
+    "name",
+    _("Display name"),
+    _("Name shown for this client"),
+  );
+  o.rmempty = false;
+  o.validate = function (_itemId, value) {
+    return `${value || ""}`.trim() ? true : _("Enter a display name");
+  };
+
+  o = itemSection.option(
+    form.Value,
+    "server",
+    _("OpenConnect server"),
+    _("HTTPS address of the OpenConnect server"),
+  );
+  o.rmempty = false;
+  o.placeholder = "vpn.example.com";
+  o.validate = function (_itemId, value) {
+    return `${value || ""}`.trim() ? true : _("Enter the server address");
+  };
+
+  o = itemSection.option(
+    form.ListValue,
+    "flavor",
+    _("OpenConnect protocol"),
+    _("Which VPN dialect the server speaks"),
+  );
+  o.value("anyconnect", "AnyConnect");
+  o.value("gp", "GlobalProtect");
+  o.value("fortinet", "Fortinet");
+  o.value("f5", "F5");
+  o.value("pulse", "Pulse");
+  o.value("nc", "Juniper");
+  o.default = "anyconnect";
+  o.rmempty = false;
+
+  o = itemSection.option(form.Value, "username", _("Username"));
+  o.rmempty = true;
+
+  o = itemSection.option(form.Value, "password", _("Password"));
+  o.password = true;
+  o.rmempty = true;
+
+  o = itemSection.option(form.Value, "auth_group", _("Auth group"));
+  o.rmempty = true;
+
+  o = itemSection.option(
+    form.Value,
+    "server_sha",
+    _("Server certificate SHA hash"),
+    _(
+      "SHA hash of the VPN server certificate. The same value as OpenConnect --servercert. A sha256: prefix is also accepted.",
+    ),
+  );
+  o.rmempty = true;
+  o.placeholder = "AA:BB:CC:…";
+  o.validate = function (_itemId, value) {
+    const raw = `${value || ""}`.trim();
+    if (!raw) {
+      return true;
+    }
+    const compact = raw.replace(/[\s:]/g, "");
+    if (/^pin-sha256:.+/i.test(raw.replace(/\s/g, ""))) {
+      return true;
+    }
+    if (/^(sha1|sha256):[0-9a-f]{4,}$/i.test(compact)) {
+      return true;
+    }
+    if (/^[0-9a-f]{4,}$/i.test(compact)) {
+      return true;
+    }
+    return _("Enter a SHA hash of the server certificate");
+  };
+
+  o = itemSection.option(
+    form.Flag,
+    "insecure",
+    _("Skip certificate check"),
+  );
+  o.default = "0";
+  o.rmempty = true;
+
+  o = itemSection.option(
+    form.Flag,
+    "advanced",
+    _("Additional"),
+    _("Client certificate, session cookie, server name, UDP, IPv6, MTU, connection check, keepalive, compression and on demand."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+
+  o = itemSection.option(
+    form.TextValue,
+    "client_certificate",
+    _("Client certificate"),
+    _("PEM certificate. Both the certificate and the key are required."),
+  );
+  o.rows = 6;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+  o.validate = function (_itemId, value) {
+    return validOpenConnectPem(value, _("Paste a PEM certificate"));
+  };
+
+  o = itemSection.option(
+    form.TextValue,
+    "client_key",
+    _("Client private key"),
+    _("PEM private key that matches the certificate."),
+  );
+  o.rows = 6;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+  o.validate = function (_itemId, value) {
+    return validOpenConnectPem(value, _("Paste a PEM private key"));
+  };
+
+  o = itemSection.option(
+    form.Value,
+    "client_key_password",
+    _("Key password"),
+    _("Only if the private key is encrypted. Leave empty otherwise."),
+  );
+  o.password = true;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.Flag,
+    "cookie_auto",
+    _("Obtain cookie automatically"),
+    _(
+      "When enabled, the session cookie is obtained automatically. The openconnect package is required. When disabled, no cookie is used and sing-box logs in with the username and password. For a cascade this matters: a server that needs a cookie will not connect unless this is enabled.",
+    ),
+  );
+  o.default = "1";
+  o.rmempty = false;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.TextValue,
+    "cookie",
+    _("Session cookie"),
+    _("Cookie from a browser login, when a password is not accepted."),
+  );
+  o.rows = 3;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.Value,
+    "server_name",
+    _("Certificate name"),
+    _("Name on the certificate when the server field is an IP address."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "vpn.example.com";
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.Flag,
+    "no_udp",
+    _("Disable UDP"),
+    _("Use only TCP. Turn this on when UDP through the tunnel does not work."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.Flag,
+    "disable_ipv6",
+    _("Disable IPv6"),
+    _("Do not request an IPv6 address inside the tunnel."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.Value,
+    "mtu",
+    _("MTU"),
+    _("Packet size inside the tunnel. Leave empty for the default."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.datatype = "uinteger";
+  o.placeholder = "1280";
+  o.depends("advanced", "1");
+  o.validate = function (_itemId, value) {
+    const raw = `${value || ""}`.trim();
+    if (!raw) {
+      return true;
+    }
+    if (!/^[0-9]+$/.test(raw)) {
+      return _("Enter a number");
+    }
+    const mtu = Number(raw);
+    if (mtu < 576 || mtu > 65535) {
+      return _("Enter an MTU from 576 to 65535");
+    }
+    return true;
+  };
+
+  o = itemSection.option(
+    form.Value,
+    "dpd_interval",
+    _("Connection check interval"),
+    _("How often the tunnel is checked. Leave empty to use the server value. Example: 30s."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "30s";
+  o.depends("advanced", "1");
+  o.validate = function (_itemId, value) {
+    return validOpenConnectDuration(value);
+  };
+
+  o = itemSection.option(
+    form.Value,
+    "reconnect_timeout",
+    _("Reconnect timeout"),
+    _("How long reconnection attempts may continue after the tunnel drops. Example: 300s."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "300s";
+  o.depends("advanced", "1");
+  o.validate = function (_itemId, value) {
+    return validOpenConnectDuration(value);
+  };
+
+  o = itemSection.option(
+    form.Flag,
+    "keepalive",
+    _("Keepalive"),
+    _("Send TCP keepalive on the connection to the VPN server."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  o = itemSection.option(
+    form.Flag,
+    "compression_disabled",
+    _("Disable compression"),
+    _("Do not negotiate AnyConnect compression."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("advanced", "1");
+
+  if (singBoxVersionAtLeast(1, 15)) {
+    o = itemSection.option(
+      form.Flag,
+      "on_demand",
+      _("On demand"),
+      _("Disconnect the tunnel when it is idle and bring it back when traffic needs it."),
+    );
+    o.default = "0";
+    o.rmempty = true;
+    o.retain = true;
+    o.depends("advanced", "1");
+  }
+}
+
+function showOpenConnectSettingsModal(
+  _section_id,
+  itemValue,
+  option,
+  widget,
+  itemNode,
+  context = {},
+) {
+  return showChildItemSettingsModal(_section_id, itemValue, option, {
+    typeName: "openconnect",
+    valueOption: "name",
+    keys: openConnectSettingsKeys(),
+    defaults: defaultOpenConnectSettings,
+    addOptions: addOpenConnectItemOptions,
+    title: (name) => {
+      const normalized = `${name || ""}`.trim();
+      return normalized
+        ? `OpenConnect: ${normalized}`
+        : "OpenConnect";
+    },
+    afterSave: (_itemId, inputValue, settings, existing) => {
+      const displayName = `${settings.name || inputValue || ""}`.trim();
+
+      if (existing) {
+        updateDynamicListItemLabel(itemNode, displayName);
+        return;
+      }
+
+      if (context.adding) {
+        addDynamicListItem(widget, displayName, displayName);
+      } else {
+        updateDynamicListItemLabel(itemNode, displayName);
+      }
+    },
+  });
+}
+
+function validateOpenConnectItemsBeforeSave(section_id, values, option) {
+  const store = childPendingSettingsStore(option, section_id);
+  const names = new Set();
+
+  for (const value of normalizeDynamicListItems(values)) {
+    const itemId = `${value || ""}`;
+    let name = "";
+    let server = "";
+
+    if (isExistingChildItem(section_id, itemId, "openconnect")) {
+      name = uci.get(UCI_PACKAGE, itemId, "name") || "";
+      server = uci.get(UCI_PACKAGE, itemId, "server") || "";
+    } else if (store[itemId]) {
+      name = store[itemId].name || itemId;
+      server = store[itemId].server || "";
+    } else {
+      name = itemId;
+    }
+
+    name = `${name || ""}`.trim();
+    server = `${server || ""}`.trim();
+    if (!name) {
+      return _("Enter a display name");
+    }
+    if (!server) {
+      return _("Enter the server address");
+    }
+    if (names.has(name)) {
+      return _("Use a different name for each OpenConnect client");
+    }
+    names.add(name);
+  }
+
+  return true;
+}
+
+const OpenVpnConfigText = form.TextValue.extend({
+  renderWidget(section_id, option_index, cfgvalue) {
+    const area = form.TextValue.prototype.renderWidget.apply(this, [
+      section_id,
+      option_index,
+      cfgvalue,
+    ]);
+    const input = E("input", {
+      type: "file",
+      accept: ".ovpn,.conf,.txt,text/plain",
+      style: "display:block;margin-top:0.35em",
+    });
+    const note = E(
+      "div",
+      { style: "margin-top:0.35em" },
+      _("or choose a .ovpn file"),
+    );
+    const applyText = (text, fileName) => {
+      const value = `${text || ""}`.replace(/^\uFEFF/, "");
+      this._openvpnApplying = true;
+      area.value = value;
+      if (!this._openvpnConfigBySection) {
+        this._openvpnConfigBySection = {};
+      }
+      if (!this._openvpnFileChosen) {
+        this._openvpnFileChosen = {};
+      }
+      this._openvpnConfigBySection[section_id] = value;
+      this._openvpnFileChosen[section_id] = true;
+      try {
+        const widget =
+          typeof this.getUIElement === "function"
+            ? this.getUIElement(section_id)
+            : null;
+        if (widget && typeof widget.setValue === "function") {
+          widget.setValue(value);
+        }
+      } catch (_error) {
+        /* the textarea value above is what the browser shows */
+      }
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+      area.dispatchEvent(new Event("change", { bubbles: true }));
+      this._openvpnApplying = false;
+      note.textContent = fileName
+        ? `${fileName} · ${value.length}`
+        : _("or choose a .ovpn file");
+    };
+    area.addEventListener("input", () => {
+      if (this._openvpnApplying || !this._openvpnFileChosen?.[section_id]) {
+        return;
+      }
+      this._openvpnConfigBySection[section_id] = area.value;
+    });
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (!file) {
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => applyText(reader.result, file.name);
+      reader.onerror = () => {
+        note.textContent = _("Could not read the OpenVPN file");
+      };
+      reader.readAsText(file);
+    });
+    setTimeout(() => {
+      if (!area.parentNode || input.isConnected) {
+        return;
+      }
+      area.insertAdjacentElement("afterend", input);
+      input.insertAdjacentElement("beforebegin", note);
+    }, 0);
+    return area;
+  },
+  formvalue(section_id) {
+    if (this._openvpnFileChosen && this._openvpnFileChosen[section_id]) {
+      return this._openvpnConfigBySection[section_id] || "";
+    }
+    let typed = "";
+    try {
+      typed = form.TextValue.prototype.formvalue.call(this, section_id);
+    } catch (_error) {
+      typed = "";
+    }
+    if (`${typed || ""}`.trim()) {
+      return typed;
+    }
+    return (this._openvpnConfigBySection && this._openvpnConfigBySection[section_id]) || "";
+  },
+});
+
+function openVpnSettingsKeys() {
+  return [
+    "name",
+    "source",
+    "config",
+    "server",
+    "server_port",
+    "network",
+    "username",
+    "password",
+    "ca",
+    "client_certificate",
+    "client_key",
+    "client_key_password",
+    "advanced",
+    "control_type",
+    "control_key",
+    "key_direction",
+    "data_ciphers",
+    "auth",
+    "server_name",
+    "allow_compression",
+    "mtu",
+    "ping_interval",
+    "ping_restart",
+    "on_demand",
+  ];
+}
+
+function defaultOpenVpnSettings() {
+  return {
+    name: "",
+    source: "config",
+    config: "",
+    server: "",
+    server_port: "1194",
+    network: "udp",
+    username: "",
+    password: "",
+    ca: "",
+    client_certificate: "",
+    client_key: "",
+    client_key_password: "",
+    advanced: "0",
+    control_type: "",
+    control_key: "",
+    key_direction: "",
+    data_ciphers: "",
+    auth: "",
+    server_name: "",
+    allow_compression: "0",
+    mtu: "",
+    ping_interval: "",
+    ping_restart: "",
+    on_demand: "0",
+  };
+}
+
+function addOpenVpnItemOptions(itemSection) {
+  let o = itemSection.option(
+    form.Value,
+    "name",
+    _("Display name"),
+    _("Name shown for this client"),
+  );
+  o.rmempty = false;
+  o.validate = function (_itemId, value) {
+    return `${value || ""}`.trim() ? true : _("Enter a display name");
+  };
+
+  o = itemSection.option(
+    form.ListValue,
+    "source",
+    _("Setup"),
+    _("Paste a config file or fill the connection fields yourself."),
+  );
+  o.value("config", _("Config file"));
+  o.value("manual", _("Manual"));
+  o.default = "config";
+  o.rmempty = false;
+
+  o = itemSection.option(
+    OpenVpnConfigText,
+    "config",
+    _("OpenVPN config"),
+    _("Paste the contents of the .ovpn file, or choose the file."),
+  );
+  o.rows = 12;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "config");
+  o.validate = function (_itemId, value) {
+    const raw = `${value || ""}`;
+    if (!raw.trim()) {
+      return true;
+    }
+    if (!/(^|\n)\s*(remote|secret|port)\b|<ca>|<secret>|<connection>/i.test(raw)) {
+      return _("The config must contain a remote server or a static key");
+    }
+    return true;
+  };
+
+  o = itemSection.option(
+    form.Value,
+    "server",
+    _("Server"),
+    _("OpenVPN server address"),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "vpn.example.com";
+  o.depends("source", "manual");
+  o.validate = function (_itemId, value) {
+    return true;
+  };
+
+  o = itemSection.option(form.Value, "server_port", _("Port"));
+  o.default = "1194";
+  o.rmempty = true;
+  o.retain = true;
+  o.datatype = "port";
+  o.depends("source", "manual");
+
+  o = itemSection.option(form.ListValue, "network", _("Protocol"));
+  o.value("udp", "UDP");
+  o.value("tcp", "TCP");
+  o.default = "udp";
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.Value,
+    "username",
+    _("Username"),
+    _("Used when the server asks for a login. Overrides a login inside the config file."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "config");
+  o.depends("source", "manual");
+
+  o = itemSection.option(form.Value, "password", _("Password"));
+  o.password = true;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "config");
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.TextValue,
+    "ca",
+    _("CA certificate"),
+    _("PEM certificate of the VPN server."),
+  );
+  o.rows = 6;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "manual");
+  o.validate = function (_itemId, value) {
+    return validOpenConnectPem(value, _("Paste a PEM certificate"));
+  };
+
+  o = itemSection.option(
+    form.TextValue,
+    "client_certificate",
+    _("Client certificate"),
+    _("PEM certificate. Leave empty if the server uses only a username and password."),
+  );
+  o.rows = 6;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.TextValue,
+    "client_key",
+    _("Client private key"),
+    _("PEM private key that matches the client certificate."),
+  );
+  o.rows = 6;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.Value,
+    "client_key_password",
+    _("Key password"),
+    _("Only if the private key is encrypted."),
+  );
+  o.password = true;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.Flag,
+    "advanced",
+    _("Additional"),
+    _("TLS key, ciphers, certificate name, MTU and on demand."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+  o.depends("source", "config");
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.ListValue,
+    "control_type",
+    _("TLS control key"),
+    _("tls-auth or tls-crypt key, if the server uses one."),
+  );
+  o.value("", _("None"));
+  o.value("tls_auth", "tls-auth");
+  o.value("tls_crypt", "tls-crypt");
+  o.value("tls_crypt_v2", "tls-crypt-v2");
+  o.rmempty = true;
+  o.retain = true;
+  o.depends({ source: "manual", advanced: "1" });
+
+  o = itemSection.option(
+    form.TextValue,
+    "control_key",
+    _("Control key"),
+    _("Contents of the tls-auth or tls-crypt key."),
+  );
+  o.rows = 6;
+  o.rmempty = true;
+  o.retain = true;
+  o.depends({ source: "manual", advanced: "1" });
+
+  o = itemSection.option(form.ListValue, "key_direction", _("Key direction"));
+  o.value("", _("Auto"));
+  o.value("client", _("Client"));
+  o.value("server", _("Server"));
+  o.rmempty = true;
+  o.retain = true;
+  o.depends({ source: "manual", advanced: "1" });
+
+  o = itemSection.option(
+    form.Value,
+    "data_ciphers",
+    _("Data ciphers"),
+    _("From the config line cipher or data-ciphers. Example: AES-256-GCM:AES-128-GCM or AES-256-CBC"),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.Value,
+    "auth",
+    _("Auth digest"),
+    _("From the config line auth, for example SHA256. Leave empty for the default."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "SHA256";
+  o.depends("source", "manual");
+
+  o = itemSection.option(
+    form.Value,
+    "server_name",
+    _("Certificate name"),
+    _("Name expected in the server certificate."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.depends({ source: "manual", advanced: "1" });
+
+  o = itemSection.option(
+    form.Flag,
+    "allow_compression",
+    _("Allow compression"),
+    _("Enable if the config has comp-lzo or compress. Otherwise the server may refuse the tunnel."),
+  );
+  o.default = "0";
+  o.rmempty = true;
+  o.retain = true;
+  o.depends({ source: "manual", advanced: "1" });
+
+  o = itemSection.option(
+    form.Value,
+    "mtu",
+    _("MTU"),
+    _("Packet size inside the tunnel. Leave empty for the default."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.datatype = "uinteger";
+  o.placeholder = "1500";
+  o.depends({ advanced: "1" });
+
+  o = itemSection.option(
+    form.Value,
+    "ping_interval",
+    _("Connection check interval"),
+    _("How often OpenVPN checks the tunnel. Empty uses the value from the config. Example: 30s."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "30s";
+  o.depends({ advanced: "1" });
+  o.validate = function (_itemId, value) {
+    return validOpenConnectDuration(value);
+  };
+
+  o = itemSection.option(
+    form.Value,
+    "ping_restart",
+    _("Reply timeout"),
+    _("How long to wait for a reply before OpenVPN drops the tunnel. Empty uses the value from the config. Example: 180s."),
+  );
+  o.rmempty = true;
+  o.retain = true;
+  o.placeholder = "180s";
+  o.depends({ advanced: "1" });
+  o.validate = function (_itemId, value) {
+    return validOpenConnectDuration(value);
+  };
+
+  if (singBoxVersionAtLeast(1, 15)) {
+    o = itemSection.option(
+      form.Flag,
+      "on_demand",
+      _("On demand"),
+      _("Disconnect the tunnel when it is idle and bring it back when traffic needs it."),
+    );
+    o.default = "0";
+    o.rmempty = true;
+    o.retain = true;
+    o.depends({ advanced: "1" });
+  }
+}
+
+function showOpenVpnSettingsModal(
+  _section_id,
+  itemValue,
+  option,
+  widget,
+  itemNode,
+  context = {},
+) {
+  return showChildItemSettingsModal(_section_id, itemValue, option, {
+    typeName: "openvpn",
+    valueOption: "name",
+    keys: openVpnSettingsKeys(),
+    defaults: defaultOpenVpnSettings,
+    addOptions: addOpenVpnItemOptions,
+    title: (name) => {
+      const normalized = `${name || ""}`.trim();
+      return normalized ? `${_("OpenVPN")}: ${normalized}` : _("OpenVPN");
+    },
+    afterSave: (_itemId, inputValue, settings, existing) => {
+      const displayName = `${settings.name || inputValue || ""}`.trim();
+      if (existing) {
+        updateDynamicListItemLabel(itemNode, displayName);
+        return;
+      }
+      if (context.adding) {
+        addDynamicListItem(widget, displayName, displayName);
+      } else {
+        updateDynamicListItemLabel(itemNode, displayName);
+      }
+    },
+  });
+}
+
+function validateOpenVpnItemsBeforeSave(section_id, values, option) {
+  const store = childPendingSettingsStore(option, section_id);
+  const names = new Set();
+  for (const value of normalizeDynamicListItems(values)) {
+    const itemId = `${value || ""}`;
+    let settings = store[itemId] || null;
+    if (!settings && isExistingChildItem(section_id, itemId, "openvpn")) {
+      settings = {};
+      openVpnSettingsKeys().forEach((key) => {
+        settings[key] = uci.get(UCI_PACKAGE, itemId, key) || "";
+      });
+    }
+    settings = settings || {};
+    const name = `${settings.name || itemId || ""}`.trim();
+    if (!name) {
+      return _("Enter a display name");
+    }
+    if (names.has(name)) {
+      return _("Use a different name for each OpenVPN client");
+    }
+    names.add(name);
+    const source = `${settings.source || "config"}`;
+    if (source === "manual") {
+      if (!`${settings.server || ""}`.trim()) {
+        return _("Enter the server address");
+      }
+      if (!`${settings.ca || ""}`.includes("-----BEGIN ")) {
+        return _("Paste a PEM certificate");
+      }
+    } else if (!`${settings.config || ""}`.trim()) {
+      return _("Paste an OpenVPN config or choose a file");
+    }
+  }
+  return true;
+}
+
 function showUrlTestSettingsModal(
   _section_id,
   itemValue,
@@ -4971,6 +5982,8 @@ function ensureActionProvidersAvailabilityLoaded() {
           zapretInstalled: Boolean(capabilities?.zapretInstalled),
           zapret2Installed: Boolean(capabilities?.zapret2Installed),
           byedpiInstalled: Boolean(capabilities?.byedpiInstalled),
+          singBoxOpenConnect: Boolean(capabilities?.singBoxOpenConnect),
+          singBoxVersion: capabilities?.singBoxVersion,
         });
         return actionProvidersAvailabilityState;
       })
@@ -8470,6 +9483,110 @@ function createSectionContent(section) {
   o.onListChange = refreshDashboardFilterChoiceWidgets;
   outboundNameSourceOptions.set("interfaces", o);
 
+  o = restrictOpenConnect(
+    section.taboption(
+      "settings",
+      ButtonAddSettingsDynamicList,
+      "openconnect",
+      "OpenConnect",
+      _("Add one or more OpenConnect clients. Available only on sing-box 1.14 or newer."),
+    ),
+  );
+  o.rmempty = true;
+  o.modalonly = true;
+  o.addButtonLabel = _("+ Add OpenConnect");
+  o.childType = "openconnect";
+  o.childValueOption = "name";
+  o.childDefaults = {
+    flavor: "anyconnect",
+    insecure: "0",
+  };
+  o.renderItemSettingsModal = showOpenConnectSettingsModal;
+  o.validateItemsOnSave = function (section_id, values) {
+    return validateOpenConnectItemsBeforeSave(section_id, values, this);
+  };
+  o.hasItemSettings = function (section_id, value) {
+    const normalized = `${value || ""}`.trim();
+    if (isExistingChildItem(section_id, normalized, "openconnect")) {
+      return true;
+    }
+    return normalized.length > 0;
+  };
+  o.inputValueForItem = function (section_id, value) {
+    const inputValue = childItemInputValue(
+      section_id,
+      value,
+      "openconnect",
+      "name",
+    );
+    const store = childPendingSettingsStore(this, section_id);
+    return store[inputValue] && store[inputValue].name
+      ? store[inputValue].name
+      : inputValue;
+  };
+  o.stagedChildSettings = function (section_id, value) {
+    const id = childItemInputValue(section_id, value, "openconnect", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[id] ? Object.assign({}, store[id]) : null;
+  };
+  o.clearStagedChildSettings = function (section_id) {
+    if (this.pendingChildSettings) {
+      delete this.pendingChildSettings[section_id];
+    }
+  };
+  o.renderListItemLabel = function (section_id, itemId) {
+    return this.inputValueForItem(section_id, itemId);
+  };
+  outboundNameSourceOptions.set("openconnect", o);
+
+  o = restrictOpenConnect(
+    section.taboption(
+      "settings",
+      ButtonAddSettingsDynamicList,
+      "openvpn",
+      _("OpenVPN"),
+      _("Add one or more OpenVPN clients. Available only on sing-box 1.14 or newer."),
+    ),
+  );
+  o.rmempty = true;
+  o.modalonly = true;
+  o.addButtonLabel = _("+ Add OpenVPN");
+  o.childType = "openvpn";
+  o.childValueOption = "name";
+  o.childDefaults = defaultOpenVpnSettings();
+  o.renderItemSettingsModal = showOpenVpnSettingsModal;
+  o.validateItemsOnSave = function (section_id, values) {
+    return validateOpenVpnItemsBeforeSave(section_id, values, this);
+  };
+  o.hasItemSettings = function (section_id, value) {
+    const normalized = `${value || ""}`.trim();
+    if (isExistingChildItem(section_id, normalized, "openvpn")) {
+      return true;
+    }
+    return normalized.length > 0;
+  };
+  o.inputValueForItem = function (section_id, value) {
+    const inputValue = childItemInputValue(section_id, value, "openvpn", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[inputValue] && store[inputValue].name
+      ? store[inputValue].name
+      : inputValue;
+  };
+  o.stagedChildSettings = function (section_id, value) {
+    const id = childItemInputValue(section_id, value, "openvpn", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[id] ? Object.assign({}, store[id]) : null;
+  };
+  o.clearStagedChildSettings = function (section_id) {
+    if (this.pendingChildSettings) {
+      delete this.pendingChildSettings[section_id];
+    }
+  };
+  o.renderListItemLabel = function (section_id, itemId) {
+    return this.inputValueForItem(section_id, itemId);
+  };
+  outboundNameSourceOptions.set("openvpn", o);
+
   o = section.taboption(
     "settings",
     ButtonAddSettingsDynamicList,
@@ -9659,6 +10776,8 @@ function configureSectionSection(sectionRef, options = {}) {
   sectionRef.handleRemove = function (section_id) {
     cleanupRemovedChildItems(section_id, "subscription_url", []);
     cleanupRemovedChildItems(section_id, "section_interface", []);
+    cleanupRemovedChildItems(section_id, "openconnect", []);
+    cleanupRemovedChildItems(section_id, "openvpn", []);
     cleanupRemovedChildItems(section_id, "urltest", []);
     cleanupRemovedChildItems(section_id, "priority_group", []);
     return handleRemove.apply(this, arguments);

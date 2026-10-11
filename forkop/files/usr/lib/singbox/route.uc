@@ -22,6 +22,8 @@ function config(settings, runtime) {
     let sniff_inbounds = [];
     if (engine.is_xray_primary()) {
         push(sniff_inbounds, runtime_constants.XRAY_PLANE_MIXED_INBOUND_TAG);
+        for (let spec in engine.fullroute_sidecar_specs())
+            push(sniff_inbounds, spec.inbound_tag);
     }
     else {
         push(sniff_inbounds, runtime_constants.TPROXY_INBOUND_TAG);
@@ -84,9 +86,20 @@ function has_resolve_matchers(rule) {
         rule.domain_regex != null || rule.rule_set != null;
 }
 
+function xray_sidecar_section(section, action) {
+    // Only the sing-box primary plane hands a section to Xray. Xray as the
+    // main engine resolves names itself and must not be sent through this path.
+    if (engine.is_xray_primary())
+        return false;
+    if (!connections.is_connections_action(action))
+        return false;
+    return connections.proxy_core(section) == "xray";
+}
+
 function resolve_rule_for_section(section, route_rule) {
     let action = option(section, "action", "");
-    let should_resolve = action == "byedpi" ||
+    let sidecar = xray_sidecar_section(section, action);
+    let should_resolve = action == "byedpi" || sidecar ||
         (connections.is_connections_action(action) &&
             bool_option(section, "resolve_real_ip_for_routing", false));
 
@@ -106,6 +119,12 @@ function resolve_rule_for_section(section, route_rule) {
     }
     resolve_rule.action = "resolve";
     resolve_rule.server = runtime_constants.DNS_SERVER_TAG;
+    if (sidecar) {
+        // Ask the real DNS server, not FakeIP, and do not reuse a cached
+        // 198.18 answer. sing-box then connects to Xray by that IP.
+        resolve_rule.strategy = "ipv4_only";
+        resolve_rule.disable_cache = true;
+    }
 
     return { rule: resolve_rule };
 }

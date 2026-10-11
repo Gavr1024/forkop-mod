@@ -22,7 +22,7 @@ const SING_BOX_VERSION_CACHE_FILE = getenv("FORKOP_UI_SING_BOX_VERSION_CACHE_FIL
 const SING_BOX_VERSION_CACHE_LOCK_DIR = getenv("FORKOP_UI_SING_BOX_VERSION_CACHE_LOCK_DIR") || SING_BOX_VERSION_CACHE_FILE + ".lock";
 const SING_BOX_VARIANT_STATE_FILE = getenv("FORKOP_UI_SING_BOX_VARIANT_STATE_FILE") || "/etc/forkop/sing-box-variant";
 const SING_BOX_BIN_PATH = getenv("FORKOP_UI_SING_BOX_BIN_PATH") || "/usr/bin/sing-box";
-const SING_BOX_VERSION_PROBE_TIMEOUT_SECONDS = getenv("FORKOP_UI_SING_BOX_VERSION_PROBE_TIMEOUT_SECONDS") || "1";
+const SING_BOX_VERSION_PROBE_TIMEOUT_SECONDS = getenv("FORKOP_UI_SING_BOX_VERSION_PROBE_TIMEOUT_SECONDS") || "8";
 const SING_BOX_VERSION_PROBE_FAILURE_TTL_SECONDS = getenv("FORKOP_UI_SING_BOX_VERSION_PROBE_FAILURE_TTL_SECONDS") || "30";
 const ACTION_FINISHED_TTL_MINUTES = getenv("FORKOP_UI_ACTION_FINISHED_TTL_MINUTES") || "60";
 const ACTION_ACKED_TTL_SECONDS = getenv("FORKOP_UI_ACTION_ACKED_TTL_SECONDS") || "15";
@@ -1046,12 +1046,78 @@ function server_inbounds_enabled_count() {
     return count;
 }
 
+function sing_box_version_parts(version) {
+    version = trim(as_string(version));
+    if (substr(version, 0, 1) == "v" || substr(version, 0, 1) == "V")
+        version = substr(version, 1);
+
+    let major = "";
+    let i = 0;
+    let n = length(version);
+    while (i < n) {
+        let c = substr(version, i, 1);
+        if (c >= "0" && c <= "9")
+            break;
+        i++;
+    }
+    while (i < n) {
+        let c = substr(version, i, 1);
+        if (c < "0" || c > "9")
+            break;
+        major = major + c;
+        i++;
+    }
+    if (major == "" || i >= n || substr(version, i, 1) != ".")
+        return null;
+    i++;
+    let minor = "";
+    while (i < n) {
+        let c = substr(version, i, 1);
+        if (c < "0" || c > "9")
+            break;
+        minor = minor + c;
+        i++;
+    }
+    if (minor == "")
+        return null;
+    return { major: int(major), minor: int(minor) };
+}
+
+function sing_box_openconnect_supported(version) {
+    let parts = sing_box_version_parts(version);
+    if (parts == null)
+        return 0;
+    if (parts.major > 1 || (parts.major == 1 && parts.minor >= 14))
+        return 1;
+    return 0;
+}
+
+function sing_box_recorded_version() {
+    return trim(as_string(fs.readfile("/etc/forkop/sing-box-version")));
+}
+
+function sing_box_installed_version() {
+    let variant = trim(as_string(fs.readfile(SING_BOX_VARIANT_STATE_FILE)));
+    if (variant == "extended" || variant == "extended-compressed") {
+        let recorded = sing_box_recorded_version();
+        if (recorded != "")
+            return recorded;
+    }
+
+    let info = sing_box_version_info();
+    if (info != null && as_string(info.version) != "")
+        return as_string(info.version);
+    return sing_box_recorded_version();
+}
+
 function capability_flags() {
     let result = {
         sing_box_extended: 0,
         sing_box_tiny: 0,
         sing_box_compressed: 0,
         sing_box_tailscale: 0,
+        sing_box_openconnect: 0,
+        sing_box_version: "",
         zapret_installed: file_executable(ZAPRET_PROVIDER_NFQWS_BIN) ? 1 : 0,
         zapret2_installed: file_executable(ZAPRET2_PROVIDER_NFQWS2_BIN) ? 1 : 0,
         byedpi_installed: file_executable(BYEDPI_BIN) ? 1 : 0,
@@ -1061,6 +1127,9 @@ function capability_flags() {
     };
 
     if (file_executable(SING_BOX_BIN_PATH)) {
+        let installed_version = sing_box_installed_version();
+        result.sing_box_version = installed_version;
+        result.sing_box_openconnect = sing_box_openconnect_supported(installed_version);
         if (marker_is("extended-compressed")) {
             result.sing_box_extended = 1;
             result.sing_box_compressed = 1;
@@ -1089,6 +1158,11 @@ function capability_flags() {
                     result.sing_box_tiny = 1;
             }
         }
+    }
+    else {
+        let recorded = sing_box_recorded_version();
+        result.sing_box_version = recorded;
+        result.sing_box_openconnect = sing_box_openconnect_supported(recorded);
     }
 
     result.server_inbounds_enabled_count = server_inbounds_enabled_count();
@@ -1468,9 +1542,14 @@ function latency_probe_xray(section) {
     return engine.is_xray_primary() && !engine.need_singbox_sidecar();
 }
 
+function latency_tag_is_singbox(tag) {
+    tag = as_string(tag);
+    return index(tag, "-openconnect-") >= 0 || index(tag, "-openvpn-") >= 0 || index(tag, "sb-full-") == 0;
+}
+
 function latency_worker(path, latency_type, tag, timeout, section) {
     let status = 1;
-    if (latency_probe_xray(section)) {
+    if (latency_probe_xray(section) && !latency_tag_is_singbox(tag)) {
         let cmd = [
             "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
             "latency-test", latency_type, tag, timeout

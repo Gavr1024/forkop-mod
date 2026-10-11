@@ -1,0 +1,8 @@
+Strategy lines and domain lists in this directory are taken from
+ByeByeDPI by romanvht (https://github.com/romanvht/ByeByeDPI),
+files app/src/main/assets/proxytest_strategies.list and proxytest_*.sites.
+
+ByeByeDPI is licensed under the GNU GPL version 3.
+The Forkop checker is a separate implementation of the same idea:
+start local ciadpi as a SOCKS proxy, request each site through it,
+and treat a strategy as better when more response bodies arrive in full.

@@ -811,6 +811,11 @@ function start_runtime() {
         log_message("Xray service script is missing; install Xray from Components", "fatal");
         return 1;
     }
+    if (process_detected() && (engine.is_xray_primary() ? plane_listen_ready() : configured_ports_listening())) {
+        apply_saved_balancer_overrides();
+        start_urltest_worker();
+        return 0;
+    }
     ensure_asset_env();
     let log_path = "/tmp/forkop-xray-start." + as_string(clock()[0]);
     let status = command_status(
@@ -1138,10 +1143,23 @@ function stats_json() {
         });
         return 0;
     }
+    let parsed_stats = parse_json_object(xray_api_output("statsquery"));
+    let by_tag = outbound_traffic_map(parsed_stats);
     let traffic = xray_inbound_stats();
     let uplink = traffic.uplink;
     let downlink = traffic.downlink;
-    let sections = section_traffic_map(outbound_traffic_map(parse_json_object(xray_api_output("statsquery"))));
+    let sections = section_traffic_map(by_tag);
+    for (let spec in engine.fullroute_sidecar_specs()) {
+        let name = as_string(spec.name || "");
+        let tag = as_string(spec.outbound_tag || "");
+        if (name == "" || tag == "")
+            continue;
+        let item = object_or_empty(by_tag[tag]);
+        let bucket = object_or_empty(sections[name]);
+        bucket.uplink = int(bucket.uplink || 0) + int(item.uplink || 0);
+        bucket.downlink = int(bucket.downlink || 0) + int(item.downlink || 0);
+        sections[name] = bucket;
+    }
     if (uplink <= 0 && downlink <= 0) {
         let nft_bytes = nft_chain_bytes("proxy");
         if (nft_bytes <= 0)
@@ -1771,7 +1789,8 @@ function nodes_json() {
     write_json({
         success: true,
         nodes,
-        selected
+        selected,
+        delays: read_json_object(xray_constants.XRAY_LATENCY_FILE)
     });
     return 0;
 }
@@ -1955,7 +1974,12 @@ function proxy_latency_json(tag, timeout) {
         write_json({ delay: 0 });
         return 0;
     }
-    let delay = probe_socks_delay(resolve_probe_port(tag), latency_test_url(), int(timeout || 5000));
+    let port = resolve_probe_port(tag);
+    if (port <= 0) {
+        write_json({ message: "timeout" });
+        return 0;
+    }
+    let delay = probe_socks_delay(port, latency_test_url(), int(timeout || 5000));
     let updates = {};
     updates[tag] = delay;
     write_latency_delays(updates);
@@ -2205,7 +2229,7 @@ function urltest_tick() {
         log_message("Xray URLTest: " + name + " -> " + best_tag + " (" + as_string(best_delay) + "ms)", "info");
     }
     urltest_step = "write";
-    write_file(xray_constants.XRAY_LATENCY_FILE, sprintf("%J\n", delays));
+    write_latency_delays(delays);
     if (!changed)
         return 0;
     if (!write_file(xray_constants.XRAY_CONFIG, sprintf("%J\n", config)))

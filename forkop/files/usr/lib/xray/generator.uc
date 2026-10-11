@@ -1945,12 +1945,43 @@ function apply_section_tproxy_matchers(config, section, target) {
         push_tproxy_rule(config, target, { ip: ips });
 }
 
+function ensure_singbox_fullroute_outbound(config, spec) {
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) == "object" && as_string(outbound.tag) == spec.outbound_tag)
+            return;
+    }
+    push(config.outbounds, {
+        protocol: "socks",
+        tag: spec.outbound_tag,
+        settings: {
+            servers: [{
+                address: "127.0.0.1",
+                port: spec.port
+            }]
+        },
+        streamSettings: {
+            sockopt: xray_outbound.sockopt()
+        }
+    });
+}
+
 function apply_section_tproxy_sources(config, section, target) {
     if (target == null)
         return;
     let sources = list_values(section, "fully_routed_ips");
-    if (length(sources) > 0)
-        push_tproxy_rule(config, target, { source: sources });
+    if (length(sources) == 0)
+        return;
+    // SOCKS into the shared sing-box inbound hides the LAN address, so a
+    // source rule there never matches. Give this section its own entrance.
+    if (engine.is_xray_primary() && connections.proxy_core(section) == "sing-box") {
+        let spec = engine.fullroute_sidecar_spec(option(section, ".name", ""));
+        if (spec != null) {
+            ensure_singbox_fullroute_outbound(config, spec);
+            push_tproxy_rule(config, { outboundTag: spec.outbound_tag }, { source: sources });
+            return;
+        }
+    }
+    push_tproxy_rule(config, target, { source: sources });
 }
 
 function tproxy_pin_inbound(tag, listen, port) {
@@ -2055,6 +2086,16 @@ function prepend_routing_rule(config, rule) {
         push(config.routing.rules, existing);
 }
 
+function singbox_forced_outbound(config, section_name) {
+    if (!engine.is_xray_primary())
+        return null;
+    let spec = engine.fullroute_sidecar_spec(section_name);
+    if (spec == null)
+        return null;
+    ensure_singbox_fullroute_outbound(config, spec);
+    return { outboundTag: spec.outbound_tag };
+}
+
 function dns_proxy_target(config) {
     let settings = settings_section();
     if (!bool_option(settings, "dns_detour_enabled", false))
@@ -2062,6 +2103,11 @@ function dns_proxy_target(config) {
     let name = option(settings, "dns_detour_section", "");
     if (name == "")
         return { outboundTag: xray_constants.FREEDOM_TAG };
+    // A sing-box section has no Xray inbound. The shared sidecar would route
+    // 8.8.8.8 by destination and miss the selected section.
+    let forced = singbox_forced_outbound(config, name);
+    if (forced != null)
+        return forced;
     let target = section_socks_route_target(config, name);
     if (target != null)
         return target;
@@ -2114,7 +2160,8 @@ function apply_dns_client_routes(config) {
         };
         if (bool_option(section, "dns_detour_enabled", false)) {
             let detour = option(section, "dns_detour_section", "");
-            let target = detour != "" ? section_socks_route_target(config, detour) : null;
+            let forced = detour != "" ? singbox_forced_outbound(config, detour) : null;
+            let target = forced != null ? forced : (detour != "" ? section_socks_route_target(config, detour) : null);
             if (target != null && target.balancerTag)
                 rule.balancerTag = target.balancerTag;
             else if (target != null && as_string(target.outboundTag || "") != "")

@@ -147,6 +147,13 @@ function show_help() {
     print("                            Validate an NFQWS2 strategy and print JSON result\n");
     print("    validate_byedpi_strategy_json\n");
     print("                            Validate a ByeDPI ciadpi strategy and print JSON result\n");
+    print("    byedpi_strategy_catalog Show ByeDPI strategy lists and domain lists\n");
+    print("    byedpi_strategy_start <json>\n");
+    print("                            Start a background ByeDPI strategy check\n");
+    print("    byedpi_strategy_status  Show the ByeDPI strategy check state\n");
+    print("    byedpi_strategy_sites <n>\n");
+    print("                            Show domains for one ByeDPI strategy result\n");
+    print("    byedpi_strategy_stop    Stop the ByeDPI strategy check\n");
 }
 
 function command_spec(command) {
@@ -235,6 +242,11 @@ function command_spec(command) {
         validate_nfqws_strategy_json: [ "diagnostics/runtime.uc", "validate-nfqws-strategy-json", 1 ],
         validate_nfqws2_strategy_json: [ "diagnostics/runtime.uc", "validate-nfqws2-strategy-json", 1 ],
         validate_byedpi_strategy_json: [ "providers/byedpi/validator.uc", "validate-json", 1 ],
+        byedpi_strategy_catalog: [ "providers/byedpi/strategy_test.uc", "catalog", 0 ],
+        byedpi_strategy_start: [ "providers/byedpi/strategy_test.uc", "start", 1 ],
+        byedpi_strategy_status: [ "providers/byedpi/strategy_test.uc", "status", 0 ],
+        byedpi_strategy_sites: [ "providers/byedpi/strategy_test.uc", "sites", 1 ],
+        byedpi_strategy_stop: [ "providers/byedpi/strategy_test.uc", "stop", 0 ],
         package_prerm: [ "service/package.uc", "prerm", 1 ],
         package_postinst: [ "service/package.uc", "postinst", 0 ],
         luci_postinst: [ "service/package.uc", "luci-postinst", 0 ]

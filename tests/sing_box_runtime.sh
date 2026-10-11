@@ -23,6 +23,84 @@ fail() {
 
 [ ! -e "$SING_BOX_RUNTIME_SH" ] ||
   fail "sing_box_runtime.sh shell owner must be removed"
+grep -Fq 'type: "openconnect"' "$SINGBOX_GENERATOR_UC" ||
+  fail "sing-box generator must emit an OpenConnect endpoint"
+grep -Fq 'sing_box_at_least_1_14' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must be limited to sing-box 1.14 or newer"
+grep -Fq 'childType = "openconnect"' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js" ||
+  fail "section UI must offer several OpenConnect clients"
+grep -Fq 'endpoint.cookie = cookie' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must pass the session cookie through"
+grep -Fq 'endpoint.detour = detour_tag' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade must use the section detour"
+grep -Fq 'openconnect --protocol=anyconnect --authenticate' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade must obtain a session cookie with openconnect"
+grep -Fq 'socks5://127.0.0.1:' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade cookie must be requested through the section SOCKS proxy"
+grep -Fq 'cascade SOCKS port is not ready' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade must not start when the SOCKS port is missing"
+grep -Fq 'before the sing-box configuration' "$LIFECYCLE_UC" ||
+  fail "Xray must be started before the cascaded OpenConnect cookie is requested"
+grep -Fq 'prepare-openconnect-cascade' "$ROOT_DIR/forkop/files/usr/lib/service/lifecycle.uc" ||
+  fail "OpenConnect must get a sing-box cascade proxy before the configuration is generated"
+grep -Fq 'openconnect-cascade.json' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade through sing-box must use its own SOCKS port"
+grep -Fq 'remember_probe_delay' "$ROOT_DIR/forkop/files/usr/lib/diagnostics/runtime.uc" ||
+  fail "OpenConnect latency must be stored for the information panel"
+grep -Fq 'endpoint.dpd_interval = dpd_interval' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must pass the connection check interval"
+grep -Fq 'endpoint.compression_disabled = true' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must be able to disable compression"
+grep -Fq 'endpoint.on_demand = true' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect on_demand must be written only as an explicit endpoint field"
+grep -Fq 'sing_box_at_least_1_15' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect on_demand requires sing-box 1.15"
+grep -Fq '"openvpn"' "$ROOT_DIR/forkop/files/usr/lib/config/connections.uc" ||
+  fail "OpenVPN clients must be loaded with the other child sections"
+grep -Fq 'ensure_dns_detour_sidecars' "$SINGBOX_GENERATOR_UC" ||
+  fail "sing-box must accept DNS from Xray on the selected section entrance"
+grep -Fq '_openvpnFileChosen' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js" ||
+  fail "choosing an OpenVPN file must replace a config that is already filled in"
+grep -Fq 'type: "openvpn-client"' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenVPN must be generated as a sing-box endpoint"
+grep -Fq 'ovpn-via-' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenVPN cascade through Xray must use that section SOCKS port"
+grep -Fq 'repair-openconnect-auth' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect helper package must run only after sing-box itself fails to log in"
+grep -Fq 'openconnect_parse_sha' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must learn the server certificate SHA256 when the field is empty"
+grep -Fq 'direct session cookie' "$SINGBOX_GENERATOR_UC" ||
+  fail "direct OpenConnect must obtain a session cookie with the openconnect client"
+grep -Fq 'allow_compression' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenVPN must accept server compression when the config asks for it"
+grep -Fq -- '-openvpn-' "$ROOT_DIR/forkop/files/usr/lib/diagnostics/runtime.uc" ||
+  fail "OpenVPN latency must use its own probe port"
+grep -Fq 'tcp_keep_alive_enabled' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must be able to enable keepalive"
+grep -Fq 'spec.outbound_tag' "$ROOT_DIR/forkop/files/usr/lib/xray/runtime.uc" ||
+  fail "OpenConnect section traffic must include the Xray sidecar outbound"
+grep -Fq 'latency_tag_is_singbox' "$ROOT_DIR/forkop/files/usr/lib/service/ui.uc" ||
+  fail "OpenConnect latency button must not use the Xray SOCKS probe"
+grep -Fq 'fullroute-in-' "$ROOT_DIR/forkop/files/usr/lib/diagnostics/runtime.uc" ||
+  fail "OpenConnect section traffic must match the sing-box fullroute inbound"
+grep -Fq 'applyLatencyProbeToSection' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "OpenConnect latency button must write the measured delay onto the card"
+grep -Fq 'oc-probe-' "$SINGBOX_GENERATOR_UC" ||
+  fail "Each OpenConnect client must have its own latency probe inbound"
+grep -Fq 'openconnect_probe_delay' "$ROOT_DIR/forkop/files/usr/lib/diagnostics/runtime.uc" ||
+  fail "OpenConnect latency must be measured per client"
+grep -Fq 'openConnectMeasuredDelay' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "OpenConnect delay must stay visible when the section also has URLTest"
+grep -Fq 'keepOpenConnectDelays' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "A later dashboard refresh must not wipe a measured OpenConnect delay"
+grep -Fq 'cores[name] !== "sing-box"' "$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js" ||
+  fail "OpenConnect section traffic must come from sing-box connections when Xray is primary"
+grep -Fq 'did not return a session cookie' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade must not start when the session cookie cannot be obtained"
+grep -Fq 'openconnect_nslookup_ipv4' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade lookup must not depend on the timeout command"
+grep -Fq 'was not started: direct DNS' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect must not start when direct DNS does not resolve the cascaded server"
 grep -Fq '#!/usr/bin/ucode' "$FORKOP_BIN" ||
   fail "forkop entrypoint must be a direct ucode executable"
 grep -Fq 'service/lifecycle.uc' "$CLI_UC" ||

@@ -1,4 +1,4 @@
-# Forkop-Mod 1.0.9 patch set
+# Forkop-Mod 1.0.10 patch set
 
 Based on upstream https://github.com/ushan0v/forkop main (1.0.5).
 
@@ -17,6 +17,21 @@ Based on upstream https://github.com/ushan0v/forkop main (1.0.5).
 - Nested FakeIP is dropped (`match_response` invert 198.18/fc00). Fallback is **DoT :853** then **DoH :443** to the configured bootstrap host (`bypass-out`), which the upstream Forkop cannot poison.
 - Hostname/IP in the list expands to **all** v4 and v6 addresses of that device (DHCP leases + odhcpd hosts). LuCI save does the same from host hints.
 - Marker string in generator: `forkop-exclusions-fix-5`.
+
+### Xray sidecar real IP
+When sing-box is the main engine and a section uses Xray, sing-box resolves the site through the real DNS server (`ipv4_only`, without the FakeIP cache) and opens the local SOCKS connection to that IP. Xray then sends the real address into the VPN interface. This rule is not added when Xray itself is the main engine.
+
+### Full routing into a sing-box section while Xray is the main engine
+Xray already chooses the section by the device network, then hands the connection to sing-box. That handoff used to hide the device address, so sing-box did not apply the section and the VPN interfaces stayed at 0 bytes. The section now has its own entrance: Xray sends only that network there, and sing-box forwards everything from that entrance to the section interfaces.
+
+### Sing-box port check while Xray is the main engine
+The diagnostics row no longer looks for the transparent-proxy and DNS ports. Those belong to Xray. It checks the local entrance sing-box actually listens on, including the extra entrance used by forced device routing.
+
+### Mangle counter warning with forced routing
+Traffic from a fully routed device is marked in `priority_rules` and does not reach the later `mangle` counters. The diagnostics row now treats a non-zero `priority_rules` counter as a successful mangle counter.
+
+### OpenConnect on sing-box 1.14+
+While Xray is the main routing plane, a sing-box section such as OpenConnect is still shown in the information panel. Its traffic counter uses the Xray outbound that feeds the section, and the latency button probes that section's local mixed port instead of a missing Clash proxy tag. The measured delay is stored and shown on the OpenConnect card after the button finishes. A failed lookup no longer replaces a delay that already succeeded, and the card also accepts the delay stored for the section name. Additional settings can also set the connection check interval, reconnect timeout, TCP keepalive and disable compression. The version is read from the recorded install as well as from the binary, so a slow start no longer hides the button. Each OpenConnect client can store the VPN server certificate SHA hash. Client certificate, session cookie, certificate name, UDP, IPv6 and MTU stay under an Additional checkbox and are applied only while that checkbox is on. With cascade enabled, Xray is started before the sing-box configuration is built. Forkop then obtains a session cookie with `openconnect --authenticate` through that section's SOCKS inbound, not directly. The endpoint dials the resolved IPv4 through the section detour with the cookie, so the tunnel is not redirected to 127.0.0.1. A cookie typed in the client is used as-is and is not replaced. If the SOCKS port is missing or the command returns no cookie, the client is left out of the config and an error is logged. The original name is kept as the TLS server name. Without cascade the configured name is written unchanged and sing-box authenticates itself. If the direct lookup fails, the client is left out of the config and an error is logged, so it does not connect directly. Username and password are written as endpoint fields. A session cookie, when set, is passed through and skips the login form.
 
 ### Hostname crash fix (`forkop-exclusions-fix-3`)
 LuCI often stores a DHCP name (`motorola-edge-60-fusion`) instead of an IP.
@@ -127,7 +142,7 @@ Leftover `route_router_traffic=1` without a section (old checkbox) is treated as
 
 Copy **settings.js, generator.uc, route.uc, constants.uc, nft/apply.uc, lifecycle.uc, state.uc, validator.uc** together and **restart Forkop**, not only Save. Copying nft/lifecycle without generator DNATs to a closed port.
 
-Сборка ipk/apk — в `BUILD.md` (`./build.sh 1.0.9 ./dist`). Версия пакета 1.0.9.
+Сборка ipk/apk — в `BUILD.md` (`./build.sh 1.0.10 ./dist`). Версия пакета 1.0.10.
 
 ## Manual copy onto an existing 1.0.5 install
 
@@ -194,3 +209,11 @@ cp luci-app-forkop/po/ru/forkop.po /usr/lib/lua/luci/i18n/forkop.ru.po 2>/dev/nu
 - Auto-switch applies a slot after repeated ping success/failure.
 - Ping checks run in a Forkop worker by default (`slots_probe_backend=worker`). System cron remains selectable on the Slots tab.
 - Apply slot / save switch settings do not wait for Xray reload or the ping worker (LuCI `file.exec` would otherwise time out with "Slot action failed").
+
+### ByeDPI strategy check
+- LuCI tab **ByeDPI** runs a local strategy probe the same way as [ByeByeDPI](https://github.com/romanvht/ByeByeDPI): `ciadpi` is a SOCKS proxy on the router, each site is requested through it, and a hit counts only when the response body arrives in full.
+- Built-in command lines and domain lists are the ByeByeDPI `proxytest_strategies.list` / `proxytest_*.sites` set (`strategy-data/`, GPL-3 attribution in `NOTICE`).
+- The tab is registered in the menu only when `ciadpi` is executable (`byedpi_installed`). Installing or removing ByeDPI on the Components tab shows or hides it without a manual reload. Removing ByeDPI also stops a running check.
+- Start checks that the domains behind the ticked lists are all present, and refuses to run if the count does not match. The result says how many domains that run tested. A previous run with a different set is labeled as an old result. Domain rows load only after Details, one strategy at a time, so the status reply is not cut off.
+- Domain filtering must not use `\s` inside a ucode character class: that class treated the letter `s` as forbidden, so only names without `s` were tested (the first 6 YouTube hosts) and other lists were rejected as empty or incomplete.
+- The check process is started with `start-stop-daemon -b`, which closes the descriptors inherited from LuCI. Without that, the Start request stays open until the whole check finishes, the page says the start failed, and the check keeps running in the background.

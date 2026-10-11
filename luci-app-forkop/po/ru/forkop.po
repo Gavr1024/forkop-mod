@@ -2989,3 +2989,381 @@ msgstr "Протокол DNS этого интерфейса."
 
 msgid "DNS server used by this interface."
 msgstr "DNS-сервер этого интерфейса."
+
+msgid "ByeDPI"
+msgstr "ByeDPI"
+
+msgid "Strategy check"
+msgstr "Проверка стратегий"
+
+msgid "ByeDPI listens on the router and the check opens each site through its SOCKS proxy. Nothing is sent to a remote VPN server. A request counts as successful only when the reply body arrives in full, not merely when the site answers. The strategy with more successful requests is the more universal one. It is not necessarily the best strategy for every single site."
+msgstr "ByeDPI слушает на роутере, а проверка открывает каждый сайт через его SOCKS. На удалённый VPN-сервер ничего не отправляется. Запрос успешен только если тело ответа пришло целиком, а не просто если сайт ответил. Стратегия с большим числом успешных запросов универсальнее. Это не значит, что она лучшая для каждого отдельного сайта."
+
+msgid "Built-in list from ByeByeDPI"
+msgstr "Встроенный список из ByeByeDPI"
+
+msgid "Preparing…"
+msgstr "Подготовка…"
+
+msgid "Extra domains"
+msgstr "Дополнительные домены"
+
+msgid "One domain per line. https:// is added when the scheme is missing."
+msgstr "По одному домену в строке. Если схемы нет, добавляется https://."
+
+msgid "SNI"
+msgstr "SNI"
+
+msgid "Requests per site"
+msgstr "Запросов на сайт"
+
+msgid "Timeout (seconds)"
+msgstr "Таймаут (секунды)"
+
+msgid "Pause between strategies (seconds)"
+msgstr "Пауза между стратегиями (секунды)"
+
+msgid "Parallel requests"
+msgstr "Параллельные запросы"
+
+msgid "ByeByeDPI uses 20. On a router, 4–8 is safer."
+msgstr "В ByeByeDPI стоит 20. На роутере безопаснее 4–8."
+
+msgid "Use my strategies"
+msgstr "Использовать мои стратегии"
+
+msgid "One ciadpi strategy per line. Leave this off to test the built-in ByeByeDPI list."
+msgstr "Одна стратегия ciadpi на строку. Выключите, чтобы проверять встроенный список ByeByeDPI."
+
+msgid "Start"
+msgstr "Старт"
+
+msgid "Stop"
+msgstr "Стоп"
+
+msgid "Stopping…"
+msgstr "Остановка…"
+
+msgid "About %d requests across %d strategies. Each request can take up to %d s."
+msgstr "Около %d запросов по %d стратегиям. Каждый запрос может занять до %d с."
+
+msgid "ciadpi is not installed"
+msgstr "ciadpi не установлен"
+
+msgid "Select at least one domain"
+msgstr "Выберите хотя бы один домен"
+
+msgid "Custom strategy list is empty"
+msgstr "Список своих стратегий пуст"
+
+msgid "A strategy check is already running"
+msgstr "Проверка стратегий уже идёт"
+
+msgid "Check the SNI and numeric settings"
+msgstr "Проверьте SNI и числовые настройки"
+
+msgid "Too many domains or strategies"
+msgstr "Слишком много доменов или стратегий"
+
+msgid "Could not start the strategy check"
+msgstr "Не удалось запустить проверку стратегий"
+
+msgid "Strategy %d of %d"
+msgstr "Стратегия %d из %d"
+
+msgid "ByeDPI check failed"
+msgstr "Проверка ByeDPI не удалась"
+
+msgid "Check was interrupted"
+msgstr "Проверка прервана"
+
+msgid "Check complete"
+msgstr "Проверка завершена"
+
+msgid "Strategy saved to “%s”. Press Save & Apply to start using it."
+msgstr "Стратегия записана в «%s». Нажмите «Сохранить и применить», чтобы она заработала."
+
+msgid "No ByeDPI section yet. Create one on the Sections tab with action ByeDPI, then apply the strategy."
+msgstr "Раздела ByeDPI ещё нет. Создайте его на вкладке «Секции» с действием ByeDPI и затем примените стратегию."
+
+msgid "Applying a strategy only fills the section field. Save & Apply reloads Forkop."
+msgstr "Применение только заполняет поле раздела. «Сохранить и применить» перезагружает Forkop."
+
+msgid "Hide details"
+msgstr "Скрыть подробности"
+
+msgid "Details"
+msgstr "Подробности"
+
+msgid "Apply"
+msgstr "Применить"
+
+msgid "Failed to start ciadpi"
+msgstr "Не удалось запустить ciadpi"
+
+msgid "Checked %d domains"
+msgstr "Проверено %d доменов"
+
+msgid "This is an old result, %d domains"
+msgstr "Это старый результат, %d доменов"
+
+msgid "The domain list is incomplete. Reload the page and try again."
+msgstr "Список доменов собрался не целиком. Обновите страницу и попробуйте ещё раз."
+
+msgid "OpenConnect server"
+msgstr "Сервер OpenConnect"
+
+msgid "HTTPS address of the OpenConnect server. Available only on sing-box 1.14 or newer."
+msgstr "HTTPS-адрес сервера OpenConnect. Доступно только на sing-box 1.14 и новее."
+
+msgid "OpenConnect protocol"
+msgstr "Протокол OpenConnect"
+
+msgid "Which VPN dialect the server speaks"
+msgstr "Какой тип VPN говорит сервер"
+
+msgid "Auth group"
+msgstr "Группа авторизации"
+
+msgid "Skip certificate check"
+msgstr "Не проверять сертификат"
+
+msgid "+ Add OpenConnect"
+msgstr "+ Добавить OpenConnect"
+
+msgid "OpenConnect"
+msgstr "OpenConnect"
+
+msgid "Add one or more OpenConnect clients. Available only on sing-box 1.14 or newer."
+msgstr "Добавьте один или несколько клиентов OpenConnect. Доступно только на sing-box 1.14 и новее."
+
+msgid "Name shown for this client"
+msgstr "Имя этого клиента"
+
+msgid "HTTPS address of the OpenConnect server"
+msgstr "HTTPS-адрес сервера OpenConnect"
+
+msgid "Enter the server address"
+msgstr "Введите адрес сервера"
+
+msgid "Use a different name for each OpenConnect client"
+msgstr "Дайте каждому клиенту OpenConnect своё имя"
+
+msgid "Server certificate SHA hash"
+msgstr "Сертификат SHA hash VPN-сервера"
+
+msgid "SHA hash of the VPN server certificate. The same value as OpenConnect --servercert. A sha256: prefix is also accepted."
+msgstr "SHA-хеш сертификата VPN-сервера. То же значение, что OpenConnect --servercert. Префикс sha256: тоже подходит."
+
+msgid "Enter a SHA hash of the server certificate"
+msgstr "Введите SHA-хеш сертификата сервера"
+
+msgid "Additional"
+msgstr "Дополнительно"
+
+msgid "Client certificate, session cookie, server name, UDP, IPv6, MTU, connection check, keepalive, compression and on demand."
+msgstr "Клиентский сертификат, cookie сессии, имя для сертификата, UDP, IPv6, MTU, проверка связи, keepalive, сжатие и подключение по требованию."
+
+msgid "Connection check interval"
+msgstr "Интервал проверки связи"
+
+msgid "How often the tunnel is checked. Leave empty to use the server value. Example: 30s."
+msgstr "Как часто проверять туннель. Пустое значение оставляет интервал сервера. Пример: 30s."
+
+msgid "Reconnect timeout"
+msgstr "Таймаут переподключения"
+
+msgid "How long reconnection attempts may continue after the tunnel drops. Example: 300s."
+msgstr "Сколько продолжать попытки переподключения после обрыва туннеля. Пример: 300s."
+
+msgid "Keepalive"
+msgstr "Keepalive"
+
+msgid "Send TCP keepalive on the connection to the VPN server."
+msgstr "Отправлять TCP keepalive на соединении с VPN-сервером."
+
+msgid "Disable compression"
+msgstr "Отключить сжатие"
+
+msgid "Do not negotiate AnyConnect compression."
+msgstr "Не согласовывать сжатие AnyConnect."
+
+msgid "On demand"
+msgstr "По требованию"
+
+msgid "Disconnect the tunnel when it is idle and bring it back when traffic needs it."
+msgstr "Разрывать туннель, когда он не нужен, и поднимать снова, когда появляется трафик."
+
+msgid "Port"
+msgstr "Порт"
+
+msgid "OpenVPN"
+msgstr "OpenVPN"
+
+msgid "Add one or more OpenVPN clients. Available only on sing-box 1.14 or newer."
+msgstr "Добавьте один или несколько клиентов OpenVPN. Доступно только на sing-box 1.14 и новее."
+
+msgid "+ Add OpenVPN"
+msgstr "+ Добавить OpenVPN"
+
+msgid "Setup"
+msgstr "Способ настройки"
+
+msgid "Paste a config file or fill the connection fields yourself."
+msgstr "Вставьте файл конфигурации или заполните поля вручную."
+
+msgid "Config file"
+msgstr "Файл конфигурации"
+
+msgid "Manual"
+msgstr "Вручную"
+
+msgid "OpenVPN config"
+msgstr "Конфигурация OpenVPN"
+
+msgid "Paste the contents of the .ovpn file, or choose the file."
+msgstr "Вставьте содержимое файла .ovpn или выберите файл."
+
+msgid "or choose a .ovpn file"
+msgstr "или выберите файл .ovpn"
+
+msgid "The config must contain a remote server or a static key"
+msgstr "В конфигурации должен быть сервер remote или статический ключ"
+
+msgid "Paste an OpenVPN config or choose a file"
+msgstr "Вставьте конфигурацию OpenVPN или выберите файл"
+
+msgid "How often OpenVPN checks the tunnel. Empty uses the value from the config. Example: 30s."
+msgstr "Как часто OpenVPN проверяет туннель. Пустое значение берёт интервал из конфигурации. Пример: 30s."
+
+msgid "Reply timeout"
+msgstr "Таймаут ответа"
+
+msgid "How long to wait for a reply before OpenVPN drops the tunnel. Empty uses the value from the config. Example: 180s."
+msgstr "Сколько ждать ответ, прежде чем OpenVPN разорвёт туннель. Пустое значение берёт паузу из конфигурации. Пример: 180s."
+
+msgid "OpenVPN server address"
+msgstr "Адрес сервера OpenVPN"
+
+msgid "Used when the server asks for a login. Overrides a login inside the config file."
+msgstr "Если сервер запрашивает логин. Заменяет логин из файла конфигурации."
+
+msgid "CA certificate"
+msgstr "Сертификат CA"
+
+msgid "PEM certificate of the VPN server."
+msgstr "PEM-сертификат VPN-сервера."
+
+msgid "PEM certificate. Leave empty if the server uses only a username and password."
+msgstr "Сертификат PEM. Оставьте пустым, если серверу достаточно логина и пароля."
+
+msgid "TLS key, ciphers, certificate name, MTU and on demand."
+msgstr "Ключ TLS, шифры, имя сертификата, MTU и подключение по требованию."
+
+msgid "TLS control key"
+msgstr "Ключ канала TLS"
+
+msgid "tls-auth or tls-crypt key, if the server uses one."
+msgstr "Ключ tls-auth или tls-crypt, если сервер его использует."
+
+msgid "Control key"
+msgstr "Ключ"
+
+msgid "Contents of the tls-auth or tls-crypt key."
+msgstr "Содержимое ключа tls-auth или tls-crypt."
+
+msgid "Key direction"
+msgstr "Направление ключа"
+
+msgid "Data ciphers"
+msgstr "Шифры данных"
+
+msgid "Cipher list separated by colons. Example: AES-256-GCM:AES-128-GCM"
+msgstr "Список шифров через двоеточие. Пример: AES-256-GCM:AES-128-GCM"
+
+msgid "Auth digest"
+msgstr "Контрольная сумма"
+
+msgid "Name expected in the server certificate."
+msgstr "Имя, которое должно быть в сертификате сервера."
+
+msgid "From the config line cipher or data-ciphers. Example: AES-256-GCM:AES-128-GCM or AES-256-CBC"
+msgstr "Строка cipher или data-ciphers из файла. Пример: AES-256-GCM:AES-128-GCM или AES-256-CBC"
+
+msgid "From the config line auth, for example SHA256. Leave empty for the default."
+msgstr "Строка auth из файла, например SHA256. Пустое значение оставляет стандарт."
+
+msgid "Allow compression"
+msgstr "Разрешить сжатие"
+
+msgid "Enable if the config has comp-lzo or compress. Otherwise the server may refuse the tunnel."
+msgstr "Включите, если в файле есть comp-lzo или compress. Иначе сервер может не поднять туннель."
+
+msgid "Could not read the OpenVPN file"
+msgstr "Не удалось прочитать файл OpenVPN"
+
+msgid "Use a different name for each OpenVPN client"
+msgstr "У каждого клиента OpenVPN должно быть своё имя"
+
+msgid "Client certificate"
+msgstr "Клиентский сертификат"
+
+msgid "PEM certificate. Both the certificate and the key are required."
+msgstr "Сертификат в формате PEM. Нужны и сертификат, и ключ."
+
+msgid "Paste a PEM certificate"
+msgstr "Вставьте сертификат PEM"
+
+msgid "Client private key"
+msgstr "Закрытый ключ клиента"
+
+msgid "PEM private key that matches the certificate."
+msgstr "Закрытый ключ PEM от этого сертификата."
+
+msgid "Paste a PEM private key"
+msgstr "Вставьте закрытый ключ PEM"
+
+msgid "Key password"
+msgstr "Пароль ключа"
+
+msgid "Only if the private key is encrypted. Leave empty otherwise."
+msgstr "Только если ключ зашифрован. Иначе оставьте пустым."
+
+msgid "Session cookie"
+msgstr "Cookie сессии"
+
+msgid "Obtain cookie automatically"
+msgstr "Получать куку автоматически"
+
+msgid "When enabled, the session cookie is obtained automatically. The openconnect package is required. When disabled, no cookie is used and sing-box logs in with the username and password. For a cascade this matters: a server that needs a cookie will not connect unless this is enabled."
+msgstr "Если включено, кука получается сама, нужен пакет openconnect. Если выключено, куки нет: sing-box входит логином и паролем. Для каскада это важно: сервер, которому нужна кука, без этой галочки не подключится."
+
+msgid "Cookie from a browser login, when a password is not accepted."
+msgstr "Cookie из входа через браузер, если пароль сервер не принимает."
+
+msgid "Name on the certificate when the server field is an IP address."
+msgstr "Имя в сертификате, если в поле сервера указан IP-адрес."
+
+msgid "Disable UDP"
+msgstr "Отключить UDP"
+
+msgid "Use only TCP. Turn this on when UDP through the tunnel does not work."
+msgstr "Только TCP. Включите, если UDP через туннель не работает."
+
+msgid "Disable IPv6"
+msgstr "Отключить IPv6"
+
+msgid "Do not request an IPv6 address inside the tunnel."
+msgstr "Не запрашивать IPv6-адрес внутри туннеля."
+
+msgid "MTU"
+msgstr "MTU"
+
+msgid "Packet size inside the tunnel. Leave empty for the default."
+msgstr "Размер пакета внутри туннеля. Пустое поле — значение по умолчанию."
+
+msgid "Enter a number"
+msgstr "Введите число"
+
+msgid "Enter an MTU from 576 to 65535"
+msgstr "Введите MTU от 576 до 65535"

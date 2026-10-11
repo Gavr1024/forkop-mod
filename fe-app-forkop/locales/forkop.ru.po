@@ -2986,3 +2986,114 @@ msgstr "Протокол DNS этого интерфейса."
 
 msgid "DNS server used by this interface."
 msgstr "DNS-сервер этого интерфейса."
+
+msgid "ByeDPI"
+msgstr "ByeDPI"
+
+msgid "Strategy check"
+msgstr "Проверка стратегий"
+
+msgid "ByeDPI listens on the router and the check opens each site through its SOCKS proxy. Nothing is sent to a remote VPN server. A request counts as successful only when the reply body arrives in full, not merely when the site answers. The strategy with more successful requests is the more universal one. It is not necessarily the best strategy for every single site."
+msgstr "ByeDPI слушает на роутере, а проверка открывает каждый сайт через его SOCKS. На удалённый VPN-сервер ничего не отправляется. Запрос успешен только если тело ответа пришло целиком, а не просто если сайт ответил. Стратегия с большим числом успешных запросов универсальнее. Это не значит, что она лучшая для каждого отдельного сайта."
+
+msgid "Built-in list from ByeByeDPI"
+msgstr "Встроенный список из ByeByeDPI"
+
+msgid "Preparing…"
+msgstr "Подготовка…"
+
+msgid "Extra domains"
+msgstr "Дополнительные домены"
+
+msgid "One domain per line. https:// is added when the scheme is missing."
+msgstr "По одному домену в строке. Если схемы нет, добавляется https://."
+
+msgid "SNI"
+msgstr "SNI"
+
+msgid "Requests per site"
+msgstr "Запросов на сайт"
+
+msgid "Timeout (seconds)"
+msgstr "Таймаут (секунды)"
+
+msgid "Pause between strategies (seconds)"
+msgstr "Пауза между стратегиями (секунды)"
+
+msgid "Parallel requests"
+msgstr "Параллельные запросы"
+
+msgid "ByeByeDPI uses 20. On a router, 4–8 is safer."
+msgstr "В ByeByeDPI стоит 20. На роутере безопаснее 4–8."
+
+msgid "Use my strategies"
+msgstr "Использовать мои стратегии"
+
+msgid "One ciadpi strategy per line. Leave this off to test the built-in ByeByeDPI list."
+msgstr "Одна стратегия ciadpi на строку. Выключите, чтобы проверять встроенный список ByeByeDPI."
+
+msgid "Start"
+msgstr "Старт"
+
+msgid "Stop"
+msgstr "Стоп"
+
+msgid "Stopping…"
+msgstr "Остановка…"
+
+msgid "About %d requests across %d strategies. Each request can take up to %d s."
+msgstr "Около %d запросов по %d стратегиям. Каждый запрос может занять до %d с."
+
+msgid "ciadpi is not installed"
+msgstr "ciadpi не установлен"
+
+msgid "Select at least one domain"
+msgstr "Выберите хотя бы один домен"
+
+msgid "Custom strategy list is empty"
+msgstr "Список своих стратегий пуст"
+
+msgid "A strategy check is already running"
+msgstr "Проверка стратегий уже идёт"
+
+msgid "Check the SNI and numeric settings"
+msgstr "Проверьте SNI и числовые настройки"
+
+msgid "Too many domains or strategies"
+msgstr "Слишком много доменов или стратегий"
+
+msgid "Could not start the strategy check"
+msgstr "Не удалось запустить проверку стратегий"
+
+msgid "Strategy %d of %d"
+msgstr "Стратегия %d из %d"
+
+msgid "ByeDPI check failed"
+msgstr "Проверка ByeDPI не удалась"
+
+msgid "Check was interrupted"
+msgstr "Проверка прервана"
+
+msgid "Check complete"
+msgstr "Проверка завершена"
+
+msgid "Strategy saved to “%s”. Press Save & Apply to start using it."
+msgstr "Стратегия записана в «%s». Нажмите «Сохранить и применить», чтобы она заработала."
+
+msgid "No ByeDPI section yet. Create one on the Sections tab with action ByeDPI, then apply the strategy."
+msgstr "Раздела ByeDPI ещё нет. Создайте его на вкладке «Секции» с действием ByeDPI и затем примените стратегию."
+
+msgid "Applying a strategy only fills the section field. Save & Apply reloads Forkop."
+msgstr "Применение только заполняет поле раздела. «Сохранить и применить» перезагружает Forkop."
+
+msgid "Hide details"
+msgstr "Скрыть подробности"
+
+msgid "Details"
+msgstr "Подробности"
+
+msgid "Apply"
+msgstr "Применить"
+
+msgid "Failed to start ciadpi"
+msgstr "Не удалось запустить ciadpi"

@@ -100,6 +100,7 @@ const DNS_APPLY_UC = LIB_DIR + "/dns/apply.uc";
 const VALIDATOR_UC = LIB_DIR + "/config/validator.uc";
 const SERVER_UC = LIB_DIR + "/server/service.uc";
 const NFT_UC = LIB_DIR + "/nft/apply.uc";
+const SINGBOX_GENERATOR_UC = LIB_DIR + "/singbox/generator.uc";
 const SINGBOX_UC = LIB_DIR + "/singbox/runtime.uc";
 const XRAY_UC = LIB_DIR + "/xray/runtime.uc";
 const PRIORITY_UC = LIB_DIR + "/singbox/priority.uc";
@@ -687,6 +688,11 @@ function nft_sync_router_output_intercept() {
 }
 
 function singbox_init_config() {
+    if (!module_success(SINGBOX_GENERATOR_UC, [ "prepare-openconnect-cascade" ])) {
+        log_message("Failed to start the sing-box cascade proxy for OpenConnect. Aborted.", "fatal");
+        module_success(SINGBOX_GENERATOR_UC, [ "stop-openconnect-cascade" ]);
+        return 1;
+    }
     let result = module_capture(SINGBOX_UC, [
         "init-config",
         as_string(nft_populate_enabled),
@@ -694,6 +700,7 @@ function singbox_init_config() {
         subscription_runtime_no_refresh,
         subscription_deferred_sections
     ]);
+    module_success(SINGBOX_GENERATOR_UC, [ "stop-openconnect-cascade" ]);
     if (result.status == 0) {
         subscription_deferred_sections = trim(result.output);
         subscription_caches_prepared = "1";
@@ -807,6 +814,10 @@ function start_main() {
     log_message("Xray configuration is ready", "debug");
 
     if (need_sidecar) {
+        if (!module_success(XRAY_UC, [ "start-runtime" ])) {
+            log_message("Failed to start Xray before the sing-box configuration. Aborted.", "fatal");
+            return 1;
+        }
         status = singbox_init_config();
         if (status != 0)
             return status;
@@ -870,6 +881,15 @@ function start_main() {
     if (status != 0) {
         log_message("Routing plane did not reach a stable running state after start. Aborted.", "fatal");
         return status;
+    }
+
+    let openconnect_repair = module_status(SINGBOX_GENERATOR_UC, [ "repair-openconnect-auth" ]);
+    if (openconnect_repair == 2) {
+        log_message("OpenConnect needed the helper package; reloading sing-box", "info");
+        if (!command_success_from_args([ "/etc/init.d/sing-box", "restart" ])) {
+            log_message("Failed to reload sing-box after the OpenConnect helper. Aborted.", "fatal");
+            return 1;
+        }
     }
 
     status = nft_sync_router_output_intercept();

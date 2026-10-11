@@ -1054,7 +1054,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.9";
+var FORKOP_LUCI_APP_VERSION = "1.0.10";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -2116,6 +2116,13 @@ function renderDefaultState({
   selectorSwitchingTag
 }) {
   function testLatency() {
+    const tunnelCodes = (section.outbounds || []).filter((outbound) => {
+      const code = String(outbound.code || "");
+      return (/-openconnect-\d+$/.test(code) || /-openvpn-\d+$/.test(code));
+    }).map((outbound) => outbound.code);
+    if (!section.withTagSelect && tunnelCodes.length > 1) {
+      return onTestLatency(tunnelCodes);
+    }
     if (section.withTagSelect) {
       return onTestLatency(
         section.latencyTestCodes?.length ? section.latencyTestCodes : section.latencyTestCode || section.code
@@ -2123,6 +2130,9 @@ function renderDefaultState({
     }
     if (section.outbounds.length) {
       return onTestLatency(section.outbounds[0].code);
+    }
+    if (section.code) {
+      return onTestLatency(section.code);
     }
   }
   function renderOutbound(outbound) {
@@ -3413,6 +3423,8 @@ function compactSettingsMap(settings) {
 function hydrateConfigSections(configSections) {
   const subscriptionUrls = childSections(configSections, "subscription_url");
   const interfaces = childSections(configSections, "section_interface");
+  const openconnectClients = childSections(configSections, "openconnect");
+  const openvpnClients = childSections(configSections, "openvpn");
   const urltests = childSections(configSections, "urltest");
   const priorityGroups = childSections(configSections, "priority_group");
   const priorityLevels = childSections(configSections, "priority_level");
@@ -3423,6 +3435,8 @@ function hydrateConfigSections(configSections) {
     const next = { ...section };
     const subscriptionUrlItems = ownedChildSections(next, subscriptionUrls);
     const interfaceItems = ownedChildSections(next, interfaces);
+    const openconnectItems = ownedChildSections(next, openconnectClients);
+    const openvpnItems = ownedChildSections(next, openvpnClients);
     const urltestItems = ownedChildSections(next, urltests);
     const priorityGroupItems = ownedChildSections(next, priorityGroups);
     if (subscriptionUrlItems.length) {
@@ -3453,6 +3467,12 @@ function hydrateConfigSections(configSections) {
     }
     if (interfaceItems.length) {
       next.interfaces = interfaceItems.map((item) => item.name || "").filter(Boolean);
+    }
+    if (openconnectItems.length) {
+      next.openconnect_clients = openconnectItems;
+    }
+    if (openvpnItems.length) {
+      next.openvpn_clients = openvpnItems;
     }
     if (urltestItems.length) {
       const settings = {};
@@ -4039,7 +4059,7 @@ function buildPriorityInfo({
     outbounds
   };
 }
-function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGroups = {}, priorityGroups = {}, cachedProxyLinks = /* @__PURE__ */ new Map()) {
+function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGroups = {}, priorityGroups = {}, cachedProxyLinks = /* @__PURE__ */ new Map(), probeDelays = {}) {
   const sectionName = section[".name"];
   const proxyByCode = getProxyEntryByCode(proxies);
   const selectorTag = getOutboundTagBySection(sectionName);
@@ -4094,27 +4114,26 @@ function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGro
       cachedProxyLinks.has(code)
     );
     const isRuntimeUrlTest = isUrlTestProxyEntry(item);
+    const historyDelay = item?.value.history?.[0]?.delay || 0;
+    const measured = openConnectMeasuredDelay(code, probeDelays);
+    const tunnelProtocol = tunnelProtocolLabel(section, code);
+    const baseLabel = priorityConfig ? "Priority" : dashboardClashType(
+      item?.value.type,
+      outboundMetadata?.protocols?.[code]
+    ) || "URLTest";
+    const transport = item?.value.transport || transportFromShareLink(link);
     return [
       {
         code,
         displayName,
-        latency: item?.value.history?.[0]?.delay || 0,
-        probeState: item?.value.probeState || "",
-        type: priorityConfig ? "Priority" : protocolWithTransport(
-          dashboardClashType(
-            item?.value.type,
-            outboundMetadata?.protocols?.[code]
-          ) || "URLTest",
-          item?.value.transport || transportFromShareLink(link)
-        ),
+        latency: measured.used ? measured.delay : historyDelay,
+        probeState: measured.used ? measured.probeState : item?.value.probeState || "",
+        type: tunnelProtocol ? baseLabel : protocolWithTransport(baseLabel, transport),
         badges: outboundBadges(
-          priorityConfig ? "Priority" : dashboardClashType(
-            item?.value.type,
-            outboundMetadata?.protocols?.[code]
-          ) || "URLTest",
-          priorityConfig ? "" : item?.value.transport || transportFromShareLink(link),
-          priorityConfig ? "" : item?.value.security || securityFromShareLink(link),
-          priorityConfig ? "" : item?.value.mask || maskFromShareLink(link)
+          baseLabel,
+          tunnelProtocol || (priorityConfig ? "" : transport),
+          tunnelProtocol || priorityConfig ? "" : item?.value.security || securityFromShareLink(link),
+          tunnelProtocol || priorityConfig ? "" : item?.value.mask || maskFromShareLink(link)
         ),
         selected: selector?.value?.now === code,
         link,
@@ -4234,6 +4253,72 @@ function getSubscriptionMetadata(section, sourceCount, dashboardCache) {
   }
   return void 0;
 }
+function openConnectProtocolLabel(client) {
+  const flavor = String(client?.flavor || client?.openconnect_flavor || "anyconnect").toLowerCase();
+  const names = {
+    anyconnect: "AnyConnect",
+    gp: "GlobalProtect",
+    fortinet: "Fortinet",
+    f5: "F5",
+    pulse: "Pulse",
+    nc: "Juniper"
+  };
+  return names[flavor] || "AnyConnect";
+}
+function openVpnConfigProtocol(config) {
+  const text = String(config || "").replace(/\r/g, "");
+  const found = /* @__PURE__ */ new Set();
+  const proto = text.match(/^\s*proto(?:-force)?\s+(\S+)/im);
+  if (proto) {
+    const value = proto[1].toLowerCase();
+    if (value.startsWith("tcp")) {
+      found.add("TCP");
+    }
+    if (value.startsWith("udp")) {
+      found.add("UDP");
+    }
+  }
+  for (const match of text.matchAll(/^\s*remote\s+\S+\s+\d+(?:\s+(tcp|udp)\S*)?/gim)) {
+    const value = String(match[1] || "").toLowerCase();
+    if (value.startsWith("tcp")) {
+      found.add("TCP");
+    }
+    if (value.startsWith("udp")) {
+      found.add("UDP");
+    }
+  }
+  if (!found.size) {
+    return "";
+  }
+  if (found.has("TCP") && found.has("UDP")) {
+    return "TCP/UDP";
+  }
+  return found.has("TCP") ? "TCP" : "UDP";
+}
+function openVpnProtocolLabel(client) {
+  const source = String(client?.source || "config");
+  if (source !== "manual") {
+    const fromConfig = openVpnConfigProtocol(client?.config);
+    if (fromConfig) {
+      return fromConfig;
+    }
+  }
+  return String(client?.network || "udp").toLowerCase() === "tcp" ? "TCP" : "UDP";
+}
+function tunnelProtocolLabel(section, code) {
+  const text = String(code || "");
+  const openconnect = text.match(/-openconnect-(\d+)$/);
+  if (openconnect) {
+    const client = (section?.openconnect_clients || [])[Number(openconnect[1]) - 1];
+    return client ? openConnectProtocolLabel(client) : "AnyConnect";
+  }
+  const openvpn = text.match(/-openvpn-(\d+)$/);
+  if (openvpn) {
+    const client = (section?.openvpn_clients || [])[Number(openvpn[1]) - 1];
+    return client ? openVpnProtocolLabel(client) : "OpenVPN";
+  }
+  return "";
+}
 function dashboardClashType(clashType, protocol) {
   const type = clashType || "";
   if (type && type.toLowerCase() !== "socks") {
@@ -4247,6 +4332,9 @@ function dashboardClashType(clashType, protocol) {
     hysteria: "Hysteria2",
     hysteria2: "Hysteria2",
     hy2: "Hysteria2",
+    openconnect: "OpenConnect",
+    openvpn: "OpenVPN",
+    "openvpn-client": "OpenVPN",
     direct: "Direct",
     freedom: "Direct",
     socks: "SOCKS"
@@ -4496,6 +4584,83 @@ function mergeXrayNodesIntoClashProxies(proxies, configSections, xrayPayload) {
   });
   return next;
 }
+const openConnectDelayCache = {};
+function noteOpenConnectDelay(key, delay) {
+  if (!key) {
+    return;
+  }
+  const value = Math.max(0, Number(delay) || 0);
+  if (value > 0) {
+    openConnectDelayCache[key] = value;
+  } else {
+    delete openConnectDelayCache[key];
+  }
+}
+function openConnectMeasuredDelay(code, probeDelays) {
+  const codeText = String(code || "");
+  if (!codeText.includes("-openconnect-") && !codeText.includes("-openvpn-")) {
+    return { used: false, delay: 0, probeState: "" };
+  }
+  const delays = probeDelays && typeof probeDelays === "object" ? probeDelays : {};
+  const probed = Object.prototype.hasOwnProperty.call(delays, code);
+  let delay = probed ? Math.max(0, Number(delays[code]) || 0) : 0;
+  if (delay > 0) {
+    noteOpenConnectDelay(code, delay);
+  } else if (probed) {
+    noteOpenConnectDelay(code, 0);
+  } else {
+    const cached = cachedOpenConnectDelay(code);
+    if (cached > 0) {
+      delay = cached;
+    }
+  }
+  const known = delay > 0 || probed;
+  return {
+    used: true,
+    delay,
+    probeState: known ? delay > 0 ? "alive" : "dead" : ""
+  };
+}
+function cachedOpenConnectDelay(code) {
+  return Math.max(0, Number(openConnectDelayCache[code]) || 0);
+}
+function keepOpenConnectDelays(sections) {
+  if (!Array.isArray(sections)) {
+    return sections;
+  }
+  return sections.map((section) => {
+    if (!section || !Array.isArray(section.outbounds)) {
+      return section;
+    }
+    let changed = false;
+    const outbounds = section.outbounds.map((outbound) => {
+      const kind = String(outbound?.type || "").toLowerCase();
+      if (kind !== "openconnect" && kind !== "openvpn") {
+        return outbound;
+      }
+      const current = Math.max(0, Number(outbound.latency) || 0);
+      const cached = cachedOpenConnectDelay(outbound.code);
+      if (current > 0) {
+        noteOpenConnectDelay(outbound.code, current);
+        return outbound;
+      }
+      if (outbound.probeState === "dead") {
+        noteOpenConnectDelay(outbound.code, 0);
+        return outbound;
+      }
+      if (cached <= 0) {
+        return outbound;
+      }
+      changed = true;
+      return {
+        ...outbound,
+        latency: cached,
+        probeState: "alive"
+      };
+    });
+    return changed ? { ...section, outbounds } : section;
+  });
+}
 async function getDashboardSections(options = {}) {
   const includeSubscriptionCopyState = options.includeSubscriptionCopyState ?? true;
   const configSections = hydrateConfigSections(await getConfigSections());
@@ -4515,6 +4680,7 @@ async function getDashboardSections(options = {}) {
     };
   }
   const routingEngine = configuredRoutingEngine(configSections);
+  const probeDelays = xrayNodes.success && xrayNodes.data?.delays && typeof xrayNodes.data.delays === "object" ? xrayNodes.data.delays : {};
   const proxies = Object.entries(mergedProxies).map(([key, value]) => ({
     code: key,
     value
@@ -4546,7 +4712,8 @@ async function getDashboardSections(options = {}) {
           outboundMetadata,
           urltestGroups,
           priorityGroups,
-          cachedProxyLinks
+          cachedProxyLinks,
+          probeDelays
         );
         return withProxyCore(section, routingEngine, {
           withTagSelect: true,
@@ -4606,13 +4773,71 @@ async function getDashboardSections(options = {}) {
           ]
         });
       }
+      const openconnectOutbounds = (section.openconnect_clients || []).map((client, index) => {
+        const code = `${sectionName}-openconnect-${index + 1}`;
+        let probed = Object.prototype.hasOwnProperty.call(probeDelays, code);
+        let delay = probed ? Math.max(0, Number(probeDelays[code]) || 0) : 0;
+        if (delay > 0) {
+          noteOpenConnectDelay(code, delay);
+        } else if (probed) {
+          noteOpenConnectDelay(code, 0);
+        } else {
+          const cached = cachedOpenConnectDelay(code);
+          if (cached > 0) {
+            delay = cached;
+            probed = true;
+          }
+        }
+        return {
+          code,
+          displayName: client.name || `OpenConnect ${index + 1}`,
+          latency: delay,
+          probeState: probed ? delay > 0 ? "alive" : "dead" : "",
+          type: "OpenConnect",
+          badges: outboundBadges("OpenConnect", openConnectProtocolLabel(client)),
+          selected: false,
+          canCopyLink: false,
+          runtimeAvailable: true
+        };
+      });
+      const openvpnOutbounds = (section.openvpn_clients || []).map((client, index) => {
+        const code = `${sectionName}-openvpn-${index + 1}`;
+        let probed = Object.prototype.hasOwnProperty.call(probeDelays, code);
+        let delay = probed ? Math.max(0, Number(probeDelays[code]) || 0) : 0;
+        if (delay > 0) {
+          noteOpenConnectDelay(code, delay);
+        } else if (probed) {
+          noteOpenConnectDelay(code, 0);
+        } else {
+          const cached = cachedOpenConnectDelay(code);
+          if (cached > 0) {
+            delay = cached;
+            probed = true;
+          }
+        }
+        return {
+          code,
+          displayName: client.name || `OpenVPN ${index + 1}`,
+          latency: delay,
+          probeState: probed ? delay > 0 ? "alive" : "dead" : "",
+          type: "OpenVPN",
+          badges: outboundBadges("OpenVPN", openVpnProtocolLabel(client)),
+          selected: false,
+          canCopyLink: false,
+          runtimeAvailable: true
+        };
+      });
+      const tunnelOutbounds = openconnectOutbounds.concat(openvpnOutbounds);
+      if (tunnelOutbounds[0]) {
+        tunnelOutbounds[0].selected = true;
+      }
       return withProxyCore(section, routingEngine, {
         withTagSelect: false,
-        code: sectionName,
+        code: tunnelOutbounds[0]?.code || sectionName,
         sectionName,
         displayName,
         action: sectionAction,
-        outbounds: []
+        outbounds: tunnelOutbounds
       });
     })
   );
@@ -5461,6 +5686,10 @@ function applyServiceState(uiState) {
   nextSystemInfo.sing_box_tiny = uiState.capabilities.sing_box_tiny;
   nextSystemInfo.sing_box_compressed = uiState.capabilities.sing_box_compressed;
   nextSystemInfo.sing_box_tailscale = uiState.capabilities.sing_box_tailscale;
+  nextSystemInfo.sing_box_openconnect = uiState.capabilities.sing_box_openconnect;
+  if (uiState.capabilities.sing_box_version) {
+    nextSystemInfo.sing_box_version = uiState.capabilities.sing_box_version;
+  }
   store.set({
     servicesInfoWidget: {
       loading: false,
@@ -6136,7 +6365,7 @@ async function fetchDashboardSectionsOnce(mountId) {
         ...current,
         loading: false,
         failed: false,
-        data
+        data: keepOpenConnectDelays(data)
       }
     });
     return true;
@@ -6590,13 +6819,19 @@ function connectionTrafficTags(connection) {
       tags.push(tag);
     }
   }
+  const inbound = String(connection?.metadata?.inbound || "").trim();
+  if (inbound) {
+    tags.push(inbound);
+  }
   return tags;
 }
 function matchingSectionNames(tags, names) {
   return names.filter((name) => {
     const prefix = `${name}-`;
     const selector = `${prefix}out`;
-    return tags.some((tag) => tag === selector || tag.startsWith(prefix));
+    const fullroute = `fullroute-in-${name}`;
+    const sidecar = `sb-full-${name}`;
+    return tags.some((tag) => tag === selector || tag === fullroute || tag === sidecar || tag.startsWith(prefix));
   });
 }
 function applySingboxConnectionTraffic(snapshot) {
@@ -6660,6 +6895,31 @@ function applySingboxConnectionTraffic(snapshot) {
   store.set({ sectionTraffic: sections });
   return true;
 }
+async function singboxSectionTraffic(xraySections) {
+  const sections = xraySections && typeof xraySections === "object" ? { ...xraySections } : {};
+  const response = await ForkopShellMethods.getSectionTraffic();
+  const singSections = response.success && response.data && response.data.success !== false ? response.data.sections : null;
+  if (!singSections || typeof singSections !== "object") {
+    return sections;
+  }
+  const cores = {};
+  for (const section of store.get().sectionsWidget?.data || []) {
+    if (section?.sectionName) {
+      cores[section.sectionName] = section.proxyCore;
+    }
+  }
+  for (const [name, bucket] of Object.entries(singSections)) {
+    if (cores[name] !== "sing-box" || !bucket || typeof bucket !== "object") {
+      continue;
+    }
+    const current = sections[name] || { uplink: 0, downlink: 0 };
+    sections[name] = {
+      uplink: Math.max(Math.max(0, Number(current.uplink) || 0), Math.max(0, Number(bucket.uplink) || 0)),
+      downlink: Math.max(Math.max(0, Number(current.downlink) || 0), Math.max(0, Number(bucket.downlink) || 0))
+    };
+  }
+  return sections;
+}
 async function pollXrayPlaneStats(dataUpdatesId) {
   if (dataUpdatesId !== dashboardDataUpdatesId || getDashboardRoutingEngine() !== "xray" || getDashboardServiceAvailability() === "stopped") {
     return;
@@ -6701,7 +6961,7 @@ async function pollXrayPlaneStats(dataUpdatesId) {
         memory: Number(response.data.memory) || 0
       }
     },
-    sectionTraffic: response.data.sections && typeof response.data.sections === "object" ? response.data.sections : {}
+    sectionTraffic: await singboxSectionTraffic(response.data.sections)
   });
 }
 async function pollSingboxSectionTraffic(dataUpdatesId) {
@@ -6792,6 +7052,34 @@ function getInitialLatencyProgress(latencyType, tag) {
     return void 0;
   }
 }
+function applyLatencyProbeToSection(sectionName, tag, delay, alive) {
+  noteOpenConnectDelay(tag, alive ? delay : 0);
+  const sectionsWidget = store.get().sectionsWidget;
+  const data = sectionsWidget.data.map((section) => {
+    if (section.sectionName !== sectionName) {
+      return section;
+    }
+    return {
+      ...section,
+      outbounds: (section.outbounds || []).map((outbound) => {
+        if (outbound.code !== tag) {
+          return outbound;
+        }
+        return {
+          ...outbound,
+          latency: alive ? delay : 0,
+          probeState: alive ? "alive" : "dead"
+        };
+      })
+    };
+  });
+  store.set({
+    sectionsWidget: {
+      ...store.get().sectionsWidget,
+      data
+    }
+  });
+}
 async function handleTestLatency(latencyType, sectionName, tag, timeout) {
   if (store.get().sectionsWidget.latencyFetchingSections[sectionName]) {
     return;
@@ -6833,6 +7121,14 @@ async function handleTestLatency(latencyType, sectionName, tag, timeout) {
     }
     if (!completed) {
       setLatencyFetching(sectionName, false);
+    }
+    if (latencyType === "proxy" && typeof tag === "string" && tag) {
+      const probe = await ForkopShellMethods.getClashApiProxyLatency(tag, timeout || "5000");
+      const delay = Number(probe.data?.delay || 0);
+      const alive = Boolean(probe.success) && !probe.data?.message && delay > 0;
+      if (alive) {
+        applyLatencyProbeToSection(sectionName, tag, delay, true);
+      }
     }
   }
 }
@@ -7428,20 +7724,20 @@ async function renderSectionsWidget() {
       ),
       selectorSwitchingTag: sectionsWidget.selectorSwitchingSections[section.sectionName],
       onTestLatency: (tag) => {
+        if (Array.isArray(tag)) {
+          return handleTestLatency(
+            "proxy_list",
+            section.sectionName,
+            JSON.stringify(tag)
+          );
+        }
         if (section.withTagSelect) {
-          if (Array.isArray(tag)) {
-            return handleTestLatency(
-              "proxy_list",
-              section.sectionName,
-              JSON.stringify(tag)
-            );
-          }
           return handleTestLatency("group", section.sectionName, tag);
         }
         return handleTestLatency(
           "proxy",
           section.sectionName,
-          Array.isArray(tag) ? JSON.stringify(tag) : tag,
+          tag,
           section.latencyTestTimeout
         );
       },
@@ -10416,6 +10712,30 @@ async function runSectionsCheck() {
         return {
           state: "error",
           latency: _("Not responding")
+        };
+      }
+      const openconnectServers = section.outbounds.filter((outbound) => {
+        return /-openconnect-\d+$/.test(String(outbound.code || "")) && outbound.runtimeAvailable !== false;
+      });
+      if (openconnectServers.length) {
+        const results = [];
+        for (const outbound of openconnectServers) {
+          const response = await ForkopShellMethods.getClashApiProxyLatency(
+            outbound.code,
+            section.latencyTestTimeout
+          );
+          const delay = Number(response.data?.delay || 0);
+          const alive = Boolean(response.success) && !response.data?.message && delay > 0;
+          const name = outbound.displayName || outbound.code;
+          results.push({
+            alive,
+            text: `[${name}] ${alive ? `${delay}ms` : _("Not responding")}`
+          });
+        }
+        const aliveCount = results.filter((item) => item.alive).length;
+        return {
+          state: aliveCount === 0 ? "error" : aliveCount === results.length ? "success" : "warning",
+          latency: results.map((item) => item.text).join(", ")
         };
       }
       const selectedOutbound = section.outbounds[0];
@@ -14480,7 +14800,9 @@ function notifyActionProvidersAvailabilityChanged(systemInfo) {
       detail: {
         zapretInstalled: Boolean(systemInfo.zapret_installed),
         zapret2Installed: Boolean(systemInfo.zapret2_installed),
-        byedpiInstalled: Boolean(systemInfo.byedpi_installed)
+        byedpiInstalled: Boolean(systemInfo.byedpi_installed),
+        singBoxVersion: systemInfo.sing_box_version,
+        singBoxOpenConnect: Number(systemInfo.sing_box_openconnect) === 1
       }
     })
   );
