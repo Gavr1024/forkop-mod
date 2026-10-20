@@ -1118,12 +1118,14 @@ function buildProxyGroupOutbounds(
   urltestGroups: Record<string, UrlTestCacheGroup> = {},
   priorityGroups: Record<string, PriorityCacheGroup> = {},
   cachedProxyLinks: Map<string, string> = new Map(),
+  routingEngine: 'xray' | 'sing-box' = 'sing-box',
 ) {
   const sectionName = section['.name'];
   const proxyByCode = getProxyEntryByCode(proxies);
   const selectorTag = getOutboundTagBySection(sectionName);
   const selector = proxyByCode.get(selectorTag);
-  const urlTestConfigs = getUrlTestConfigs(section);
+  const showUrlTest = getSectionProxyCore(section, routingEngine) === 'sing-box';
+  const urlTestConfigs = showUrlTest ? getUrlTestConfigs(section) : [];
   const urlTestConfigByCode = new Map(
     urlTestConfigs.map((config) => [config.code, config]),
   );
@@ -1163,6 +1165,10 @@ function buildProxyGroupOutbounds(
     const item = proxyByCode.get(code);
     const urlTestConfig = urlTestConfigByCode.get(code);
     const priorityConfig = priorityConfigByCode.get(code);
+
+    if (!showUrlTest && (urlTestConfig || isUrlTestProxyEntry(item))) {
+      return [];
+    }
 
     if (!item && !urlTestConfig && !priorityConfig) {
       return [];
@@ -1675,6 +1681,7 @@ export async function getDashboardSections(
               urltestGroups,
               priorityGroups,
               cachedProxyLinks,
+              routingEngine,
             );
 
           return withProxyCore(section, routingEngine, {

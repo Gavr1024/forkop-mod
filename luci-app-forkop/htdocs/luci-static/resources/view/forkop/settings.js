@@ -1031,7 +1031,7 @@ function createSettingsContent(section, capabilities) {
     form.Value,
     "badwan_reload_delay",
     _("Interface Monitoring Delay"),
-    _("Delay in milliseconds before reloading Forkop after interface UP"),
+    _("Delay in milliseconds after the interface comes up. The first start waits for this too; a later rise reloads Forkop."),
   );
   o.depends("enable_badwan_interface_monitoring", "1");
   o.default = "2000";
@@ -1244,23 +1244,22 @@ function createSettingsContent(section, capabilities) {
   o = section.option(
     form.ListValue,
     "config_path",
-    _("Config File Path"),
+    _("sing-box config file"),
     _(
-      "Select path for sing-box config file. Change this ONLY if you know what you are doing.",
+      "Path of the sing-box config. A section can still run on sing-box when Xray is the main engine, so this path stays available. Change it ONLY if you know what you are doing.",
     ),
   );
   o.value("/etc/sing-box/config.json", "Flash (/etc/sing-box/config.json)");
   o.value("/tmp/sing-box/config.json", "RAM (/tmp/sing-box/config.json)");
   o.default = "/etc/sing-box/config.json";
   o.rmempty = false;
-  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.Value,
     "cache_path",
-    _("Cache File Path"),
+    _("sing-box cache file"),
     _(
-      "Select or enter path for sing-box cache file. Change this ONLY if you know what you are doing.",
+      "Path of the sing-box cache. A section can still run on sing-box when Xray is the main engine, so this path stays available. Xray does not use this file. Change it ONLY if you know what you are doing.",
     ),
   );
   o.value("/tmp/sing-box/cache.db", "RAM (/tmp/sing-box/cache.db)");
@@ -1290,7 +1289,6 @@ function createSettingsContent(section, capabilities) {
 
     return true;
   };
-  restrictRoutingEngine(o, "sing-box");
 
   o = section.option(
     form.ListValue,

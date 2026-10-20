@@ -897,13 +897,125 @@ function validateHysteria2Url(url) {
 }
 
 // src/validators/validateProxyUrl.ts
-function validateProxyUrl(url) {
+function wireGuardQueryValue(query, names) {
+  for (const part of `${query || ""}`.split("&")) {
+    if (!part) {
+      continue;
+    }
+    const eq = part.indexOf("=");
+    let key = eq >= 0 ? part.slice(0, eq) : part;
+    let value = eq >= 0 ? part.slice(eq + 1) : "";
+    try {
+      key = decodeURIComponent(key).toLowerCase();
+      value = decodeURIComponent(value);
+    } catch (_e) {
+      key = key.toLowerCase();
+    }
+    if (names.indexOf(key) >= 0 && value) {
+      return value;
+    }
+  }
+  return "";
+}
+function padWireGuardBase64(value) {
+  const text = `${value || ""}`.replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, "");
+  return text.length % 4 === 0 ? text : text + "=".repeat(4 - text.length % 4);
+}
+function validateWireGuardUrl(url) {
+  const text = `${url || ""}`.trim();
+  if (/\[interface\]/i.test(text) && /\[peer\]/i.test(text) && /privatekey\s*=/i.test(text) && /publickey\s*=/i.test(text) && /endpoint\s*=/i.test(text) && /address\s*=/i.test(text)) {
+    return { valid: true, message: "Valid" };
+  }
+  let body = text.replace(/^[a-z0-9]+:\/\//i, "");
+  const hash = body.indexOf("#");
+  if (hash >= 0) {
+    body = body.slice(0, hash);
+  }
+  if (body.indexOf("@") < 0 && body.indexOf("?") < 0) {
+    try {
+      const decoded = atob(padWireGuardBase64(body));
+      if (/\[interface\]/i.test(decoded) && /\[peer\]/i.test(decoded)) {
+        return { valid: true, message: "Valid" };
+      }
+    } catch (_e) {
+    }
+    return { valid: false, message: _("Invalid WireGuard link") };
+  }
+  const at = body.lastIndexOf("@");
+  const user = at >= 0 ? body.slice(0, at) : "";
+  let hostport = at >= 0 ? body.slice(at + 1) : body;
+  const question = hostport.indexOf("?");
+  const query = question >= 0 ? hostport.slice(question + 1) : "";
+  if (question >= 0) {
+    hostport = hostport.slice(0, question);
+  }
+  let port = "";
+  if (hostport.charAt(0) === "[") {
+    const end = hostport.indexOf("]");
+    port = end >= 0 && hostport.charAt(end + 1) === ":" ? hostport.slice(end + 2) : "";
+  } else {
+    const colon = hostport.lastIndexOf(":");
+    port = colon >= 0 ? hostport.slice(colon + 1) : "";
+  }
+  const privateKey = user || wireGuardQueryValue(query, ["privatekey", "private_key"]);
+  const publicKey = wireGuardQueryValue(query, ["publickey", "public_key", "peerpublickey", "peer_public_key", "serverpublickey", "server_public_key"]);
+  const address = wireGuardQueryValue(query, ["address", "ip", "localaddress", "local_address", "localip", "local_ip"]);
+  if (!privateKey || !/^[0-9]+$/.test(port) || Number(port) < 1 || Number(port) > 65535 || !publicKey || !address) {
+    return { valid: false, message: _("Invalid WireGuard link") };
+  }
+  return { valid: true, message: "Valid" };
+}
+function validateWarpUrl(url) {
+  const text = `${url || ""}`.trim();
+  let body = text.replace(/^warp:\/\//i, "");
+  const hash = body.indexOf("#");
+  if (hash >= 0) {
+    body = body.slice(0, hash);
+  }
+  let hostport = body;
+  const question = hostport.indexOf("?");
+  const query = question >= 0 ? hostport.slice(question + 1) : "";
+  if (question >= 0) {
+    hostport = hostport.slice(0, question);
+  }
+  let port = "";
+  if (hostport.charAt(0) === "[") {
+    const end = hostport.indexOf("]");
+    port = end >= 0 && hostport.charAt(end + 1) === ":" ? hostport.slice(end + 2) : "";
+  } else {
+    const colon = hostport.lastIndexOf(":");
+    port = colon >= 0 ? hostport.slice(colon + 1) : "";
+  }
+  const privateKey = wireGuardQueryValue(query, ["privatekey", "private_key"]);
+  const publicKey = wireGuardQueryValue(query, ["publickey", "public_key"]);
+  const address = wireGuardQueryValue(query, ["address"]);
+  const reserved = wireGuardQueryValue(query, ["reserved"]);
+  const reservedParts = `${reserved || ""}`.split(",");
+  const reservedOk =
+    reservedParts.length === 3 &&
+    reservedParts.every((part) => /^[0-9]+$/.test(part) && Number(part) <= 255);
+  if (!privateKey || !publicKey || !address || !reservedOk || !/^[0-9]+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    return { valid: false, message: _("Invalid WARP link") };
+  }
+  return { valid: true, message: "Valid" };
+}
+function proxyUrlRejectedMessage(engine) {
+  if (`${engine || ""}`.toLowerCase() === "xray") {
+    return _(
+      "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, or hy2://"
+    );
+  }
+  return _(
+    "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, hy2://, wireguard://, wg://, awg://, or vpn://"
+  );
+}
+function validateProxyUrl(url, engine) {
   if (url == null || url === "") {
     return { valid: true, message: "Valid" };
   }
   if (Array.isArray(url)) {
     for (const item of url) {
-      const result = validateProxyUrl(item);
+      const result = validateProxyUrl(item, engine);
       if (!result.valid) {
         return result;
       }
@@ -911,6 +1023,13 @@ function validateProxyUrl(url) {
     return { valid: true, message: "Valid" };
   }
   const trimmedUrl = `${url}`.trim();
+  if (/^warp:\/\//i.test(trimmedUrl)) {
+    return validateWarpUrl(trimmedUrl);
+  }
+  const wireguardLink = /^(wireguard|wg|awg|amneziawg|vpn):\/\//i.test(trimmedUrl) || /\[interface\]/i.test(trimmedUrl);
+  if (`${engine || ""}`.toLowerCase() === "xray" && wireguardLink) {
+    return { valid: false, message: _("WireGuard and AmneziaWG links work only in a sing-box section") };
+  }
   if (trimmedUrl.startsWith("ss://")) {
     return validateShadowsocksUrl(trimmedUrl);
   }
@@ -929,11 +1048,19 @@ function validateProxyUrl(url) {
   if (trimmedUrl.startsWith("hysteria2://") || trimmedUrl.startsWith("hy2://")) {
     return validateHysteria2Url(trimmedUrl);
   }
+  if (/^(wireguard|wg|awg|amneziawg):\/\//i.test(trimmedUrl) || /\[interface\]/i.test(trimmedUrl)) {
+    return validateWireGuardUrl(trimmedUrl);
+  }
+  if (/^vpn:\/\//i.test(trimmedUrl)) {
+    const body = trimmedUrl.replace(/^vpn:\/\//i, "").split("#")[0].replace(/\s/g, "");
+    if (/^[A-Za-z0-9+/=_-]{20,}$/.test(body)) {
+      return { valid: true, message: "Valid" };
+    }
+    return { valid: false, message: _("Invalid WireGuard link") };
+  }
   return {
     valid: false,
-    message: _(
-      "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, or hy2://"
-    )
+    message: proxyUrlRejectedMessage(engine)
   };
 }
 
@@ -1054,7 +1181,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.10";
+var FORKOP_LUCI_APP_VERSION = "1.0.11";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -1270,7 +1397,7 @@ function insertIf(condition, elements) {
 }
 
 // src/helpers/isCopyableProxyLink.ts
-var COPYABLE_PROXY_URI_RE = /^(vless|vmess|trojan|ss|ssr|hysteria2|hy2|tuic|socks4|socks4a|socks5):\/\//i;
+var COPYABLE_PROXY_URI_RE = /^(vless|vmess|trojan|ss|ssr|hysteria2|hy2|tuic|socks4|socks4a|socks5|wireguard|wg|awg|amneziawg|vpn):\/\//i;
 function isCopyableProxyLink(link) {
   return COPYABLE_PROXY_URI_RE.test((link || "").trim());
 }
@@ -2178,6 +2305,8 @@ function renderDefaultState({
       section.withTagSelect && !canChooseOutbound ? "fkp_dashboard-page__outbound-grid__item--disabled" : "",
       outboundSwitching ? "fkp_dashboard-page__outbound-grid__item--switching" : ""
     ].filter(Boolean).join(" ");
+    const urlTestSelected = String(outbound.urlTestInfo?.selectedName || "").trim();
+    const showUrlTestSelected = urlTestSelected !== "" && urlTestSelected !== String(outbound.displayName || "").trim();
     return E(
       "div",
       {
@@ -2204,7 +2333,16 @@ function renderDefaultState({
           )
         ] : [],
         E("div", { class: "fkp_dashboard-page__outbound-grid__item__header" }, [
-          E("b", {}, renderFlagEmojis(outbound.displayName)),
+          E("div", { class: "fkp_dashboard-page__outbound-grid__item__title" }, [
+            E("b", {}, renderFlagEmojis(outbound.displayName)),
+            ...showUrlTestSelected ? [
+              E(
+                "span",
+                { class: "fkp_dashboard-page__outbound-grid__item__selected" },
+                renderFlagEmojis(urlTestSelected)
+              )
+            ] : []
+          ]),
           ...canCopyLink ? [
             E(
               "button",
@@ -3556,6 +3694,9 @@ function isConnectionAction(action) {
     action && ["connection", "proxy", "outbound", "vpn"].includes(action)
   );
 }
+function isDashboardAction(action) {
+  return isConnectionAction(action) || action === "byedpi";
+}
 function hasSubscriptionSources(section) {
   return getSubscriptionSourceCount(section) > 0;
 }
@@ -3909,9 +4050,21 @@ function xrayStrategyLabel(name) {
   }
   return _("Auto");
 }
+function wireguardConfigEndpoint(url) {
+  const text = `${url || ""}`;
+  if (!/\[interface\]/i.test(text)) {
+    return "";
+  }
+  const found = text.match(/(?:^|[\s\[])endpoint\s*=\s*(\[[^\]]+\](?::\d+)?|[^\s#]+)/i);
+  return found ? found[1].trim() : "";
+}
 function getOutboundDisplayName(code, entry, link, outboundMetadata, preferMetadata = false) {
   if (isXrayStrategyCode(code)) {
     return xrayStrategyLabel(entry?.value?.name);
+  }
+  const endpoint = wireguardConfigEndpoint(link);
+  if (endpoint) {
+    return endpoint;
   }
   const metadataName = outboundMetadata?.names?.[code];
   return (preferMetadata ? metadataName : getProxyUrlName(link)) || (preferMetadata ? getProxyUrlName(link) : metadataName) || entry?.value?.name || code;
@@ -4059,12 +4212,13 @@ function buildPriorityInfo({
     outbounds
   };
 }
-function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGroups = {}, priorityGroups = {}, cachedProxyLinks = /* @__PURE__ */ new Map(), probeDelays = {}) {
+function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGroups = {}, priorityGroups = {}, cachedProxyLinks = /* @__PURE__ */ new Map(), probeDelays = {}, routingEngine = "sing-box") {
   const sectionName = section[".name"];
   const proxyByCode = getProxyEntryByCode(proxies);
   const selectorTag = getOutboundTagBySection(sectionName);
   const selector = proxyByCode.get(selectorTag);
-  const urlTestConfigs = getUrlTestConfigs(section);
+  const showUrlTest = getSectionProxyCore(section, routingEngine) === "sing-box";
+  const urlTestConfigs = showUrlTest ? getUrlTestConfigs(section) : [];
   const urlTestConfigByCode = new Map(
     urlTestConfigs.map((config) => [config.code, config])
   );
@@ -4101,6 +4255,9 @@ function buildProxyGroupOutbounds(section, proxies, outboundMetadata, urltestGro
     const item = proxyByCode.get(code);
     const urlTestConfig = urlTestConfigByCode.get(code);
     const priorityConfig = priorityConfigByCode.get(code);
+    if (!showUrlTest && (urlTestConfig || isUrlTestProxyEntry(item))) {
+      return [];
+    }
     if (!item && !urlTestConfig && !priorityConfig) {
       return [];
     }
@@ -4321,6 +4478,11 @@ function tunnelProtocolLabel(section, code) {
 }
 function dashboardClashType(clashType, protocol) {
   const type = clashType || "";
+  const key = String(protocol || "").trim().toLowerCase();
+  if (key === "amneziawg" || key.indexOf("amneziawg ") === 0) {
+    const version = key.slice("amneziawg".length).trim();
+    return version ? `AmneziaWG ${version}` : "AmneziaWG";
+  }
   if (type && type.toLowerCase() !== "socks") {
     return type;
   }
@@ -4339,7 +4501,6 @@ function dashboardClashType(clashType, protocol) {
     freedom: "Direct",
     socks: "SOCKS"
   };
-  const key = String(protocol || "").toLowerCase();
   if (!key) {
     return type;
   }
@@ -4687,12 +4848,37 @@ async function getDashboardSections(options = {}) {
   }));
   const data = await Promise.all(
     configSections.filter(
-      (section) => section.enabled !== "0" && isConnectionAction(section.action)
+      (section) => section.enabled !== "0" && isDashboardAction(section.action)
     ).map(async (section) => {
       const displayName = getDisplayName(section);
       const sectionName = section[".name"];
       const sectionAction = section.action;
       const proxyConfigType = getSectionProxyConfigType(section);
+      if (sectionAction === "byedpi") {
+        const outboundTag2 = getOutboundTagBySection(sectionName);
+        const probed = Object.prototype.hasOwnProperty.call(probeDelays, outboundTag2);
+        const delay = probed ? Math.max(0, Number(probeDelays[outboundTag2]) || 0) : 0;
+        return withProxyCore(section, routingEngine, {
+          withTagSelect: false,
+          code: outboundTag2,
+          sectionName,
+          displayName,
+          action: sectionAction,
+          latencyTestTimeout: "10000",
+          outbounds: [
+            {
+              code: outboundTag2,
+              displayName: "ByeDPI",
+              latency: delay,
+              probeState: probed ? delay > 0 ? "alive" : "dead" : "",
+              type: "ByeDPI",
+              selected: true,
+              canCopyLink: false,
+              runtimeAvailable: true
+            }
+          ]
+        });
+      }
       if (isConnectionAction(sectionAction) && shouldUseProxyGroup(section)) {
         const subscriptionSourceCount = getSubscriptionSourceCount(section);
         const subscriptionEnabled = subscriptionSourceCount > 0;
@@ -4713,7 +4899,8 @@ async function getDashboardSections(options = {}) {
           urltestGroups,
           priorityGroups,
           cachedProxyLinks,
-          probeDelays
+          probeDelays,
+          routingEngine
         );
         return withProxyCore(section, routingEngine, {
           withTagSelect: true,
@@ -6903,13 +7090,17 @@ async function singboxSectionTraffic(xraySections) {
     return sections;
   }
   const cores = {};
+  const byedpi = {};
   for (const section of store.get().sectionsWidget?.data || []) {
     if (section?.sectionName) {
       cores[section.sectionName] = section.proxyCore;
+      if (section.action === "byedpi") {
+        byedpi[section.sectionName] = true;
+      }
     }
   }
   for (const [name, bucket] of Object.entries(singSections)) {
-    if (cores[name] !== "sing-box" || !bucket || typeof bucket !== "object") {
+    if ((cores[name] !== "sing-box" && !byedpi[name]) || !bucket || typeof bucket !== "object") {
       continue;
     }
     const current = sections[name] || { uplink: 0, downlink: 0 };
@@ -8497,6 +8688,20 @@ var styles = `
     align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
+}
+
+.fkp_dashboard-page__outbound-grid__item__title {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.fkp_dashboard-page__outbound-grid__item__selected {
+    color: var(--fkp-muted, #64748b);
+    font-size: 12px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
 }
 
 .fkp_dashboard-page__outbound-grid__item__header b {

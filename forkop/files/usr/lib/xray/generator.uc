@@ -247,11 +247,163 @@ function add_converted(config, taken, ir, tag_base, display_names, display_name,
     return tag;
 }
 
+function warp_reserved(value) {
+    let parts = split(trim(value), ",");
+    if (length(parts) != 3)
+        return null;
+    let result = [];
+    for (let part in parts) {
+        part = trim(part);
+        if (match(part, /^[0-9]+$/) == null)
+            return null;
+        let number = int(part, 10);
+        if (number < 0 || number > 255)
+            return null;
+        push(result, number);
+    }
+    return result;
+}
+
+function warp_addresses(value) {
+    let result = [];
+    for (let item in split(as_string(value), ",")) {
+        item = trim(item);
+        if (item == "")
+            continue;
+        if (index(item, "/") < 0)
+            item += index(item, ":") >= 0 ? "/128" : "/32";
+        push(result, item);
+    }
+    return result;
+}
+
+function warp_peer_endpoint(raw) {
+    let host = trim(runtime_url.host(raw));
+    let port = int(runtime_url.port(raw) || 0, 10);
+    let colon = rindex(host, ":");
+    if (colon > 0 && index(substr(host, 0, colon), ":") < 0) {
+        let tail = substr(host, colon + 1);
+        if (match(tail, /^[0-9]+$/) != null) {
+            host = substr(host, 0, colon);
+            if (port <= 0)
+                port = int(tail, 10);
+        }
+    }
+    if (host == "" || port <= 0 || port > 65535)
+        return "";
+    return host + ":" + port;
+}
+
+function add_warp_link(config, taken, section, raw, display_names) {
+    let query = runtime_url.query_params(raw);
+    let private_key = trim(as_string(query.privatekey || ""));
+    let public_key = trim(as_string(query.publickey || ""));
+    let endpoint = warp_peer_endpoint(raw);
+    let addresses = warp_addresses(query.address);
+    let reserved = warp_reserved(query.reserved);
+    if (private_key == "" || public_key == "" || endpoint == "" || length(addresses) == 0 || reserved == null)
+        return "";
+
+    let section_name = as_string(section[".name"]);
+    let tag = unique_tag(section_name + "-warp", taken);
+    let outbound = {
+        tag,
+        protocol: "wireguard",
+        settings: {
+            secretKey: private_key,
+            address: addresses,
+            mtu: 1280,
+            reserved,
+            noKernelTun: true,
+            peers: [{
+                publicKey: public_key,
+                endpoint,
+                allowedIPs: [ "0.0.0.0/0", "::/0" ],
+                keepAlive: 25
+            }]
+        },
+        streamSettings: {
+            sockopt: xray_outbound.sockopt()
+        }
+    };
+    taken[tag] = true;
+    push(config.outbounds, outbound);
+    if (type(display_names) == "object") {
+        let label = trim(runtime_url.fragment(raw));
+        display_names[tag] = label != "" ? label : "WARP";
+    }
+    return tag;
+}
+
+function add_warp_clients(config, taken, section, tags, display_names) {
+    let section_name = as_string(section[".name"]);
+    let n = 0;
+    for (let client in connections.warp_clients(section)) {
+        n++;
+        let private_key = trim(option(client, "private_key", ""));
+        let public_key = trim(option(client, "public_key", ""));
+        let host = trim(option(client, "endpoint_host", ""));
+        let port = int(option(client, "endpoint_port", "2408"), 10);
+        let reserved = warp_reserved(option(client, "reserved", ""));
+        let v4 = trim(option(client, "address_v4", ""));
+        if (private_key == "" || public_key == "" || host == "" || port <= 0 || reserved == null || v4 == "") {
+            warn("xray: skipped incomplete WARP profile in section '" + section_name + "'\n");
+            continue;
+        }
+        let addresses = [ index(v4, "/") < 0 ? v4 + "/32" : v4 ];
+        let v6 = trim(option(client, "address_v6", ""));
+        if (v6 != "" && !bool_option(client, "ipv4_only", false))
+            push(addresses, index(v6, "/") < 0 ? v6 + "/128" : v6);
+        let label = trim(option(client, "name", ""));
+        if (label == "")
+            label = "WARP " + n;
+        let tag = unique_tag(section_name + "-warp-" + n, taken);
+        let outbound = {
+            tag,
+            protocol: "wireguard",
+            settings: {
+                secretKey: private_key,
+                address: addresses,
+                mtu: 1280,
+                reserved,
+                noKernelTun: true,
+                peers: [{
+                    publicKey: public_key,
+                    endpoint: host + ":" + port,
+                    allowedIPs: [ "0.0.0.0/0", "::/0" ],
+                    keepAlive: 25
+                }]
+            },
+            streamSettings: {
+                sockopt: xray_outbound.sockopt()
+            }
+        };
+        taken[tag] = true;
+        push(config.outbounds, outbound);
+        push(tags, tag);
+        if (type(display_names) == "object")
+            display_names[tag] = label;
+    }
+}
+
 function add_manual_links(config, taken, section, tags, display_names) {
     let section_name = as_string(section[".name"]);
     let links = connections.connection_urls(section);
     for (let i = 0; i < length(links); i++) {
         let raw = prepare_share_link(links[i]);
+        let scheme = lc(share_link_scheme(raw));
+        if (scheme == "warp") {
+            let tag = add_warp_link(config, taken, section, raw, display_names);
+            if (tag != "")
+                push(tags, tag);
+            else
+                warn("xray: invalid WARP link in section '" + section_name + "'\n");
+            continue;
+        }
+        if (scheme == "wireguard" || scheme == "wg" || scheme == "awg" || scheme == "amneziawg" || scheme == "vpn") {
+            warn("xray: WireGuard and AmneziaWG links work only in a sing-box section ('" + section_name + "')\n");
+            continue;
+        }
         let ir = parser.parse_share_link(raw);
         if (type(ir) != "object")
             ir = parser.parse_share_link(trim(as_string(links[i])));
@@ -268,6 +420,7 @@ function add_manual_links(config, taken, section, tags, display_names) {
         else
             warn("xray: share-link (", as_string(ir.type || share_link_scheme(raw)), ") in section '", section_name, "' could not be converted to Xray 26 outbound\n");
     }
+    add_warp_clients(config, taken, section, tags, display_names);
 }
 
 function add_json_outbounds(config, taken, section, tags, display_names) {

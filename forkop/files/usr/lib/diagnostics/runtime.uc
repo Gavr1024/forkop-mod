@@ -1703,7 +1703,7 @@ function connection_section_names() {
         let action = as_string(section.action || "");
         if (name == "" || as_string(section.enabled || "1") == "0")
             continue;
-        if (action != "connection" && action != "proxy" && action != "outbound" && action != "vpn")
+        if (action != "connection" && action != "proxy" && action != "outbound" && action != "vpn" && action != "byedpi")
             continue;
         push(names, name);
     }
@@ -2046,6 +2046,34 @@ function probe_socks_delay(port, timeout_ms) {
     return delay > 0 ? delay : 1;
 }
 
+function byedpi_enabled_port(section_name) {
+    section_name = trim(as_string(section_name));
+    if (section_name == "" || !uci_core.available())
+        return 0;
+    let index = 0;
+    for (let section in uci_core.section_objects(CONFIG_NAME, "section")) {
+        section = object_or_empty(section);
+        if (as_string(section.enabled || "1") == "0")
+            continue;
+        if (as_string(section.action || "") != "byedpi")
+            continue;
+        index++;
+        if (as_string(section[".name"] || "") == section_name)
+            return 1080 + index - 1;
+    }
+    return 0;
+}
+
+function byedpi_probe_delay(tag, timeout_ms) {
+    tag = trim(as_string(tag));
+    if (length(tag) <= 4 || substr(tag, length(tag) - 4) != "-out")
+        return null;
+    let port = byedpi_enabled_port(substr(tag, 0, length(tag) - 4));
+    if (port <= 0)
+        return null;
+    return probe_socks_delay(port, timeout_ms);
+}
+
 function openconnect_probe_port(tag) {
     tag = trim(as_string(tag));
     if (tag == "" || (index(tag, "-openconnect-") < 0 && index(tag, "-openvpn-") < 0))
@@ -2119,6 +2147,15 @@ function clash_api(action, arg1, arg2, arg3) {
     if (action == "get_proxy_latency") {
         if (as_string(arg1) == "")
             return clash_json_error("proxy_tag required");
+        let byedpi_delay = byedpi_probe_delay(arg1, arg2);
+        if (byedpi_delay != null) {
+            remember_probe_delay(arg1, byedpi_delay, true);
+            if (byedpi_delay > 0) {
+                print(sprintf("%J\n", { delay: byedpi_delay }));
+                return 0;
+            }
+            return clash_json_error("timeout");
+        }
         if (xray_proxy_latency_ok(arg1, arg2))
             return 0;
         let openconnect_delay = openconnect_probe_delay(arg1, arg2);

@@ -592,19 +592,36 @@ function dnsmasq_has_forkop_managed_state() {
     return dns_apply_success([ "has-managed-state" ]);
 }
 
+function module_status_output(module_path, args) {
+    return command_capture(module_command(module_path, args) + " 2>&1");
+}
+
+function failure_detail(output) {
+    let text = trim(replace(as_string(output), /[\r\n]+/g, " "));
+    if (length(text) > 700)
+        text = substr(text, 0, 700);
+    return text;
+}
+
 function validate_start_config() {
-    let status = module_status(VALIDATOR_UC, [ "check-requirements" ]);
-    if (status != 0)
-        return status;
+    let result = module_status_output(VALIDATOR_UC, [ "check-requirements" ]);
+    if (result.status != 0) {
+        let detail = failure_detail(result.output);
+        log_message("Required package check failed" + (detail != "" ? ": " + detail : "") + ". Aborted.", "fatal");
+        return result.status;
+    }
 
-    status = module_status(SERVER_UC, [ "prepare-all-defaults" ]);
-    if (status != 0)
-        return status;
-
-    status = module_status(VALIDATOR_UC, [ "validate-runtime" ]);
+    let status = module_status(SERVER_UC, [ "prepare-all-defaults" ]);
     if (status != 0) {
-        log_message("Runtime config validation failed. Aborted.", "fatal");
+        log_message("Failed to prepare server defaults. Aborted.", "fatal");
         return status;
+    }
+
+    result = module_status_output(VALIDATOR_UC, [ "validate-runtime" ]);
+    if (result.status != 0) {
+        let detail = failure_detail(result.output);
+        log_message("Runtime config validation failed" + (detail != "" ? ": " + detail : "") + ". Aborted.", "fatal");
+        return result.status;
     }
 
     return 0;
@@ -701,11 +718,14 @@ function singbox_init_config() {
         subscription_deferred_sections
     ]);
     module_success(SINGBOX_GENERATOR_UC, [ "stop-openconnect-cascade" ]);
-    if (result.status == 0) {
-        subscription_deferred_sections = trim(result.output);
-        subscription_caches_prepared = "1";
+    if (result.status != 0) {
+        let reason = trim(result.output);
+        log_message("Failed to prepare sing-box" + (reason != "" ? ": " + reason : "") + ". Aborted.", "fatal");
+        return result.status;
     }
-    return result.status;
+    subscription_deferred_sections = trim(result.output);
+    subscription_caches_prepared = "1";
+    return 0;
 }
 
 function xray_init_config() {
@@ -769,14 +789,18 @@ function start_main() {
     startup_config_fingerprint = external_config_fingerprint();
 
     status = module_status(NFT_UC, [ "ensure-bridge-netfilter-disabled" ]);
-    if (status != 0)
+    if (status != 0) {
+        log_message("Failed to disable bridge netfilter. Aborted.", "fatal");
         return status;
+    }
 
     module_success(STATE_UC, [ "sync-time-if-needed" ]);
 
     status = module_status(SUBSCRIPTION_CACHE_UC, [ "ensure-runtime-dirs" ]);
-    if (status != 0)
+    if (status != 0) {
+        log_message("Failed to prepare runtime directories. Aborted.", "fatal");
         return status;
+    }
 
     if (!acquire_start_subscription_update_lock())
         return 1;
@@ -798,6 +822,9 @@ function start_main() {
 
     let xray_primary = engine.is_xray_primary();
     let need_sidecar = need_singbox_process();
+
+    if (xray_primary)
+        stop_sing_box_service();
 
     if (need_sidecar) {
         status = module_status(SINGBOX_UC, [ "configure-service" ]);
@@ -829,8 +856,10 @@ function start_main() {
     }
 
     status = refresh_cron();
-    if (status != 0)
+    if (status != 0) {
+        log_message("Failed to refresh scheduled tasks. Aborted.", "fatal");
         return status;
+    }
 
     module_success(BYEDPI_UC, [ "start-runtime" ]);
 
@@ -905,8 +934,10 @@ function start_main() {
     }
 
     status = module_status(SUBSCRIPTION_CACHE_UC, [ "run-deferred-bootstrap", subscription_deferred_sections ]);
-    if (status != 0)
+    if (status != 0) {
+        log_message("Failed to finish subscription bootstrap. Aborted.", "fatal");
         return status;
+    }
 
     release_start_subscription_update_lock();
     module_success(ZAPRET_UC, [ "start-runtime" ]);
@@ -1446,7 +1477,7 @@ function reload(reason) {
         status = xray_init_config();
         if (status != 0)
             return abort_reload(status, true);
-        if (!module_success(XRAY_UC, [ "reload-runtime" ])) {
+        if (!module_success(XRAY_UC, [ "reload-runtime", force_runtime_reload ? "1" : "0" ])) {
             log_message("Failed to reload Xray sidecar. Aborted.", "fatal");
             return abort_reload(1, true);
         }
@@ -1539,7 +1570,7 @@ function reload(reason) {
     }
 
     if (plan.needs_list_update == 1)
-        module_background(UPDATES_UC, [ "list-update" ]);
+        module_background(UPDATES_UC, [ "list-update-unless-disabled" ]);
 
     return finish_reload_status(module_status(STATE_UC, [
         "write-captured-reload-state",

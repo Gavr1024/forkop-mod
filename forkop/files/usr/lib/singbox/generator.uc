@@ -26,6 +26,7 @@ let runtime_settings_cache = null;
 let runtime_ruleset_folder = runtime_constants.TMP_RULESET_FOLDER;
 let runtime_supports_xhttp = true;
 let runtime_sing_box_version_cache = null;
+let runtime_sing_box_version_text = null;
 
 let as_string = common.as_string;
 let read_json_file = common.read_json_file;
@@ -357,6 +358,20 @@ function sing_box_major_minor() {
     return runtime_sing_box_version_cache;
 }
 
+function sing_box_version_text() {
+    if (runtime_sing_box_version_text != null)
+        return runtime_sing_box_version_text;
+    let text = read_command_output("sing-box version");
+    if (trim(text) == "")
+        text = read_command_output("cat /etc/forkop/sing-box-version 2>/dev/null");
+    runtime_sing_box_version_text = text;
+    return text;
+}
+
+function sing_box_is_extended() {
+    return index(lc(sing_box_version_text()), "extended") >= 0;
+}
+
 function purge_incompatible_sing_box_cache() {
     let v = sing_box_major_minor();
     let cur = as_string(v.major) + "." + as_string(v.minor);
@@ -663,6 +678,13 @@ function base_config(settings, service_address, runtime_context) {
     if (!sing_box_at_least_1_14())
         dns.independent_cache = true;
 
+    let cache_file = {
+        enabled: true,
+        path: cache_path,
+        store_fakeip: !engine.is_xray_primary()
+    };
+    if (sing_box_is_extended())
+        cache_file.store_masque_config = true;
     return {
         log: {
             disabled: false,
@@ -681,11 +703,7 @@ function base_config(settings, service_address, runtime_context) {
         route: runtime_route.config(settings, runtime_context),
         services: [],
         experimental: {
-            cache_file: {
-                enabled: true,
-                path: cache_path,
-                store_fakeip: !engine.is_xray_primary()
-            },
+            cache_file: cache_file,
             clash_api: clash_api_config(settings, service_address)
         }
     };
@@ -1659,6 +1677,15 @@ function apply_section_detour_to_connection_outbounds(config, start_index, detou
             outbound_type == "block")
             continue;
 
+        // A local SOCKS bridge (ovpn-via-*, xray sidecar) is the cascade hop.
+        // Giving it the section detour makes its dial to 127.0.0.1 go back
+        // through the same proxy, so WireGuard/OpenVPN loop onto that port.
+        if (outbound_type == "socks") {
+            let bridge = lc(trim(as_string(outbound.server || "")));
+            if (bridge == "127.0.0.1" || bridge == "::1" || bridge == "localhost")
+                continue;
+        }
+
         // Preserve subscription chains: only their terminal dial outbound receives the section detour.
         if (as_string(outbound.detour || "") == "")
             outbound.detour = detour_tag;
@@ -2190,6 +2217,1208 @@ function manual_hysteria2_outbound(link, tag_name) {
     return outbound;
 }
 
+function sing_box_at_least_1_11() {
+    let v = sing_box_major_minor();
+    return v.major > 1 || (v.major == 1 && v.minor >= 11);
+}
+
+function wireguard_scheme(scheme) {
+    scheme = lc(as_string(scheme));
+    return scheme == "wireguard" || scheme == "wg" || scheme == "awg" || scheme == "amneziawg" || scheme == "warp";
+}
+
+function wireguard_key(value) {
+    value = trim(as_string(value));
+    if (value == "")
+        return "";
+    value = replace(replace(value, /-/g, "+"), /_/g, "/");
+    while (length(value) % 4 != 0)
+        value += "=";
+    return value;
+}
+
+function wireguard_cidr_list(value, fallback) {
+    let items = [];
+    for (let item in split(as_string(value), ",")) {
+        item = trim(item);
+        if (item == "")
+            continue;
+        if (index(item, "/") < 0)
+            item += index(item, ":") >= 0 ? "/128" : "/32";
+        push(items, item);
+    }
+    return length(items) > 0 ? items : fallback;
+}
+
+function wireguard_reserved(value) {
+    value = trim(as_string(value));
+    if (value == "")
+        return null;
+    let parts = split(value, ",");
+    if (length(parts) != 3)
+        return null;
+    let result = [];
+    for (let part in parts) {
+        part = trim(part);
+        if (match(part, /^[0-9]+$/) == null)
+            return null;
+        let number = int(part, 10);
+        if (number < 0 || number > 255)
+            return null;
+        push(result, number);
+    }
+    return result;
+}
+
+function wireguard_query_value(query, names) {
+    query = object_or_empty(query);
+    for (let name in names) {
+        let want = lc(name);
+        for (let key in query) {
+            if (lc(key) != want)
+                continue;
+            let value = trim(as_string(query[key] || ""));
+            if (value != "")
+                return value;
+        }
+    }
+    return "";
+}
+
+function wireguard_conf_text(link) {
+    link = as_string(link);
+    if (index(lc(link), "[interface]") >= 0)
+        return link;
+    let marker = index(link, "://");
+    let body = marker >= 0 ? substr(url_strip_fragment_value(link), marker + 3) : url_strip_fragment_value(link);
+    if (index(body, "@") >= 0 || index(body, "?") >= 0)
+        return "";
+    let decoded = base64_decode_value(body);
+    if (decoded == null || index(lc(decoded), "[interface]") < 0)
+        return "";
+    return decoded;
+}
+
+function wireguard_fields_from_conf_lines(text) {
+    let section_name = "";
+    let fields = {};
+    for (let line in split(replace(as_string(text), /\r/g, ""), "\n")) {
+        line = trim(line);
+        if (line == "" || substr(line, 0, 1) == "#" || substr(line, 0, 1) == ";")
+            continue;
+        if (substr(line, 0, 1) == "[") {
+            section_name = lc(trim(replace(replace(line, "[", ""), "]", "")));
+            continue;
+        }
+        let eq = index(line, "=");
+        if (eq < 0)
+            continue;
+        let key = lc(replace(trim(substr(line, 0, eq)), /_/g, ""));
+        let value = trim(substr(line, eq + 1));
+        if (section_name == "peer" && key == "endpoint")
+            fields.endpoint = value;
+        else if (section_name == "peer" && key == "publickey")
+            fields.publickey = value;
+        else if (section_name == "peer" && key == "presharedkey")
+            fields.presharedkey = value;
+        else if (section_name == "peer" && key == "allowedips")
+            fields.allowedips = value;
+        else if (section_name == "peer" && key == "persistentkeepalive")
+            fields.keepalive = value;
+        else if (section_name == "interface")
+            fields[key] = value;
+    }
+    return fields;
+}
+
+function wireguard_conf_flat_fields(text) {
+    let flat = replace(replace(replace(as_string(text), /\\n/g, " "), /\r/g, " "), /\n/g, " ");
+    flat = replace(flat, /\t/g, " ");
+    let lower = lc(flat);
+    let names = [ "headerprotectionkey", "contentpaddingaddition", "maxhandshakeattempts", "persistentkeepalive", "rekeyaftertime", "rejectaftertime", "keepalivetimeout", "rekeytimeout", "randomtrailers", "disablecookies", "presharedkey", "privatekey", "listenport", "publickey", "allowedips", "endpoint", "address", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "jc", "mtu", "dns" ];
+    let found = [];
+    let i = 0;
+    while (i < length(lower)) {
+        let hit = -1;
+        let hit_name = "";
+        for (let name in names) {
+            if (length(name) > length(lower) - i)
+                continue;
+            if (substr(lower, i, length(name)) != name)
+                continue;
+            if (i > 0 && match(substr(lower, i - 1, 1), /[a-z0-9_]/) != null)
+                continue;
+            let j = i + length(name);
+            while (j < length(lower) && (substr(lower, j, 1) == " " || substr(lower, j, 1) == "_"))
+                j++;
+            if (j >= length(lower) || substr(lower, j, 1) != "=")
+                continue;
+            if (hit < 0 || length(name) > length(hit_name)) {
+                hit = j;
+                hit_name = name;
+            }
+        }
+        if (hit_name == "") {
+            i++;
+            continue;
+        }
+        push(found, [ hit_name, hit, i ]);
+        i = hit + 1;
+    }
+    let fields = {};
+    for (let n = 0; n < length(found); n++) {
+        let start = found[n][1] + 1;
+        let end = n + 1 < length(found) ? found[n + 1][2] : length(flat);
+        let value = trim(substr(flat, start, end - start));
+        let bracket = index(value, "[");
+        if (bracket >= 0)
+            value = trim(substr(value, 0, bracket));
+        if (length(value) > 1 && substr(value, 0, 1) == "\"" && substr(value, length(value) - 1, 1) == "\"")
+            value = trim(substr(value, 1, length(value) - 2));
+        let name = found[n][0];
+        if (name == "persistentkeepalive")
+            fields.keepalive = value;
+        else if (name != "dns" && value != "")
+            fields[name] = value;
+    }
+    return fields;
+}
+
+function wireguard_fields_from_conf(text) {
+    let fields = wireguard_fields_from_conf_lines(text);
+    if (trim(as_string(fields.privatekey || "")) != "" && trim(as_string(fields.publickey || "")) != "" && trim(as_string(fields.endpoint || "")) != "")
+        return fields;
+    let flat = wireguard_conf_flat_fields(text);
+    for (let key in flat)
+        if (trim(as_string(fields[key] || "")) == "")
+            fields[key] = flat[key];
+    return fields;
+}
+
+function wireguard_uri_endpoint(link) {
+    let host = url_host(link);
+    let port = url_port(link);
+    let colon = rindex(host, ":");
+    if (colon > 0 && index(substr(host, 0, colon), ":") < 0) {
+        let tail = substr(host, colon + 1);
+        if (match(tail, /^[0-9]+$/) != null) {
+            host = substr(host, 0, colon);
+            if (port == "")
+                port = tail;
+        }
+    }
+    return host + ":" + port;
+}
+
+function wireguard_fields_from_uri(link) {
+    let query = url_query_params(link);
+    let fields = {
+        privatekey: url_userinfo(link),
+        endpoint: wireguard_uri_endpoint(link),
+        publickey: wireguard_query_value(query, [ "publickey", "public_key", "peerpublickey", "peer_public_key", "serverpublickey", "server_public_key" ]),
+        address: wireguard_query_value(query, [ "address", "ip", "localaddress", "local_address", "localip", "local_ip" ]),
+        allowedips: wireguard_query_value(query, [ "allowedips", "allowed_ips" ]),
+        mtu: wireguard_query_value(query, [ "mtu" ]),
+        keepalive: wireguard_query_value(query, [ "keepalive", "persistentkeepalive" ]),
+        presharedkey: wireguard_query_value(query, [ "presharedkey", "preshared_key", "psk" ]),
+        reserved: wireguard_query_value(query, [ "reserved", "client_id" ]),
+        listenport: wireguard_query_value(query, [ "listenport", "listen_port" ])
+    };
+    if (fields.privatekey == "")
+        fields.privatekey = wireguard_query_value(query, [ "privatekey", "private_key" ]);
+    let awg_names = {
+        jc: [ "jc" ],
+        jmin: [ "jmin" ],
+        jmax: [ "jmax" ],
+        s1: [ "s1" ],
+        s2: [ "s2" ],
+        s3: [ "s3" ],
+        s4: [ "s4" ],
+        h1: [ "h1" ],
+        h2: [ "h2" ],
+        h3: [ "h3" ],
+        h4: [ "h4" ],
+        i1: [ "i1" ],
+        i2: [ "i2" ],
+        i3: [ "i3" ],
+        i4: [ "i4" ],
+        i5: [ "i5" ],
+        headerprotectionkey: [ "headerprotectionkey", "header_protection_key" ],
+        contentpaddingaddition: [ "contentpaddingaddition", "content_padding_addition" ],
+        rekeyaftertime: [ "rekeyaftertime", "rekey_after_time" ],
+        rekeytimeout: [ "rekeytimeout", "rekey_timeout" ],
+        rejectaftertime: [ "rejectaftertime", "reject_after_time" ],
+        keepalivetimeout: [ "keepalivetimeout", "keepalive_timeout" ],
+        maxhandshakeattempts: [ "maxhandshakeattempts", "max_handshake_attempts" ],
+        randomtrailers: [ "randomtrailers", "random_trailers" ],
+        disablecookies: [ "disablecookies", "disable_cookies" ]
+    };
+    for (let key in awg_names)
+        fields[key] = wireguard_query_value(query, awg_names[key]);
+    return fields;
+}
+
+function awg_version_from_fields(fields) {
+    fields = object_or_empty(fields);
+    if (trim(as_string(fields.randomtrailers || "")) != "" || trim(as_string(fields.disablecookies || "")) != "")
+        return "3.1";
+    for (let key in [ "headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout", "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts" ])
+        if (trim(as_string(fields[key] || "")) != "")
+            return "3.0";
+    if (match(trim(as_string(fields.keepalive || "")), /^[0-9]+-[0-9]+$/) != null)
+        return "3.0";
+    for (let key in [ "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5" ])
+        if (trim(as_string(fields[key] || "")) != "")
+            return "2.0";
+    return "";
+}
+
+function wireguard_has_awg(fields) {
+    for (let key in [ "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout", "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts" ])
+        if (trim(as_string(fields[key] || "")) != "")
+            return true;
+    return false;
+}
+
+function wireguard_endpoint_from_fields(fields, tag_name) {
+    fields = object_or_empty(fields);
+    let private_key = wireguard_key(fields.privatekey);
+    let public_key = wireguard_key(fields.publickey);
+    let endpoint = trim(as_string(fields.endpoint || ""));
+    let host_port = split_host_port(endpoint);
+    let host = host_port[0];
+    let port = parse_port(host_port[1]);
+    if (private_key == "" || public_key == "" || host == "" || port == null) {
+        let why = "Endpoint";
+        if (private_key == "")
+            why = "PrivateKey";
+        else if (public_key == "")
+            why = "PublicKey";
+        runtime_generate_unsupported("manual WireGuard link is invalid: missing " + why);
+    }
+
+    let peer = {
+        address: host,
+        port: port,
+        public_key: public_key,
+        allowed_ips: wireguard_cidr_list(fields.allowedips, [ "0.0.0.0/0", "::/0" ])
+    };
+    let preshared = wireguard_key(fields.presharedkey);
+    if (preshared != "")
+        peer.pre_shared_key = preshared;
+    if (trim(as_string(fields.keepalive || "")) != "" && match(trim(fields.keepalive), /^[0-9]+$/) != null)
+        peer.persistent_keepalive_interval = int(fields.keepalive, 10);
+    let reserved = wireguard_reserved(fields.reserved);
+    if (reserved != null && !sing_box_is_extended())
+        peer.reserved = reserved;
+
+    let addresses = wireguard_cidr_list(fields.address, []);
+    if (length(addresses) == 0)
+        runtime_generate_unsupported("manual WireGuard link has no local address");
+
+    let result = {
+        type: "wireguard",
+        tag: tag_name,
+        system: false,
+        address: addresses,
+        private_key: private_key,
+        peers: [ peer ],
+        routing_mark: runtime_constants.OUTBOUND_MARK,
+        domain_resolver: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+    };
+    let awg = wireguard_has_awg(fields);
+    if (awg && !runtime_supports_xhttp)
+        runtime_generate_unsupported("AmneziaWG needs sing-box-extended");
+    let mtu = trim(as_string(fields.mtu || ""));
+    if (awg) {
+        let mtu_value = match(mtu, /^[0-9]+$/) != null ? int(mtu, 10) : 0;
+        result.mtu = mtu_value >= 576 && mtu_value <= 1500 ? mtu_value : 1280;
+    }
+    else if (match(mtu, /^[0-9]+$/) != null && int(mtu, 10) > 0) {
+        result.mtu = int(mtu, 10);
+    }
+    let amnezia = {};
+    let amnezia_set = false;
+    for (let key in [ "jc", "jmin", "jmax", "s1", "s2", "s3", "s4" ]) {
+        let value = trim(as_string(fields[key] || ""));
+        if (match(value, /^[0-9]+$/) != null) {
+            amnezia[key] = int(value, 10);
+            amnezia_set = true;
+        }
+    }
+    let range_names = {
+        h1: "h1",
+        h2: "h2",
+        h3: "h3",
+        h4: "h4",
+        contentpaddingaddition: "content_padding_addition",
+        rekeyaftertime: "rekey_after_time",
+        rekeytimeout: "rekey_timeout",
+        rejectaftertime: "reject_after_time",
+        keepalivetimeout: "keepalive_timeout",
+        maxhandshakeattempts: "max_handshake_attempts"
+    };
+    for (let key in range_names) {
+        let value = trim(as_string(fields[key] || ""));
+        if (match(value, /^[0-9]+$/) != null)
+            amnezia[range_names[key]] = int(value, 10);
+        else if (match(value, /^[0-9]+-[0-9]+$/) != null)
+            amnezia[range_names[key]] = value;
+        else
+            continue;
+        amnezia_set = true;
+    }
+    for (let key in [ "i1", "i2", "i3", "i4", "i5" ]) {
+        let value = trim(as_string(fields[key] || ""));
+        if (value != "") {
+            amnezia[key] = value;
+            amnezia_set = true;
+        }
+    }
+    let protection = wireguard_key(fields.headerprotectionkey);
+    if (protection != "") {
+        amnezia.header_protection_key = protection;
+        amnezia_set = true;
+    }
+    if (amnezia_set)
+        result.amnezia = amnezia;
+    if (trim(as_string(fields.listenport || "")) != "" && match(trim(fields.listenport), /^[0-9]+$/) != null) {
+        let listen_port = int(fields.listenport, 10);
+        if (listen_port >= 1 && listen_port <= 65535)
+            result.listen_port = listen_port;
+    }
+    let awg_version = awg_version_from_fields(fields);
+    if (awg_version != "")
+        result.__protocol = "AmneziaWG " + awg_version;
+    return result;
+}
+
+function bit_reader(data) {
+    return { data: as_string(data), i: 0, n: length(as_string(data)), bit: 0 };
+}
+
+function bit_one(st) {
+    if (st.i >= st.n)
+        return -1;
+    let value = (ord(substr(st.data, st.i, 1)) >> st.bit) & 1;
+    st.bit++;
+    if (st.bit == 8) {
+        st.bit = 0;
+        st.i++;
+    }
+    return value;
+}
+
+function bit_many(st, count) {
+    let value = 0;
+    let shift = 1;
+    for (let n = 0; n < count; n++) {
+        let bit = bit_one(st);
+        if (bit < 0)
+            return -1;
+        if (bit)
+            value += shift;
+        shift *= 2;
+    }
+    return value;
+}
+
+function bit_align(st) {
+    if (st.bit != 0) {
+        st.bit = 0;
+        st.i++;
+    }
+}
+
+function huff_build(lengths) {
+    let max_len = 0;
+    for (let item in lengths)
+        if (item > max_len)
+            max_len = item;
+    let counts = [];
+    for (let i = 0; i <= max_len; i++)
+        push(counts, 0);
+    for (let item in lengths)
+        if (item > 0)
+            counts[item]++;
+    let next = [ 0 ];
+    let code = 0;
+    for (let bits = 1; bits <= max_len; bits++) {
+        code = (code + counts[bits - 1]) * 2;
+        push(next, code);
+    }
+    let table = {};
+    for (let sym = 0; sym < length(lengths); sym++) {
+        let len = lengths[sym];
+        if (len > 0) {
+            if (type(table[len]) != "object")
+                table[len] = {};
+            table[len]["" + next[len]] = sym;
+            next[len]++;
+        }
+    }
+    return table;
+}
+
+function huff_decode(st, table) {
+    let code = 0;
+    for (let len = 1; len <= 15; len++) {
+        let bit = bit_one(st);
+        if (bit < 0)
+            return -1;
+        code = code * 2 + bit;
+        if (type(table[len]) == "object" && table[len]["" + code] != null)
+            return table[len]["" + code];
+    }
+    return -1;
+}
+
+function inflate_repeat(items, value, count) {
+    for (let i = 0; i < count; i++)
+        push(items, value);
+}
+
+function inflate_raw(data) {
+    let length_base = [ 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 ];
+    let length_extra = [ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0 ];
+    let distance_base = [ 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577 ];
+    let distance_extra = [ 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13 ];
+    let code_order = [ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 ];
+    let st = bit_reader(data);
+    let out = "";
+    while (true) {
+        let final_block = bit_one(st);
+        let block_type = bit_many(st, 2);
+        if (final_block < 0 || block_type < 0)
+            return "";
+        if (block_type == 0) {
+            bit_align(st);
+            let size = bit_many(st, 16);
+            bit_many(st, 16);
+            if (size < 0 || st.i + size > st.n)
+                return "";
+            out += substr(st.data, st.i, size);
+            st.i += size;
+        }
+        else if (block_type == 1 || block_type == 2) {
+            let literal;
+            let distance;
+            if (block_type == 1) {
+                let literal_lengths = [];
+                inflate_repeat(literal_lengths, 8, 144);
+                inflate_repeat(literal_lengths, 9, 112);
+                inflate_repeat(literal_lengths, 7, 24);
+                inflate_repeat(literal_lengths, 8, 8);
+                literal = huff_build(literal_lengths);
+                let distance_lengths = [];
+                inflate_repeat(distance_lengths, 5, 32);
+                distance = huff_build(distance_lengths);
+            }
+            else {
+                let literal_count = bit_many(st, 5) + 257;
+                let distance_count = bit_many(st, 5) + 1;
+                let code_count = bit_many(st, 4) + 4;
+                if (literal_count < 257 || distance_count < 1 || code_count < 4)
+                    return "";
+                let code_lengths = [];
+                inflate_repeat(code_lengths, 0, 19);
+                for (let i = 0; i < code_count; i++)
+                    code_lengths[code_order[i]] = bit_many(st, 3);
+                let code_table = huff_build(code_lengths);
+                let lengths = [];
+                while (length(lengths) < literal_count + distance_count) {
+                    let symbol = huff_decode(st, code_table);
+                    if (symbol < 0)
+                        return "";
+                    if (symbol < 16) {
+                        push(lengths, symbol);
+                    }
+                    else if (symbol == 16) {
+                        if (length(lengths) == 0)
+                            return "";
+                        inflate_repeat(lengths, lengths[length(lengths) - 1], bit_many(st, 2) + 3);
+                    }
+                    else if (symbol == 17) {
+                        inflate_repeat(lengths, 0, bit_many(st, 3) + 3);
+                    }
+                    else {
+                        inflate_repeat(lengths, 0, bit_many(st, 7) + 11);
+                    }
+                }
+                let literal_lengths = [];
+                let distance_lengths = [];
+                for (let i = 0; i < literal_count; i++)
+                    push(literal_lengths, lengths[i]);
+                for (let i = literal_count; i < literal_count + distance_count; i++)
+                    push(distance_lengths, lengths[i]);
+                literal = huff_build(literal_lengths);
+                distance = huff_build(distance_lengths);
+            }
+            while (true) {
+                let symbol = huff_decode(st, literal);
+                if (symbol < 0)
+                    return "";
+                if (symbol < 256) {
+                    out += chr(symbol);
+                }
+                else if (symbol == 256) {
+                    break;
+                }
+                else {
+                    let index = symbol - 257;
+                    if (index < 0 || index >= length(length_base))
+                        return "";
+                    let extra = bit_many(st, length_extra[index]);
+                    if (extra < 0)
+                        return "";
+                    let size = length_base[index] + extra;
+                    let distance_symbol = huff_decode(st, distance);
+                    if (distance_symbol < 0 || distance_symbol >= length(distance_base))
+                        return "";
+                    extra = bit_many(st, distance_extra[distance_symbol]);
+                    if (extra < 0)
+                        return "";
+                    let dist = distance_base[distance_symbol] + extra;
+                    if (dist <= 0 || dist > length(out))
+                        return "";
+                    for (let i = 0; i < size; i++)
+                        out += substr(out, length(out) - dist, 1);
+                }
+            }
+        }
+        else {
+            return "";
+        }
+        if (final_block)
+            break;
+    }
+    return out;
+}
+
+function inflate_zlib(data) {
+    data = as_string(data);
+    if (length(data) >= 2 && (ord(substr(data, 0, 1)) & 15) == 8) {
+        let flags = ord(substr(data, 1, 1));
+        data = substr(data, 2);
+        if ((flags & 32) != 0)
+            data = substr(data, 4);
+    }
+    return inflate_raw(data);
+}
+
+function vpn_walk_conf(value) {
+    let stack = [ value ];
+    let cursor = 0;
+    while (cursor < length(stack)) {
+        let item = stack[cursor];
+        cursor++;
+        if (type(item) == "string") {
+            let lower = lc(item);
+            if (index(lower, "[interface]") >= 0 && index(lower, "[peer]") >= 0)
+                return item;
+        }
+        else if (type(item) == "array") {
+            for (let child in item)
+                push(stack, child);
+        }
+        else if (type(item) == "object" && item != null) {
+            for (let key in item)
+                push(stack, item[key]);
+        }
+    }
+    return "";
+}
+
+function vpn_ini_slice(text) {
+    text = trim(as_string(text));
+    let lower = lc(text);
+    let at = index(lower, "[interface]");
+    if (at < 0 || index(lower, "[peer]") < 0)
+        return "";
+    return trim(substr(text, at));
+}
+
+function vpn_conf_text(text) {
+    text = trim(as_string(text));
+    if (text == "")
+        return "";
+    if (substr(text, 0, 1) == "{") {
+        try {
+            let inner = json(text);
+            if (type(inner) == "object") {
+                let config = vpn_ini_slice(inner.config);
+                if (config != "")
+                    return config;
+            }
+        }
+        catch (e) {
+        }
+    }
+    return vpn_ini_slice(text);
+}
+
+function vpn_fold(key) {
+    return lc(replace(as_string(key), /_/g, ""));
+}
+
+function vpn_take(bag, key, value, force) {
+    value = trim(as_string(value));
+    if (value == "" || lc(value) == "null")
+        return;
+    if (force && bag["lock_" + key])
+        return;
+    if (!force && trim(as_string(bag[key] || "")) != "")
+        return;
+    bag[key] = value;
+    if (force)
+        bag["lock_" + key] = 1;
+}
+
+function vpn_collect(root, bag) {
+    let names = {
+        clientprivkey: "privatekey",
+        clientprivatekey: "privatekey",
+        serverpubkey: "publickey",
+        serverpublickey: "publickey",
+        pskkey: "presharedkey",
+        presharedkey: "presharedkey",
+        psk: "presharedkey",
+        clientip: "address",
+        clientaddress: "address",
+        allowedips: "allowedips",
+        hostname: "host",
+        serverip: "host",
+        serveraddress: "host",
+        port: "port",
+        endpoint: "endpoint",
+        mtu: "mtu",
+        persistentkeepalive: "keepalive",
+        junkpacketcount: "jc",
+        jc: "jc",
+        junkpacketminsize: "jmin",
+        jmin: "jmin",
+        junkpacketmaxsize: "jmax",
+        jmax: "jmax",
+        initpacketjunksize: "s1",
+        s1: "s1",
+        responsepacketjunksize: "s2",
+        s2: "s2",
+        cookiereplypacketjunksize: "s3",
+        s3: "s3",
+        transportpacketjunksize: "s4",
+        s4: "s4",
+        initpacketmagicheader: "h1",
+        h1: "h1",
+        responsepacketmagicheader: "h2",
+        h2: "h2",
+        underloadpacketmagicheader: "h3",
+        h3: "h3",
+        transportpacketmagicheader: "h4",
+        h4: "h4",
+        specialjunk1: "i1",
+        i1: "i1",
+        specialjunk2: "i2",
+        i2: "i2",
+        specialjunk3: "i3",
+        i3: "i3",
+        specialjunk4: "i4",
+        i4: "i4",
+        specialjunk5: "i5",
+        i5: "i5",
+        headerprotectionkey: "headerprotectionkey",
+        contentpaddingaddition: "contentpaddingaddition",
+        rekeyaftertime: "rekeyaftertime",
+        rekeytimeout: "rekeytimeout",
+        rejectaftertime: "rejectaftertime",
+        keepalivetimeout: "keepalivetimeout",
+        maxhandshakeattempts: "maxhandshakeattempts",
+        randomtrailers: "randomtrailers",
+        disablecookies: "disablecookies"
+    };
+    let stack = [ root ];
+    let cursor = 0;
+    while (cursor < length(stack)) {
+        let value = stack[cursor];
+        cursor++;
+        if (type(value) == "array") {
+            for (let child in value)
+                push(stack, child);
+            continue;
+        }
+        if (type(value) != "object" || value == null)
+            continue;
+        let wg_object = false;
+        for (let key in value) {
+            let folded = vpn_fold(key);
+            if (folded == "clientprivkey" || folded == "clientprivatekey" || folded == "serverpubkey" || folded == "serverpublickey" || folded == "privatekey" || folded == "jc" || folded == "lastconfig")
+                wg_object = true;
+        }
+        for (let key in value) {
+            let child = value[key];
+            let mapped = names[vpn_fold(key)];
+            if (type(child) == "array") {
+                if (mapped == "allowedips") {
+                    let parts = [];
+                    for (let item in child) {
+                        if (type(item) == "object" || type(item) == "array")
+                            continue;
+                        let text = trim(as_string(item));
+                        if (text != "")
+                            push(parts, text);
+                    }
+                    if (length(parts) > 0)
+                        vpn_take(bag, "allowedips", join(", ", parts), wg_object);
+                }
+                continue;
+            }
+            if (type(child) == "object")
+                continue;
+            if (mapped != null)
+                vpn_take(bag, mapped, child, wg_object);
+        }
+        for (let key in value) {
+            let child = value[key];
+            if (type(child) == "object" || type(child) == "array")
+                push(stack, child);
+            else if (type(child) == "string" && substr(trim(child), 0, 1) == "{") {
+                try {
+                    push(stack, json(child));
+                }
+                catch (e) {
+                }
+            }
+        }
+    }
+}
+
+function vpn_synth_conf(data) {
+    let bag = {};
+    vpn_collect(data, bag);
+    let private_key = trim(as_string(bag.privatekey || ""));
+    let public_key = trim(as_string(bag.publickey || ""));
+    let host = trim(as_string(bag.host || ""));
+    let port = trim(as_string(bag.port || ""));
+    if ((host == "" || port == "") && index(as_string(bag.endpoint || ""), ":") >= 0) {
+        let parts = split_host_port(bag.endpoint);
+        if (host == "")
+            host = trim(as_string(parts[0] || ""));
+        if (port == "")
+            port = trim(as_string(parts[1] || ""));
+    }
+    let address = trim(as_string(bag.address || ""));
+    if (private_key == "" || public_key == "" || host == "" || port == "" || address == "")
+        return "";
+    let labels = {
+        mtu: "MTU",
+        jc: "Jc",
+        jmin: "Jmin",
+        jmax: "Jmax",
+        s1: "S1",
+        s2: "S2",
+        s3: "S3",
+        s4: "S4",
+        h1: "H1",
+        h2: "H2",
+        h3: "H3",
+        h4: "H4",
+        i1: "I1",
+        i2: "I2",
+        i3: "I3",
+        i4: "I4",
+        i5: "I5",
+        headerprotectionkey: "HeaderProtectionKey",
+        contentpaddingaddition: "ContentPaddingAddition",
+        rekeyaftertime: "RekeyAfterTime",
+        rekeytimeout: "RekeyTimeout",
+        rejectaftertime: "RejectAfterTime",
+        keepalivetimeout: "KeepaliveTimeout",
+        maxhandshakeattempts: "MaxHandshakeAttempts",
+        randomtrailers: "RandomTrailers",
+        disablecookies: "DisableCookies"
+    };
+    let lines = [ "[Interface]", "PrivateKey = " + private_key, "Address = " + address ];
+    for (let key in labels) {
+        let value = trim(as_string(bag[key] || ""));
+        if (value != "")
+            push(lines, labels[key] + " = " + value);
+    }
+    push(lines, "[Peer]");
+    push(lines, "PublicKey = " + public_key);
+    let psk = trim(as_string(bag.presharedkey || ""));
+    if (psk != "")
+        push(lines, "PresharedKey = " + psk);
+    let allowed = trim(as_string(bag.allowedips || ""));
+    if (allowed == "")
+        allowed = "0.0.0.0/0, ::/0";
+    push(lines, "AllowedIPs = " + allowed);
+    push(lines, "Endpoint = " + host + ":" + port);
+    let keep = trim(as_string(bag.keepalive || ""));
+    if (keep != "")
+        push(lines, "PersistentKeepalive = " + keep);
+    return join("\n", lines);
+}
+
+function vpn_apply_placeholders(conf, data, extra) {
+    conf = as_string(conf);
+    if (index(conf, "$") < 0)
+        return conf;
+    let bag = {};
+    vpn_collect(data, bag);
+    extra = object_or_empty(extra);
+    for (let key in extra) {
+        let value = trim(as_string(extra[key] || ""));
+        if (value != "")
+            bag[key] = value;
+    }
+    let host = trim(as_string(bag.host || ""));
+    let port = trim(as_string(bag.port || ""));
+    if ((host == "" || port == "") && index(as_string(bag.endpoint || ""), ":") >= 0) {
+        let parts = split_host_port(bag.endpoint);
+        if (host == "")
+            host = trim(as_string(parts[0] || ""));
+        if (port == "")
+            port = trim(as_string(parts[1] || ""));
+    }
+    let address = trim(as_string(bag.address || ""));
+    let client_ip = address;
+    let cidr = index(address, ":") >= 0 ? "128" : "32";
+    let slash = index(address, "/");
+    if (slash >= 0) {
+        client_ip = substr(address, 0, slash);
+        cidr = substr(address, slash + 1);
+    }
+    if (trim(as_string(bag.privatekey || "")) != "")
+        conf = replace(conf, /\$WIREGUARD_CLIENT_PRIVATE_KEY/g, bag.privatekey);
+    if (trim(as_string(bag.publickey || "")) != "")
+        conf = replace(conf, /\$WIREGUARD_SERVER_PUBLIC_KEY/g, bag.publickey);
+    if (trim(as_string(bag.presharedkey || "")) != "")
+        conf = replace(conf, /\$WIREGUARD_PSK/g, bag.presharedkey);
+    if (client_ip != "") {
+        conf = replace(conf, /\$WIREGUARD_CLIENT_IP/g, client_ip);
+        conf = replace(conf, /\$AWG_CLIENT_IP/g, client_ip);
+    }
+    if (cidr != "")
+        conf = replace(conf, /\$WIREGUARD_SUBNET_CIDR/g, cidr);
+    if (host != "") {
+        conf = replace(conf, /\$WIREGUARD_SERVER_IP/g, host);
+        conf = replace(conf, /\$AWG_SERVER_IP/g, host);
+        conf = replace(conf, /\$SERVER_IP_ADDRESS/g, host);
+        conf = replace(conf, /\$SERVER_ADDRESS/g, host);
+    }
+    if (port != "") {
+        conf = replace(conf, /\$WIREGUARD_SERVER_PORT/g, port);
+        conf = replace(conf, /\$AWG_SERVER_PORT/g, port);
+    }
+    if (trim(as_string(bag.keepalive || "")) != "")
+        conf = replace(conf, /\$PERSISTENT_KEEPALIVE/g, bag.keepalive);
+    if (trim(as_string(bag.jc || "")) != "")
+        conf = replace(conf, /\$JUNK_PACKET_COUNT/g, bag.jc);
+    if (trim(as_string(bag.jmin || "")) != "")
+        conf = replace(conf, /\$JUNK_PACKET_MIN_SIZE/g, bag.jmin);
+    if (trim(as_string(bag.jmax || "")) != "")
+        conf = replace(conf, /\$JUNK_PACKET_MAX_SIZE/g, bag.jmax);
+    if (trim(as_string(bag.s1 || "")) != "")
+        conf = replace(conf, /\$INIT_PACKET_JUNK_SIZE/g, bag.s1);
+    if (trim(as_string(bag.s2 || "")) != "")
+        conf = replace(conf, /\$RESPONSE_PACKET_JUNK_SIZE/g, bag.s2);
+    if (trim(as_string(bag.s3 || "")) != "")
+        conf = replace(conf, /\$COOKIE_REPLY_PACKET_JUNK_SIZE/g, bag.s3);
+    if (trim(as_string(bag.s4 || "")) != "")
+        conf = replace(conf, /\$TRANSPORT_PACKET_JUNK_SIZE/g, bag.s4);
+    if (trim(as_string(bag.h1 || "")) != "")
+        conf = replace(conf, /\$INIT_PACKET_MAGIC_HEADER/g, bag.h1);
+    if (trim(as_string(bag.h2 || "")) != "")
+        conf = replace(conf, /\$RESPONSE_PACKET_MAGIC_HEADER/g, bag.h2);
+    if (trim(as_string(bag.h3 || "")) != "")
+        conf = replace(conf, /\$UNDERLOAD_PACKET_MAGIC_HEADER/g, bag.h3);
+    if (trim(as_string(bag.h4 || "")) != "")
+        conf = replace(conf, /\$TRANSPORT_PACKET_MAGIC_HEADER/g, bag.h4);
+    return conf;
+}
+
+function vpn_conf_complete(conf) {
+    conf = as_string(conf);
+    if (index(lc(conf), "[interface]") < 0 || index(lc(conf), "[peer]") < 0)
+        return false;
+    let fields = wireguard_fields_from_conf(conf);
+    if (index(as_string(fields.privatekey || ""), "$") >= 0 || index(as_string(fields.publickey || ""), "$") >= 0)
+        return false;
+    if (index(as_string(fields.address || ""), "$") >= 0 || index(as_string(fields.endpoint || ""), "$") >= 0)
+        return false;
+    return trim(as_string(fields.privatekey || "")) != "" && trim(as_string(fields.publickey || "")) != "" && trim(as_string(fields.address || "")) != "" && trim(as_string(fields.endpoint || "")) != "";
+}
+
+let vpn_last_error = "";
+
+function vpn_quote(value) {
+    return "'" + replace(as_string(value), /'/g, "'\\''") + "'";
+}
+
+function vpn_new_keypair() {
+    let script_path = "/tmp/forkop/vpn-keygen.sh";
+    let path = "/tmp/forkop/vpn-keygen.out";
+    system("mkdir -p /tmp/forkop");
+    fs.writefile(script_path, "#!/bin/sh\npriv=\npub=\nif command -v wg >/dev/null 2>&1; then\n priv=$(wg genkey)\n pub=$(printf '%s' \"$priv\" | wg pubkey)\nelif command -v awg >/dev/null 2>&1; then\n priv=$(awg genkey)\n pub=$(printf '%s' \"$priv\" | awg pubkey)\nelif command -v openssl >/dev/null 2>&1; then\n pem=/tmp/forkop/vpn-x25519.pem\n openssl genpkey -algorithm X25519 -out \"$pem\" >/dev/null 2>&1\n priv=$(openssl pkey -in \"$pem\" -outform DER 2>/dev/null | tail -c 32 | base64 | tr -d '\\n')\n pub=$(openssl pkey -in \"$pem\" -pubout -outform DER 2>/dev/null | tail -c 32 | base64 | tr -d '\\n')\n rm -f \"$pem\"\nfi\nprintf '%s\\n%s\\n' \"$priv\" \"$pub\"\n");
+    system("sh " + vpn_quote(script_path) + " > " + vpn_quote(path) + " 2>/dev/null");
+    let lines = split(trim(as_string(fs.readfile(path) || "")), "\n");
+    if (length(lines) < 2)
+        return null;
+    let private_key = trim(lines[0]);
+    let public_key = trim(lines[1]);
+    if (length(private_key) < 40 || length(public_key) < 40)
+        return null;
+    return { private: private_key, public: public_key };
+}
+
+function vpn_keypair(endpoint) {
+    let path = "/etc/forkop/vpn-api-keys.json";
+    let all = null;
+    try {
+        all = json(fs.readfile(path));
+    }
+    catch (e) {
+        all = null;
+    }
+    if (type(all) != "object" || all == null)
+        all = {};
+    let saved = all[endpoint];
+    if (type(saved) == "object" && length(trim(as_string(saved.private || ""))) >= 40 && length(trim(as_string(saved.public || ""))) >= 40)
+        return saved;
+    let created = vpn_new_keypair();
+    if (created == null)
+        return null;
+    all[endpoint] = created;
+    system("mkdir -p /etc/forkop");
+    fs.writefile(path, sprintf("%J\n", all));
+    return created;
+}
+
+function vpn_http_post(url, body, header_value) {
+    let out = "/tmp/forkop/vpn-api.out";
+    system("mkdir -p /tmp/forkop");
+    system("rm -f " + vpn_quote(out));
+    let content = "Content-Type: application/json";
+    let auth = "Authorization: Api-Key " + header_value;
+    let cmd = "if command -v curl >/dev/null 2>&1; then curl -fsS --max-time 20 -o " + vpn_quote(out) +
+        " -H " + vpn_quote(content) + " -H " + vpn_quote(auth) + " --data " + vpn_quote(body) + " " + vpn_quote(url) +
+        "; elif command -v uclient-fetch >/dev/null 2>&1; then uclient-fetch -q -T 20 -O " + vpn_quote(out) +
+        " --header=" + vpn_quote(content) + " --header=" + vpn_quote(auth) + " --post-data=" + vpn_quote(body) + " " + vpn_quote(url) +
+        "; elif command -v wget >/dev/null 2>&1; then wget -q -T 20 -O " + vpn_quote(out) +
+        " --header=" + vpn_quote(content) + " --header=" + vpn_quote(auth) + " --post-data=" + vpn_quote(body) + " " + vpn_quote(url) +
+        "; else exit 1; fi";
+    if (system(cmd + " >/dev/null 2>&1") != 0)
+        return "";
+    return as_string(fs.readfile(out) || "");
+}
+function vpn_protocol_blob(container) {
+    if (type(container) != "object" || container == null)
+        return null;
+    let name = lc(as_string(container.container || ""));
+    if (index(name, "awg") >= 0 && type(container.awg) == "object")
+        return container.awg;
+    if (index(name, "wireguard") >= 0 && type(container.wireguard) == "object")
+        return container.wireguard;
+    if (type(container.awg) == "object")
+        return container.awg;
+    if (type(container.wireguard) == "object")
+        return container.wireguard;
+    return null;
+}
+
+function vpn_blob_conf(blob) {
+    if (type(blob) != "object" || blob == null)
+        return "";
+    let last = blob.last_config;
+    if (type(last) == "object") {
+        let inner = vpn_conf_text(last.config);
+        if (inner == "")
+            inner = vpn_synth_conf(last);
+        return inner;
+    }
+    last = trim(as_string(last || ""));
+    if (last == "")
+        return vpn_synth_conf(blob);
+    let conf = vpn_conf_text(last);
+    if (conf == "")
+        conf = vpn_synth_conf(blob);
+    return conf;
+}
+
+function vpn_choose_container(data) {
+    if (type(data) != "object" || data == null || type(data.containers) != "array")
+        return null;
+    let want = lc(as_string(data.defaultContainer || ""));
+    let fallback = null;
+    for (let container in data.containers) {
+        if (type(container) != "object")
+            continue;
+        let blob = vpn_protocol_blob(container);
+        if (blob == null)
+            continue;
+        let name = lc(as_string(container.container || ""));
+        if (want != "" && name == want)
+            return blob;
+        if (fallback == null)
+            fallback = blob;
+    }
+    return fallback;
+}
+
+function vpn_merge_version_fields(conf, data) {
+    conf = as_string(conf);
+    if (conf == "" || data == null)
+        return conf;
+    let bag = {};
+    vpn_collect(data, bag);
+    let labels = {
+        randomtrailers: "RandomTrailers",
+        disablecookies: "DisableCookies"
+    };
+    let lower = lc(conf);
+    let lines = [];
+    for (let key in labels) {
+        let value = trim(as_string(bag[key] || ""));
+        if (value == "" || index(lower, lc(labels[key])) >= 0)
+            continue;
+        push(lines, labels[key] + " = " + value);
+    }
+    if (length(lines) == 0)
+        return conf;
+    let at = index(lower, "[peer]");
+    if (at < 0)
+        return conf + "\n" + join("\n", lines);
+    return trim(substr(conf, 0, at)) + "\n" + join("\n", lines) + "\n" + substr(conf, at);
+}
+
+function vpn_finish_conf(conf, primary, fallback) {
+    conf = vpn_apply_placeholders(conf, primary, {});
+    if (!vpn_conf_complete(conf) && fallback != null)
+        conf = vpn_apply_placeholders(conf, fallback, {});
+    if (vpn_conf_complete(conf))
+        return vpn_merge_version_fields(vpn_merge_version_fields(conf, primary), fallback);
+    let synth = vpn_apply_placeholders(vpn_synth_conf(primary), primary, {});
+    if (!vpn_conf_complete(synth) && fallback != null)
+        synth = vpn_apply_placeholders(synth, fallback, {});
+    return vpn_conf_complete(synth) ? vpn_merge_version_fields(vpn_merge_version_fields(synth, primary), fallback) : "";
+}
+
+function vpn_link_conf(link, allow_api) {
+    function vpn_api_conf(data) {
+        if (type(data) != "object" || data == null)
+            return "";
+        let endpoint = trim(as_string(data.api_endpoint || data.apiEndpoint || ""));
+        let api_key = trim(as_string(data.api_key || data.apiKey || ""));
+        if (endpoint == "" || api_key == "")
+            return "";
+        let keys = vpn_keypair(endpoint);
+        if (keys == null) {
+            vpn_last_error = "vpn:// API link needs wg or openssl to create a WireGuard key";
+            return "";
+        }
+        let uuid = trim(as_string(fs.readfile("/proc/sys/kernel/random/uuid") || ""));
+        if (uuid == "")
+            uuid = "forkop-router";
+        let body = sprintf("%J", {
+            public_key: keys.public,
+            os_version: "linux",
+            app_version: "4.8.12.9",
+            uuid: uuid
+        });
+        let response = trim(vpn_http_post(endpoint, body, api_key));
+        if (response == "") {
+            vpn_last_error = "vpn:// API did not answer";
+            return "";
+        }
+        let payload = response;
+        if (substr(payload, 0, 1) == "{") {
+            try {
+                let parsed = json(payload);
+                let config = trim(as_string(parsed.config || ""));
+                if (config == "" && type(parsed.client) == "object")
+                    config = trim(as_string(parsed.client.config || ""));
+                if (config != "")
+                    payload = config;
+            }
+            catch (e) {
+            }
+        }
+        let conf = "";
+        if (substr(lc(payload), 0, 6) == "vpn://")
+            conf = vpn_link_conf(payload, false);
+        else
+            conf = payload;
+        conf = vpn_apply_placeholders(conf, {}, { privatekey: keys.private });
+        if (!vpn_conf_complete(conf)) {
+            vpn_last_error = "vpn:// API answer has no WireGuard or AmneziaWG config";
+            return "";
+        }
+        return conf;
+    }
+
+    if (allow_api == null)
+        allow_api = true;
+    let body = url_strip_fragment_value(link);
+    let marker = index(body, "://");
+    body = marker >= 0 ? substr(body, marker + 3) : body;
+    let raw = base64_decode_value(body);
+    if (raw == null || length(raw) < 6)
+        return "";
+    let plain = vpn_conf_text(raw);
+    if (vpn_conf_complete(plain))
+        return plain;
+    let text = inflate_zlib(substr(raw, 4));
+    if (vpn_conf_text(text) == "" && index(text, "{") < 0)
+        text = inflate_zlib(raw);
+    if (text == "" || (vpn_conf_text(text) == "" && index(text, "{") < 0)) {
+        let trimmed = trim(raw);
+        if (substr(trimmed, 0, 1) == "{" || substr(trimmed, 0, 1) == "[")
+            text = trimmed;
+    }
+    if (text == "")
+        return "";
+    let direct = vpn_conf_text(text);
+    if (vpn_conf_complete(direct))
+        return direct;
+    let data;
+    try {
+        data = json(text);
+    }
+    catch (e) {
+        return "";
+    }
+    if (type(data) != "object" && type(data) != "array")
+        return "";
+    let chosen = vpn_choose_container(data);
+    let conf = chosen != null ? vpn_blob_conf(chosen) : "";
+    if (conf == "")
+        conf = vpn_conf_text(vpn_walk_conf(data));
+    if (conf == "")
+        conf = vpn_synth_conf(data);
+    let ready = vpn_finish_conf(conf, chosen != null ? chosen : data, data);
+    if (ready != "")
+        return ready;
+    if (allow_api) {
+        let fetched = vpn_api_conf(data);
+        if (vpn_conf_complete(fetched))
+            return fetched;
+    }
+    return "";
+}
+
+function manual_wireguard_endpoint(link, tag_name) {
+    if (!sing_box_at_least_1_11())
+        runtime_generate_unsupported("WireGuard needs sing-box 1.11 or newer");
+    if (url_scheme(link) == "vpn") {
+        let unpacked = vpn_link_conf(link, true);
+        if (unpacked == "")
+            runtime_generate_unsupported(vpn_last_error != "" ? vpn_last_error : "vpn:// link could not be unpacked or has no WireGuard config");
+        return wireguard_endpoint_from_fields(wireguard_fields_from_conf(unpacked), tag_name);
+    }
+    let conf = wireguard_conf_text(link);
+    let fields = conf != "" ? wireguard_fields_from_conf(conf) : wireguard_fields_from_uri(link);
+    return wireguard_endpoint_from_fields(fields, tag_name);
+}
+
 function manual_link_outbound(link, tag_name) {
     let scheme = url_scheme(link);
     if (scheme == "vmess")
@@ -2209,47 +3438,8 @@ function manual_link_outbound(link, tag_name) {
         return manual_hysteria2_outbound(link, tag_name);
     runtime_generate_unsupported("manual proxy link scheme is not supported by sing-box config generation yet");
 }
-
-function add_manual_proxy_link(config, state, section_name, manual_index, link, taken, selector_tags, urltest_candidate_tags) {
-    let tag_name = outbound_tag(section_name + "-" + manual_index);
-    if (taken[tag_name])
-        tag_name = unique_tag(tag_name, taken);
-    taken[tag_name] = true;
-
-    let outbound = manual_link_outbound(link, tag_name);
-    let display_name = url_fragment(link);
-    if (display_name == "")
-        display_name = tag_name;
-    ensure_explicit_outbound_supported(outbound, "manual outbound", display_name);
-    push(config.outbounds, outbound);
-    push(selector_tags, tag_name);
-    push(urltest_candidate_tags, tag_name);
-
-    state.links[tag_name] = as_string(link);
-    runtime_subscription.remember_outbound_metadata(state, tag_name, display_name, outbound);
-    return tag_name;
-}
-
 function connection_item_tag(section_name, kind, item_index) {
     return outbound_tag(section_name + "-" + as_string(kind) + "-" + item_index);
-}
-
-function add_connection_manual_links(config, state, section, taken, selector_tags, urltest_candidate_tags) {
-    let section_name = section[".name"];
-    let manual_links = connections.connection_urls(section);
-    for (let i = 0; i < length(manual_links); i++) {
-        let link = manual_links[i];
-        add_manual_proxy_link(
-            config,
-            state,
-            section_name,
-            i + 1,
-            link,
-            taken,
-            selector_tags,
-            urltest_candidate_tags
-        );
-    }
 }
 
 function add_connection_subscriptions(config, state, section, taken, selector_tags, urltest_candidate_tags) {
@@ -2405,17 +3595,26 @@ function openconnect_nslookup_ipv4(host, resolver) {
     return "";
 }
 
-function openconnect_direct_ipv4(host) {
+function openconnect_direct_ipv4(host, attempts) {
     host = lc(trim(host));
     if (openconnect_is_ipv4(host))
         return host;
     if (host == "" || match(host, /^[a-z0-9._-]+$/) == null)
         return "";
 
-    for (let resolver in openconnect_bootstrap_resolvers()) {
-        let ip = openconnect_nslookup_ipv4(host, resolver);
-        if (ip != "")
-            return ip;
+    let limit = int(attempts || 0);
+    if (limit <= 0)
+        limit = 4;
+    let tries = 0;
+    while (tries < limit) {
+        for (let resolver in openconnect_bootstrap_resolvers()) {
+            let ip = openconnect_nslookup_ipv4(host, resolver);
+            if (ip != "")
+                return ip;
+        }
+        tries++;
+        if (tries < limit)
+            system("sleep 2");
     }
     return "";
 }
@@ -2502,22 +3701,47 @@ function openconnect_cookie_auto(client) {
     return bool_option(client, "cookie_auto", true);
 }
 
-function openconnect_servers_without_cookie() {
-    let disabled = {};
-    uci_cursor().load(CONFIG_NAME);
-    for (let section in enabled_sections("")) {
-        for (let client in connections.openconnect_clients(section)) {
-            if (openconnect_cookie_auto(client))
-                continue;
-            let server = trim(option(client, "server", ""));
-            if (server == "")
-                continue;
-            let target = openconnect_server_target(server);
-            let key = target.port == "" ? target.host : target.host + ":" + target.port;
-            disabled[openconnect_peer_key(key)] = true;
+let openconnect_dns_deadline = 0;
+
+function openconnect_saved_ipv4(host) {
+    let saved = trim(as_string(openconnect_peer_get(lc(trim(host))).ip || ""));
+    if (!openconnect_is_ipv4(saved))
+        return "";
+    return saved;
+}
+
+function openconnect_remember_ipv4(host, ip) {
+    host = lc(trim(host));
+    ip = trim(as_string(ip));
+    if (host == "" || openconnect_is_ipv4(host) || !openconnect_is_ipv4(ip))
+        return;
+    openconnect_peer_put(host, { ip: ip });
+}
+
+function openconnect_resolve_ipv4(host, label) {
+    host = lc(trim(host));
+    if (openconnect_is_ipv4(host))
+        return host;
+    if (host == "" || match(host, /^[a-z0-9._-]+$/) == null)
+        return "";
+    if (openconnect_dns_deadline == 0)
+        openconnect_dns_deadline = clock()[0] + 60;
+    while (clock()[0] < openconnect_dns_deadline) {
+        let ip = openconnect_direct_ipv4(host, 1);
+        if (ip != "") {
+            openconnect_remember_ipv4(host, ip);
+            return ip;
         }
+        if (clock()[0] + 3 >= openconnect_dns_deadline)
+            break;
+        system("sleep 3");
     }
-    return disabled;
+    let saved = openconnect_saved_ipv4(host);
+    if (saved != "") {
+        openconnect_notice("OpenConnect '" + label + "' is using the saved address " + saved + ".");
+        return saved;
+    }
+    return "";
 }
 
 function openconnect_servercert(fingerprint) {
@@ -2563,14 +3787,43 @@ function openconnect_port_from_map(path, name) {
     return port;
 }
 
+function openconnect_port_listening(port) {
+    port = int(port || 0);
+    if (port <= 0)
+        return false;
+    let needle = ":" + sprintf("%04X", port);
+    for (let path in [ "/proc/net/tcp", "/proc/net/tcp6" ]) {
+        let data = fs.readfile(path);
+        if (data == null)
+            continue;
+        for (let line in split(as_string(data), "\n")) {
+            if (index(line, needle) < 0)
+                continue;
+            if (match(line, /[ \t]0A[ \t]/) != null)
+                return true;
+        }
+    }
+    return false;
+}
+
 function openconnect_detour_socks_port(section) {
     let name = trim(option(section, "outbound_detour_section", ""));
     if (name == "")
         return 0;
     let cascade = openconnect_port_from_map("/var/run/forkop/openconnect-cascade.json", name);
-    if (cascade > 0)
+    if (cascade > 0 && openconnect_port_listening(cascade))
         return cascade;
-    return openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+    let port = openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+    if (port <= 0)
+        return 0;
+    let attempt = 0;
+    while (attempt < 15) {
+        if (openconnect_port_listening(port))
+            return port;
+        system("sleep 1");
+        attempt++;
+    }
+    return openconnect_port_listening(port) ? port : 0;
 }
 
 function openconnect_duration(value) {
@@ -2580,22 +3833,25 @@ function openconnect_duration(value) {
     return value;
 }
 
-function openconnect_fetch_cookie(label, server, username, password, auth_group, fingerprint, proxy_port, flavor, soft) {
-    if (trim(username) == "" || password == "") {
-        if (!soft)
-            openconnect_log("OpenConnect '" + label + "' was not started: username and password are required to obtain a session cookie.");
-        return "";
-    }
-    let stamp = clock();
-    let suffix = sprintf("%d-%d", stamp[0], stamp[1]);
+function openconnect_cookie_worth_retry(raw) {
+    let text = lc(as_string(raw));
+    if (index(text, "authentication failed") >= 0)
+        return false;
+    if (index(text, "login failed") >= 0)
+        return false;
+    if (index(text, "invalid credentials") >= 0)
+        return false;
+    if (index(text, "auth failed") >= 0)
+        return false;
+    return true;
+}
+
+function openconnect_run_auth(server, username, password, auth_group, fingerprint, proxy_port, flavor, suffix, insecure) {
     let out_path = "/tmp/forkop/oc-auth-" + suffix + ".out";
     let pass_path = "/tmp/forkop/oc-auth-" + suffix + ".pass";
     system("mkdir -p /tmp/forkop");
-    if (fs.writefile(pass_path, password + "\n") == null) {
-        if (!soft)
-            openconnect_log("OpenConnect '" + label + "' was not started: could not store credentials for openconnect.");
-        return "";
-    }
+    if (fs.writefile(pass_path, password + "\n") == null)
+        return null;
     system("chmod 600 " + openconnect_shell_quote(pass_path) + " >/dev/null 2>&1");
     let protocol = trim(as_string(flavor));
     if (protocol == "")
@@ -2626,27 +3882,64 @@ function openconnect_fetch_cookie(label, server, username, password, auth_group,
         raw = "";
     }
     system("rm -f " + openconnect_shell_quote(pass_path) + " " + openconnect_shell_quote(out_path) + " >/dev/null 2>&1");
-    let learned = openconnect_parse_sha(raw);
-    if (learned != "")
-        openconnect_peer_put(server, { sha: learned });
-    let cookie = openconnect_parse_cookie(raw);
-    if (cookie == "" && trim(as_string(fingerprint)) == "" && learned != "") {
-        openconnect_notice("OpenConnect '" + label + "' learned the server certificate SHA256 and will retry.");
-        return openconnect_fetch_cookie(label, server, username, password, auth_group, learned, proxy_port, flavor, soft);
-    }
-    if (cookie == "") {
-        let reason = openconnect_failure_text(raw, password);
-        let message = "OpenConnect '" + label + "' " + (soft ? "could not obtain a direct session cookie." : "was not started: openconnect did not return a session cookie.");
-        if (reason != "")
-            message += " " + reason;
-        if (soft)
-            openconnect_notice(message);
-        else
-            openconnect_log(message);
+    return raw;
+}
+
+function openconnect_fetch_cookie(label, server, username, password, auth_group, fingerprint, proxy_port, flavor, soft, max_tries, quiet, insecure) {
+    if (trim(username) == "" || password == "") {
+        if (!soft && !quiet)
+            openconnect_log("OpenConnect '" + label + "' was not started: username and password are required to obtain a session cookie.");
         return "";
     }
-    openconnect_notice("OpenConnect '" + label + "' obtained a session cookie.");
-    return cookie;
+    let stamp = clock();
+    let fingerprint_now = fingerprint;
+    let tries = 0;
+    let raw = "";
+    let limit = int(max_tries || 0);
+    if (limit <= 0)
+        limit = 3;
+    while (tries < limit) {
+        raw = openconnect_run_auth(server, username, password, auth_group, fingerprint_now, proxy_port, flavor, sprintf("%d-%d-%d", stamp[0], stamp[1], tries), insecure);
+        if (raw == null) {
+            if (!soft)
+                openconnect_log("OpenConnect '" + label + "' was not started: could not store credentials for openconnect.");
+            return "";
+        }
+        let learned = openconnect_parse_sha(raw);
+        if (learned != "")
+            openconnect_peer_put(server, { sha: learned });
+        let cookie = openconnect_parse_cookie(raw);
+        if (cookie != "") {
+            openconnect_notice("OpenConnect '" + label + "' obtained a session cookie.");
+            return cookie;
+        }
+        if (learned != "" && learned != openconnect_peer_fingerprint(fingerprint_now) &&
+            (trim(as_string(fingerprint_now)) == "" || insecure)) {
+            openconnect_notice("OpenConnect '" + label + "' learned the server certificate and will retry.");
+            let replace_saved = trim(as_string(fingerprint_now)) != "";
+            fingerprint_now = learned;
+            if (!replace_saved)
+                continue;
+        }
+        tries++;
+        if (tries < limit && openconnect_cookie_worth_retry(raw)) {
+            openconnect_notice("OpenConnect '" + label + "' login did not finish, retrying.");
+            system("sleep 2");
+            continue;
+        }
+        break;
+    }
+    if (quiet)
+        return "";
+    let reason = openconnect_failure_text(raw, password);
+    let message = "OpenConnect '" + label + "' " + (soft ? "could not obtain a direct session cookie." : "was not started: openconnect did not return a session cookie.");
+    if (reason != "")
+        message += " " + reason;
+    if (soft)
+        openconnect_notice(message);
+    else
+        openconnect_log(message);
+    return "";
 }
 
 function add_openconnect_connection(config, state, section, taken, selector_tags, urltest_candidate_tags) {
@@ -2690,6 +3983,7 @@ function add_openconnect_connection(config, state, section, taken, selector_tags
             endpoint.auth_group = auth_group;
         if (bool_option(client, "insecure", false) || bool_option(client, "openconnect_insecure", false))
             endpoint.tls = { insecure: true };
+        let skip_cert = type(endpoint.tls) == "object" && endpoint.tls.insecure == true;
         let fingerprint = openconnect_peer_fingerprint(option(client, "server_sha", ""));
         let saved_target = openconnect_server_target(server);
         let saved_key = saved_target.port == "" ? saved_target.host : saved_target.host + ":" + saved_target.port;
@@ -2746,7 +4040,7 @@ function add_openconnect_connection(config, state, section, taken, selector_tags
         let detour_tag = outbound_detour_tag_for_section(section);
         if (detour_tag != "") {
             let target = openconnect_server_target(server);
-            let ip = openconnect_direct_ipv4(target.host);
+            let ip = openconnect_resolve_ipv4(target.host, label);
             if (ip == "") {
                 openconnect_log("OpenConnect '" + label + "' was not started: direct DNS did not resolve " + target.host + ".");
                 continue;
@@ -2772,7 +4066,7 @@ function add_openconnect_connection(config, state, section, taken, selector_tags
                     openconnect_log("OpenConnect '" + label + "' was not started: cascade SOCKS port is not ready.");
                     continue;
                 }
-                let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, proxy_port, openconnect_flavor(client), false);
+                let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, proxy_port, openconnect_flavor(client), false, 0, false, skip_cert);
                 if (cookie == "")
                     continue;
                 endpoint.cookie = cookie;
@@ -2795,9 +4089,9 @@ function add_openconnect_connection(config, state, section, taken, selector_tags
             }
             let auth_server = target.port == "" ? auth_host : auth_host + ":" + target.port;
             let flavor = openconnect_flavor(client);
-            let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, 0, flavor, true);
+            let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, 0, flavor, true, 0, false, skip_cert);
             if (cookie == "" && trim(auth_group) == "")
-                cookie = openconnect_fetch_cookie(label, auth_server, username, password, "all", fingerprint, 0, flavor, true);
+                cookie = openconnect_fetch_cookie(label, auth_server, username, password, "all", fingerprint, 0, flavor, true, 0, false, skip_cert);
             if (cookie != "")
                 endpoint.cookie = cookie;
             let learned_sha = openconnect_peer_fingerprint(openconnect_peer_get(saved_key).sha);
@@ -3356,6 +4650,213 @@ function openvpn_apply_detour(config, section, taken, endpoint, label) {
     return true;
 }
 
+
+function add_manual_proxy_link(config, state, section, manual_index, link, taken, selector_tags, urltest_candidate_tags) {
+    let section_name = section[".name"];
+    let tag_name = outbound_tag(section_name + "-" + manual_index);
+    if (taken[tag_name])
+        tag_name = unique_tag(tag_name, taken);
+    taken[tag_name] = true;
+
+    let display_name = url_fragment(link);
+    if (display_name == "")
+        display_name = tag_name;
+
+    if (wireguard_scheme(url_scheme(link)) || url_scheme(link) == "vpn" || wireguard_conf_text(link) != "") {
+        let endpoint = manual_wireguard_endpoint(link, tag_name);
+        if (!openvpn_apply_detour(config, section, taken, endpoint, display_name))
+            return "";
+        if (as_string(endpoint.detour || "") != "")
+            delete endpoint.listen_port;
+        let protocol_name = trim(as_string(endpoint.__protocol || ""));
+        delete endpoint.__protocol;
+        if (protocol_name == "")
+            protocol_name = url_scheme(link) == "warp" ? "WARP" : (type(endpoint.amnezia) == "object" ? "AmneziaWG" : "WireGuard");
+        if (wireguard_conf_text(link) != "" && url_scheme(link) == "" && type(endpoint.peers) == "array" && length(endpoint.peers) > 0)
+            display_name = as_string(endpoint.peers[0].address) + ":" + endpoint.peers[0].port;
+        if (type(config.endpoints) != "array")
+            config.endpoints = [];
+        push(config.endpoints, endpoint);
+        push(selector_tags, tag_name);
+        push(urltest_candidate_tags, tag_name);
+        state.links[tag_name] = as_string(link);
+        runtime_subscription.remember_outbound_metadata(state, tag_name, display_name, {
+            type: protocol_name
+        });
+        return tag_name;
+    }
+
+    let outbound = manual_link_outbound(link, tag_name);
+    ensure_explicit_outbound_supported(outbound, "manual outbound", display_name);
+    push(config.outbounds, outbound);
+    push(selector_tags, tag_name);
+    push(urltest_candidate_tags, tag_name);
+
+    state.links[tag_name] = as_string(link);
+    runtime_subscription.remember_outbound_metadata(state, tag_name, display_name, outbound);
+    return tag_name;
+}
+
+function add_connection_manual_links(config, state, section, taken, selector_tags, urltest_candidate_tags) {
+    let section_name = section[".name"];
+    let manual_links = connections.connection_urls(section);
+    for (let i = 0; i < length(manual_links); i++) {
+        let link = manual_links[i];
+        add_manual_proxy_link(
+            config,
+            state,
+            section,
+            i + 1,
+            link,
+            taken,
+            selector_tags,
+            urltest_candidate_tags
+        );
+    }
+}
+
+function warp_extended_endpoint(client, tag_name, host, port) {
+    let device = trim(option(client, "device_id", ""));
+    let token = trim(option(client, "access_token", ""));
+    let private_key = trim(option(client, "private_key", ""));
+    if (device == "" || token == "" || private_key == "")
+        return null;
+    let endpoint = {
+        type: "warp",
+        tag: tag_name,
+        system: false,
+        address: host,
+        port: int(port, 10),
+        profile: {
+            id: device,
+            private_key: private_key,
+            auth_token: token,
+            recreate: false
+        },
+        routing_mark: runtime_constants.OUTBOUND_MARK,
+        domain_resolver: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG
+    };
+    let keepalive = trim(option(client, "keepalive", "25"));
+    if (match(keepalive, /^[0-9]+$/) != null && int(keepalive, 10) > 0)
+        endpoint.persistent_keepalive_interval = int(keepalive, 10);
+    let license = trim(option(client, "license", ""));
+    if (license != "")
+        endpoint.profile.license_key = license;
+    return endpoint;
+}
+
+function add_warp_profiles(config, state, section, taken, selector_tags, urltest_candidate_tags) {
+    let section_name = as_string(section[".name"]);
+    let extended = sing_box_is_extended();
+    let n = 0;
+    for (let client in connections.warp_clients(section)) {
+        n++;
+        let private_key = trim(option(client, "private_key", ""));
+        let public_key = trim(option(client, "public_key", ""));
+        let host = trim(option(client, "endpoint_host", ""));
+        let port = trim(option(client, "endpoint_port", "2408"));
+        if (match(port, /^[0-9]+$/) == null)
+            port = "2408";
+        let v4 = trim(option(client, "address_v4", ""));
+        if (private_key == "" || host == "" || v4 == "" || (!extended && public_key == "")) {
+            warn("skipped incomplete WARP profile in section '", section_name, "'\n");
+            continue;
+        }
+        let addresses = [ index(v4, "/") < 0 ? v4 + "/32" : v4 ];
+        let v6 = trim(option(client, "address_v6", ""));
+        if (v6 != "" && !bool_option(client, "ipv4_only", false))
+            push(addresses, index(v6, "/") < 0 ? v6 + "/128" : v6);
+        let label = trim(option(client, "name", ""));
+        if (label == "")
+            label = "WARP " + n;
+        let tag_name = unique_tag(section_name + "-warp-" + n, taken);
+        let endpoint = null;
+        if (extended) {
+            endpoint = warp_extended_endpoint(client, tag_name, host, port);
+            if (endpoint == null) {
+                warn("sing-box-extended skipped WARP '", label, "': the profile has no device id or token. Use New address once.\n");
+                continue;
+            }
+        }
+        else {
+            endpoint = wireguard_endpoint_from_fields({
+                privatekey: private_key,
+                publickey: public_key,
+                endpoint: host + ":" + port,
+                address: join(",", addresses),
+                reserved: option(client, "reserved", ""),
+                mtu: option(client, "mtu", "1280"),
+                keepalive: option(client, "keepalive", "25"),
+                allowedips: "0.0.0.0/0,::/0"
+            }, tag_name);
+        }
+        if (!openvpn_apply_detour(config, section, taken, endpoint, label))
+            continue;
+        if (bool_option(client, "ipv4_only", false))
+            endpoint.domain_resolver = {
+                server: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
+                strategy: "ipv4_only"
+            };
+        if (as_string(endpoint.detour || "") != "") {
+            delete endpoint.listen_port;
+            if (extended && type(endpoint.profile) == "object")
+                endpoint.profile.detour = endpoint.detour;
+        }
+        taken[tag_name] = true;
+        if (type(config.endpoints) != "array")
+            config.endpoints = [];
+        push(config.endpoints, endpoint);
+        push(selector_tags, tag_name);
+        push(urltest_candidate_tags, tag_name);
+        runtime_subscription.remember_outbound_metadata(state, tag_name, label, { type: "WARP WIREGUARD" });
+    }
+}
+
+function add_masque_profiles(config, state, section, taken, selector_tags, urltest_candidate_tags) {
+    let section_name = as_string(section[".name"]);
+    let clients = connections.masque_clients(section);
+    if (length(clients) == 0)
+        return;
+    if (!sing_box_is_extended()) {
+        warn("skipped WARP MASQUE profiles in section '", section_name, "': need sing-box-extended\n");
+        return;
+    }
+    let n = 0;
+    for (let client in clients) {
+        n++;
+        let label = trim(option(client, "name", ""));
+        if (label == "")
+            label = "WARP MASQUE " + n;
+        let tag_name = unique_tag(section_name + "-masque-" + n, taken);
+        let profile = {
+            recreate: false,
+            detour: runtime_constants.DIRECT_OUTBOUND_TAG
+        };
+        let license = trim(option(client, "license", ""));
+        if (license != "")
+            profile.license_key = license;
+        let endpoint = {
+            type: "masque",
+            tag: tag_name,
+            system: false,
+            name: "masque" + n,
+            use_http2: false,
+            use_ipv6: !bool_option(client, "ipv4_only", true),
+            profile: profile,
+            routing_mark: runtime_constants.OUTBOUND_MARK
+        };
+        if (!openvpn_apply_detour(config, section, taken, endpoint, label))
+            continue;
+        if (as_string(endpoint.detour || "") != "" && type(endpoint.profile) == "object")
+            endpoint.profile.detour = endpoint.detour;
+        taken[tag_name] = true;
+        push(config.outbounds, endpoint);
+        push(selector_tags, tag_name);
+        push(urltest_candidate_tags, tag_name);
+        runtime_subscription.remember_outbound_metadata(state, tag_name, label, { type: "WARP MASQUE" });
+    }
+}
+
 function openvpn_add_probe(config, tag_name) {
     let probe_port = int(config.__oc_probe_next || 0);
     if (probe_port < 4700)
@@ -3680,6 +5181,8 @@ function add_connections_outbound(config, section, taken) {
     let cascade_start = length(array_or_empty(config.outbounds));
 
     add_connection_manual_links(config, state, section, taken, selector_tags, urltest_candidate_tags);
+    add_warp_profiles(config, state, section, taken, selector_tags, urltest_candidate_tags);
+    add_masque_profiles(config, state, section, taken, selector_tags, urltest_candidate_tags);
     add_connection_subscriptions(config, state, section, taken, selector_tags, urltest_candidate_tags);
     // Apply before interface and JSON items are added: those source kinds are intentionally excluded.
     apply_section_detour_to_connection_outbounds(
@@ -3975,12 +5478,6 @@ function ip_from_hosts_line(line, wanted) {
     }
     return "";
 }
-
-function ip_from_dhcp_lease_name(name) {
-    let ips = ips_from_dhcp_lease_name(name);
-    return length(ips) > 0 ? ips[0] : "";
-}
-
 function lease_lookup_paths() {
     return [
         "/tmp/dhcp.leases",
@@ -4054,6 +5551,11 @@ function ips_from_dhcp_lease_name(name) {
     if (wanted == "" || type(index.name_to_ips[wanted]) != "array")
         return [];
     return index.name_to_ips[wanted];
+}
+
+function ip_from_dhcp_lease_name(name) {
+    let ips = ips_from_dhcp_lease_name(name);
+    return length(ips) > 0 ? ips[0] : "";
 }
 
 function expanded_ips_for_source_value(value) {
@@ -4276,6 +5778,9 @@ function excluded_non_fakeip_rule(inbound, source) {
         disable_cache: true
     };
 }
+function single_or_array(values) {
+    return length(values) == 1 ? values[0] : values;
+}
 
 function add_global_routing_exclusions(config) {
     let excluded = [];
@@ -4440,10 +5945,6 @@ function section_dns_server(section) {
     return option(section, "action", "") == "bypass"
         ? runtime_constants.DNS_SERVER_TAG
         : runtime_constants.FAKEIP_DNS_SERVER_TAG;
-}
-
-function single_or_array(values) {
-    return length(values) == 1 ? values[0] : values;
 }
 
 function copy_dns_matchers(matchers) {
@@ -4978,6 +6479,24 @@ function enabled_sections(deferred_sections) {
             push(result, section);
     });
     return result;
+}
+
+function openconnect_servers_without_cookie() {
+    let disabled = {};
+    uci_cursor().load(CONFIG_NAME);
+    for (let section in enabled_sections("")) {
+        for (let client in connections.openconnect_clients(section)) {
+            if (openconnect_cookie_auto(client))
+                continue;
+            let server = trim(option(client, "server", ""));
+            if (server == "")
+                continue;
+            let target = openconnect_server_target(server);
+            let key = target.port == "" ? target.host : target.host + ":" + target.port;
+            disabled[openconnect_peer_key(key)] = true;
+        }
+    }
+    return disabled;
 }
 
 function enabled_servers() {
@@ -5728,14 +7247,15 @@ function repair_openconnect_auth() {
             }
         }
         let fingerprint = type(endpoint.tls) == "object" ? trim(as_string(endpoint.tls.peer_fingerprint || "")) : "";
+        let skip_cert = type(endpoint.tls) == "object" && endpoint.tls.insecure == true;
         let flavor = trim(as_string(endpoint.flavor || "anyconnect"));
         let auth_group = trim(as_string(endpoint.auth_group || ""));
         let cookie = openconnect_fetch_cookie(
-            label, key, endpoint.username, endpoint.password, auth_group, fingerprint, proxy_port, flavor, proxy_port <= 0
+            label, key, endpoint.username, endpoint.password, auth_group, fingerprint, proxy_port, flavor, proxy_port <= 0, 0, false, skip_cert
         );
         if (cookie == "" && auth_group == "")
             cookie = openconnect_fetch_cookie(
-                label, key, endpoint.username, endpoint.password, "all", fingerprint, proxy_port, flavor, proxy_port <= 0
+                label, key, endpoint.username, endpoint.password, "all", fingerprint, proxy_port, flavor, proxy_port <= 0, 0, false, skip_cert
             );
         let learned_sha = openconnect_peer_fingerprint(openconnect_peer_get(key).sha);
         if (fingerprint == "" && learned_sha != "") {
@@ -5769,7 +7289,7 @@ if (mode == "generate-config")
 else if (mode == "generate-config-fixture")
     generate_config_fixture(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6] || "");
 else if (mode == "download-socks")
-    generate_download_socks(ARGV[1] || "", ARGV[2] || "", ARGV[3] || "");
+    generate_download_socks(ARGV[1] || "", ARGV[2] || "", ARGV[3] || "", ARGV[4] == "1");
 else if (mode == "prepare-openconnect-cascade")
     exit(prepare_openconnect_cascade());
 else if (mode == "repair-openconnect-auth")

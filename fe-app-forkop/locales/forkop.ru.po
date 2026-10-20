@@ -2543,8 +2543,8 @@ msgstr "Исходящий"
 msgid "Uploaded"
 msgstr "Отдано"
 
-msgid "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, or hy2://"
-msgstr "URL должен начинаться с vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2:// или hy2://"
+msgid "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, hy2://, wireguard://, wg://, awg://, or vpn://"
+msgstr "URL должен начинаться с vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, hy2://, wireguard://, wg://, awg:// или vpn://"
 
 msgid "URL must use one of the following protocols:"
 msgstr "URL должен использовать один из следующих протоколов:"
@@ -2756,8 +2756,14 @@ msgstr "Видимое имя этой секции"
 msgid "VLESS flow"
 msgstr "VLESS flow"
 
-msgid "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links"
-msgstr "ссылки vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://"
+msgid "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://, wg://, awg://, vpn:// links"
+msgstr "ссылки vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://, wg://, awg://, vpn://"
+
+msgid "Invalid WireGuard link"
+msgstr "Некорректная ссылка WireGuard"
+
+msgid "WireGuard and AmneziaWG links work only in a sing-box section"
+msgstr "ссылки WireGuard и AmneziaWG работают только в секции с движком sing-box"
 
 msgid "WAN"
 msgstr "WAN"

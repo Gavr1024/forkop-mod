@@ -2653,6 +2653,33 @@ function selected_lists_ready() {
     return true;
 }
 
+function list_update_missing() {
+    log_message("List auto-update is off; keeping saved lists and filling only files that are absent", "info");
+    if (!list_update_pid_begin())
+        exit(0);
+
+    let settings = uci_settings();
+    let proxy_address = service_proxy_address(settings, "lists");
+    let ok = true;
+    let persist_result = list_cache.persist_selected_lists(settings, proxy_address, false);
+    if (type(persist_result) == "object")
+        ok = persist_result.ok ? true : false;
+    else if (!persist_result)
+        ok = false;
+
+    if (engine.is_xray_primary()) {
+        let geodata = require("xray.geodata");
+        if (!geodata.ensure_shared_subnets(proxy_address, false))
+            ok = false;
+        if (!geodata.ensure_from_uci(settings, proxy_address, false))
+            ok = false;
+    }
+
+    list_cache.stop_download_socks();
+    list_update_pid_end();
+    exit(ok ? 0 : 1);
+}
+
 function list_update_if_missing() {
     if (!list_cache.persist_enabled()) {
         list_update();
@@ -2663,11 +2690,18 @@ function list_update_if_missing() {
             log_message("List auto-update is off; keeping flash cache on start", "info");
             exit(0);
         }
-        log_message("Selected lists are missing from cache; running lists update now", "info");
-        list_update();
+        list_update_missing();
         return;
     }
     list_update_if_due();
+}
+
+function list_update_unless_disabled() {
+    if (list_cache.persist_enabled() && settings_update_interval(uci_settings()) == "") {
+        list_update_missing();
+        return;
+    }
+    list_update();
 }
 
 function list_update_if_due() {
@@ -3211,6 +3245,8 @@ else if (mode == "remove-cron-jobs")
     remove_cron_jobs(ARGV[1], ARGV[2], ARGV[3]);
 else if (mode == "list-update")
     list_update();
+else if (mode == "list-update-unless-disabled")
+    list_update_unless_disabled();
 else if (mode == "list-cache-status")
     print_list_cache_status();
 else if (mode == "list-cache-show")

@@ -480,6 +480,72 @@ function retry_start_on_wan_up(owner_pid) {
     return command_status_from_args([ SERVICE_INIT, "restart", "triggered" ]);
 }
 
+function badwan_monitored_names(settings) {
+    settings = object_or_empty(settings);
+    if (option(settings, "enable_badwan_interface_monitoring", "") != "1")
+        return [];
+
+    let names = [];
+    for (let iface in split(replace(trim(option(settings, "badwan_monitored_interfaces", "")), /[ \t\r\n]+/g, " "), " ")) {
+        iface = trim(iface);
+        if (iface != "")
+            push(names, iface);
+    }
+    return names;
+}
+
+function badwan_delay_ms(settings) {
+    let delay = option(object_or_empty(settings), "badwan_reload_delay", "2000");
+    if (!numeric_text(delay))
+        delay = "2000";
+    return delay;
+}
+
+function interface_is_up(name) {
+    name = trim(as_string(name));
+    if (name == "" || match(name, /^[A-Za-z0-9._-]+$/) == null)
+        return false;
+
+    let output = command_output_from_args([ "ifstatus", name ]);
+    if (output == "")
+        output = command_output_from_args([ "ubus", "call", "network.interface." + name, "status" ]);
+    return index(output, "\"up\": true") >= 0 || index(output, "\"up\":true") >= 0;
+}
+
+function any_monitored_interface_up(names) {
+    for (let name in names)
+        if (interface_is_up(name))
+            return true;
+    return false;
+}
+
+function boot_start_action(reason, monitored_count, any_up) {
+    if (as_string(reason) != "boot")
+        return "start";
+    if (int(monitored_count || 0) <= 0)
+        return "start";
+    return bool_text(any_up) ? "delay_start" : "wait";
+}
+
+function sleep_ms(delay) {
+    delay = int(delay || 0);
+    if (delay <= 0)
+        return 0;
+
+    let seconds = int(delay / 1000);
+    let frac = delay % 1000;
+    let text = as_string(seconds);
+    if (frac > 0) {
+        let digits = as_string(frac);
+        while (length(digits) < 3)
+            digits = "0" + digits;
+        text = text + "." + digits;
+    }
+    if (command_status_from_args([ "sleep", text ]) == 0)
+        return 0;
+    return command_status_from_args([ "sleep", as_string(seconds + (frac > 0 ? 1 : 0)) ]);
+}
+
 function badwan_interface_monitored(settings, interface_name) {
     settings = object_or_empty(settings);
     if (option(settings, "enable_badwan_interface_monitoring", "") != "1")
@@ -495,6 +561,8 @@ function badwan_interface_monitored(settings, interface_name) {
 function wan_up_action(runtime_running_value, service_enabled_value, retry_pending_value, monitoring_value) {
     if (bool_text(runtime_running_value))
         return bool_text(monitoring_value) ? "reload" : "skip_running";
+    if (bool_text(monitoring_value) && bool_text(service_enabled_value))
+        return "start";
     return retry_start_on_wan_up_action(runtime_running_value, service_enabled_value, retry_pending_value);
 }
 
@@ -515,6 +583,13 @@ function handle_wan_up(owner_pid) {
         return command_status_from_args([ SERVICE_INIT, "reload", "badwan_interface_up" ]);
     }
 
+    if (action == "start") {
+        clear_start_retry(START_RETRY_FILE);
+        cancel_scheduled_start_retry(START_RETRY_PID_FILE);
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Starting Forkop after monitored WAN came up" ]);
+        return command_status_from_args([ SERVICE_INIT, "start", "triggered" ]);
+    }
+
     if (action == "skip_running") {
         clear_start_retry(START_RETRY_FILE);
         cancel_scheduled_start_retry(START_RETRY_PID_FILE);
@@ -522,6 +597,22 @@ function handle_wan_up(owner_pid) {
     }
 
     return retry_start_on_wan_up(owner_pid);
+}
+
+function handle_monitored_up(owner_pid) {
+    if (!service_is_enabled())
+        return 0;
+    if (runtime_is_running()) {
+        clear_start_retry(START_RETRY_FILE);
+        cancel_scheduled_start_retry(START_RETRY_PID_FILE);
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Reloading Forkop after monitored interface came up" ]);
+        return command_status_from_args([ SERVICE_INIT, "reload", "badwan_interface_up" ]);
+    }
+
+    clear_start_retry(START_RETRY_FILE);
+    cancel_scheduled_start_retry(START_RETRY_PID_FILE);
+    command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Starting Forkop after monitored interface came up" ]);
+    return command_status_from_args([ SERVICE_INIT, "start", "triggered" ]);
 }
 
 function active_service_action_value() {
@@ -561,6 +652,19 @@ function start_plan(reason, owner_pid, settings, bin_ok) {
 }
 
 function start_service(reason, owner_pid) {
+    let settings = uci_settings();
+    let monitored = badwan_monitored_names(settings);
+    let action = boot_start_action(reason, length(monitored), any_monitored_interface_up(monitored) ? "1" : "0");
+    if (action == "wait") {
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Waiting for a monitored interface before starting Forkop" ]);
+        return 0;
+    }
+    if (action == "delay_start") {
+        let delay = badwan_delay_ms(settings);
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Monitored interface is already up; starting Forkop after " + delay + " ms" ]);
+        sleep_ms(delay);
+    }
+
     print("Start Forkop\n");
     let plan = start_plan_value(reason, owner_pid, uci_settings(), null);
     if (!plan.bin_ok)
@@ -725,7 +829,7 @@ function trigger_plan(settings) {
             iface = trim(iface);
             if (iface == "" || iface == "wan")
                 continue;
-            print("interface\tinterface.*.up\t", iface, "\t", SERVICE_INIT, "\treload\t\n");
+            print("interface\tinterface.*.up\t", iface, "\t", SERVICE_INIT, "\thandle_monitored_up\t\n");
         }
     }
 }
@@ -742,6 +846,10 @@ else if (mode == "retry-start-on-wan-up")
     exit(retry_start_on_wan_up(ARGV[1]));
 else if (mode == "handle-wan-up")
     exit(handle_wan_up(ARGV[1]));
+else if (mode == "handle-monitored-up")
+    exit(handle_monitored_up(ARGV[1]));
+else if (mode == "boot-start-action")
+    print(boot_start_action(ARGV[1], ARGV[2], ARGV[3]), "\n");
 else if (mode == "retry-start-on-wan-up-action")
     print(retry_start_on_wan_up_action(ARGV[1], ARGV[2], ARGV[3]), "\n");
 else if (mode == "wan-up-action")

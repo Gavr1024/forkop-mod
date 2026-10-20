@@ -869,7 +869,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.10",
+        "-A", "forkop-list-cache/1.0.11",
         "-o", output_path,
         "--url", as_string(url)
     ];
@@ -1618,7 +1618,7 @@ function prune_unselected(selected) {
     prune_cached_names(singbox_cache_dir(), keep, false);
 }
 
-function persist_selected_lists(settings, proxy_address) {
+function persist_selected_lists(settings, proxy_address, refresh) {
     if (type(settings) != "object")
         settings = settings_section();
     if (!persist_enabled(settings))
@@ -1629,6 +1629,30 @@ function persist_selected_lists(settings, proxy_address) {
         return false;
     }
 
+    let refresh_existing = refresh !== false;
+    let selected = collect_selected_lists_from_uci();
+    if (length(selected) == 0) {
+        write_manifest([]);
+        prune_unselected([]);
+        log_message("no selected lists to cache", "info");
+        return true;
+    }
+
+    if (!refresh_existing) {
+        let missing = false;
+        for (let item in selected) {
+            if (type(item) != "object" || item.local == true)
+                continue;
+            adopt_legacy_singbox_cache(item.path, legacy_cache_path(item.url));
+            if (stored_list_size(item.path) <= 0)
+                missing = true;
+        }
+        if (!missing) {
+            log_message("saved lists are already on flash; GitHub was not contacted", "info");
+            return { ok: true, changed: false, items: [] };
+        }
+    }
+
     if (!ensure_download_section_up(settings))
         return false;
 
@@ -1637,14 +1661,6 @@ function persist_selected_lists(settings, proxy_address) {
         proxy_address = live_proxy;
     else if (as_string(proxy_address) == "")
         proxy_address = live_proxy;
-
-    let selected = collect_selected_lists_from_uci();
-    if (length(selected) == 0) {
-        write_manifest([]);
-        prune_unselected([]);
-        log_message("no selected lists to cache", "info");
-        return true;
-    }
 
     let ok = true;
     let stored = [];
@@ -1657,6 +1673,10 @@ function persist_selected_lists(settings, proxy_address) {
         }
         adopt_legacy_singbox_cache(item.path, legacy_cache_path(item.url));
         let previous_size = stored_list_size(item.path);
+        if (!refresh_existing && previous_size > 0) {
+            push(stored, decorate_item(item));
+            continue;
+        }
         if (download_to_file(item.url, item.path, proxy_address)) {
             let decorated = decorate_item(item);
             if (decorated.size != previous_size)

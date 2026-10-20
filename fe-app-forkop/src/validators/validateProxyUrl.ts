@@ -51,10 +51,14 @@ export function validateProxyUrl(url: string | string[] | null | undefined): Val
     return validateHysteria2Url(trimmedUrl);
   }
 
+  if (/^(wireguard|wg|awg|amneziawg):\/\//i.test(trimmedUrl)) {
+    return { valid: true, message: 'Valid' };
+  }
+
   return {
     valid: false,
     message: _(
-      'URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, or hy2://',
+      'URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, hy2://, wireguard://, wg://, or awg://',
     ),
   };
 }

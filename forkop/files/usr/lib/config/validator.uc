@@ -22,6 +22,82 @@ function as_string(value) {
     return value == null ? "" : "" + value;
 }
 
+function lower_text(value) {
+    value = as_string(value);
+    if (type(lc) == "function")
+        return lc(value);
+
+    let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let lower = "abcdefghijklmnopqrstuvwxyz";
+    let result = "";
+    for (let i = 0; i < length(value); i++) {
+        let ch = substr(value, i, 1);
+        let pos = index(upper, ch);
+        result += pos >= 0 ? substr(lower, pos, 1) : ch;
+    }
+    return result;
+}
+
+function upper_text(value) {
+    value = as_string(value);
+    if (type(uc) == "function")
+        return uc(value);
+
+    let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let lower = "abcdefghijklmnopqrstuvwxyz";
+    let result = "";
+    for (let i = 0; i < length(value); i++) {
+        let ch = substr(value, i, 1);
+        let pos = index(lower, ch);
+        result += pos >= 0 ? substr(upper, pos, 1) : ch;
+    }
+    return result;
+}
+
+function file_base(path) {
+    path = as_string(path);
+    let slash = -1;
+    for (let i = 0; i < length(path); i++)
+        if (substr(path, i, 1) == "/")
+            slash = i;
+    return slash >= 0 ? substr(path, slash + 1) : path;
+}
+
+function exception_text(e) {
+    if (type(e) == "string")
+        return e;
+    if (type(e) != "object")
+        return as_string(e);
+
+    let parts = [];
+    let message = trim(as_string(e.message || ""));
+    if (message != "")
+        push(parts, message);
+
+    let trace = e.stacktrace;
+    if (type(trace) == "array") {
+        let shown = 0;
+        for (let frame in trace) {
+            if (type(frame) != "object" || shown >= 4)
+                continue;
+            let where = file_base(frame.filename);
+            if (frame.line != null && as_string(frame.line) != "")
+                where += ":" + frame.line;
+            let fn = as_string(frame.function || "");
+            if (fn != "")
+                where += " " + fn;
+            if (where != "") {
+                push(parts, where);
+                shown++;
+            }
+        }
+    }
+
+    if (length(parts) == 0)
+        return trim(as_string(sprintf("%J", e)));
+    return join(" | ", parts);
+}
+
 function read_stdin() {
     let input = fs.open("/dev/stdin", "r");
     if (!input)
@@ -261,18 +337,18 @@ function version_compare(lhs, rhs) {
         if (ri >= length(rhs))
             return substr(lhs, li, 1) == "~" ? -1 : 1;
 
-        let lc = substr(lhs, li, 1);
-        let rc = substr(rhs, ri, 1);
-        if (lc == rc) {
+        let left_char = substr(lhs, li, 1);
+        let right_char = substr(rhs, ri, 1);
+        if (left_char == right_char) {
             li++;
             ri++;
             continue;
         }
 
-        if (lc == "~" || rc == "~")
-            return lc == "~" ? -1 : 1;
+        if (left_char == "~" || right_char == "~")
+            return left_char == "~" ? -1 : 1;
 
-        if (digit_char(lc) && digit_char(rc)) {
+        if (digit_char(left_char) && digit_char(right_char)) {
             let ls = li, rs = ri;
             while (li < length(lhs) && digit_char(substr(lhs, li, 1)))
                 li++;
@@ -288,7 +364,7 @@ function version_compare(lhs, rhs) {
             continue;
         }
 
-        return lc < rc ? -1 : 1;
+        return left_char < right_char ? -1 : 1;
     }
 
     return 0;
@@ -318,7 +394,7 @@ function stdin_first_line_field(field_index) {
 }
 
 function country_code_valid(value) {
-    value = uc(as_string(value));
+    value = upper_text(as_string(value));
     return match(value, /^[A-Z][A-Z]$/) != null;
 }
 
@@ -717,12 +793,12 @@ function mwan3_is_active() {
 }
 
 function hex_digit_value(value) {
-    let pos = index("0123456789abcdef", lc(as_string(value)));
+    let pos = index("0123456789abcdef", lower_text(as_string(value)));
     return pos >= 0 ? pos : null;
 }
 
 function parse_number(value) {
-    value = lc(trim(as_string(value)));
+    value = lower_text(trim(as_string(value)));
     if (value == "")
         return null;
 
@@ -900,7 +976,7 @@ function validate_required_duration_option(value, label) {
 }
 
 function dns_hostname_valid(value) {
-    value = lc(trim(as_string(value)));
+    value = lower_text(trim(as_string(value)));
     if (value == "")
         return true;
     return length(value) <= 253 &&
@@ -1057,7 +1133,7 @@ function valid_http_url(value) {
     if (value == "" || match(value, /[ \t\r\n]/) != null)
         return false;
 
-    let scheme = lc(core_url.scheme(value));
+    let scheme = lower_text(core_url.scheme(value));
     if (scheme != "http" && scheme != "https")
         return false;
 
@@ -1107,7 +1183,7 @@ function validate_detect_server_country_value(value, section) {
 }
 
 function validate_proxy_parameter_value(value, allowed, parameter, section) {
-    value = lc(as_string(value));
+    value = lower_text(as_string(value));
     if (value == "" || contains(allowed, value))
         return;
 
@@ -1731,7 +1807,7 @@ function validate_list_update_settings(settings) {
     if (!bool_option(settings, "list_update_enabled", true))
         return;
 
-    let update_interval = lc(option(settings, "update_interval", "1d"));
+    let update_interval = lower_text(option(settings, "update_interval", "1d"));
     if (update_interval == "" )
         update_interval = "1d";
     if (update_interval == "never" || update_interval == "0" || update_interval == "off" || update_interval == "disabled")
@@ -1777,20 +1853,30 @@ function validate_runtime_mark_ranges_context(context) {
     }
 }
 
-function validate_runtime_config(context) {
+let validation_step = "runtime config";
+
+function validate_runtime_config_steps(context) {
+    validation_step = "settings";
     let settings = settings_section();
     let sections = sections_by_type("section");
 
-    let routing_engine = lc(option(settings, "routing_engine", "sing-box"));
+    validation_step = "routing engine";
+    let routing_engine = lower_text(option(settings, "routing_engine", "sing-box"));
     if (routing_engine != "" && routing_engine != "sing-box" && routing_engine != "xray" && routing_engine != "xray-core")
         fail_validation("settings.routing_engine must be sing-box or xray. Aborted.");
     if ((routing_engine == "xray" || routing_engine == "xray-core") && !context.xray_installed)
         fail_validation("Xray is selected as the routing plane, but Xray is not installed. Install it from Components. Aborted.");
 
+    validation_step = "marks";
     validate_runtime_mark_ranges_context(context);
+    validation_step = "dns";
     validate_dns_settings(settings, sections, context);
+    validation_step = "list updates";
     validate_list_update_settings(settings);
+    validation_step = "latency url";
     validate_http_url_option(option(settings, "latency_test_url", DEFAULT_LATENCY_TEST_URL) || DEFAULT_LATENCY_TEST_URL, "settings.latency_test_url");
+
+    validation_step = "download proxy";
 
     if (download_via_proxy_enabled(settings, "lists")) {
         validate_download_section_rows(
@@ -1810,6 +1896,7 @@ function validate_runtime_config(context) {
             basic_rows_from_sections(sections)
         );
     }
+    validation_step = "router traffic";
     if (bool_option(settings, "route_router_traffic", false)) {
         let target = router_traffic_section(settings);
         if (target != "") {
@@ -1823,12 +1910,29 @@ function validate_runtime_config(context) {
         }
     }
 
+    validation_step = "cascade";
     validate_outbound_detours_rows(detour_rows_from_sections(sections));
+    validation_step = "subscription download";
     validate_subscription_download_sections(sections, context);
+    validation_step = "servers";
     validate_server_routing_sections(sections);
 
-    for (let section in sections)
+    for (let section in sections) {
+        validation_step = "rule " + section_name(section);
         validate_rule(section, sections, context);
+    }
+}
+
+function validate_runtime_config(context) {
+    try {
+        validate_runtime_config_steps(context);
+    }
+    catch (e) {
+        let text = exception_text(e);
+        if (text == "" || text == "null")
+            text = "unexpected error";
+        fail_validation(validation_step + ": " + text);
+    }
 }
 
 function context_from_runtime() {
@@ -2129,7 +2233,7 @@ function check_provider_requirements(ctx) {
     );
 }
 
-function check_runtime_requirements() {
+function check_runtime_requirement_steps() {
     log_message("Checking required packages and runtime settings", "info");
 
     let ctx = context_from_runtime();
@@ -2178,6 +2282,18 @@ function check_runtime_requirements() {
         log_message("No proxy outbound sections found. Forkop will use direct and/or provider-only routing.", "warn");
 
     check_provider_requirements(ctx);
+}
+
+function check_runtime_requirements() {
+    try {
+        check_runtime_requirement_steps();
+    }
+    catch (e) {
+        let text = exception_text(e);
+        if (text == "" || text == "null")
+            text = "unexpected error";
+        fail_requirement("Required package check failed: " + text, "fatal");
+    }
 }
 
 function context_override_value(overrides, defaults, key) {

@@ -400,7 +400,10 @@ function forkop_config_masked_line(line) {
     line = mask_after_token(line, "list reality_short_id");
     line = mask_after_token_space(line, "option mixed_proxy_username");
     line = mask_after_token_space(line, "option mixed_proxy_password");
-    line = mask_after_token_space(line, "option private_key");
+    line = mask_after_token(line, "option private_key");
+    line = mask_after_token(line, "option access_token");
+    line = mask_after_token(line, "option license");
+    line = mask_after_token(line, "option warp_license");
     line = mask_after_token_space(line, "option url");
     line = mask_option_path(line, "option dns_server '");
     line = mask_option_path(line, "list dns_server '");

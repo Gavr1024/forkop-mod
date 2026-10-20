@@ -40,7 +40,9 @@ const SERVER_COUNTRY_METHOD_COUNTRY_IS = "country_is";
 const CHILD_ITEM_TYPES = [
     "subscription_url",
     "section_interface",
-    "urltest"
+    "urltest",
+    "warp",
+    "masque"
 ];
 
 function shell_quote(value) {
@@ -1325,6 +1327,98 @@ function migrate_openconnect_clients(ctx) {
     }
 }
 
+function warp_query_value(query, name) {
+    query = object_or_empty(query);
+    for (let key in query)
+        if (lc(as_string(key)) == name)
+            return trim(as_string(query[key]));
+    return "";
+}
+
+function warp_host_from_link(link) {
+    let host = trim(core_url.host(link));
+    let port = trim(core_url.port(link));
+    let colon = rindex(host, ":");
+    if (colon > 0 && index(substr(host, 0, colon), ":") < 0) {
+        let tail = substr(host, colon + 1);
+        if (match(tail, /^[0-9]+$/) != null) {
+            host = substr(host, 0, colon);
+            if (port == "")
+                port = tail;
+        }
+    }
+    if (port == "")
+        port = "2408";
+    return [ host, port ];
+}
+
+function migrate_warp_profiles(ctx) {
+    for (let section in ctx.model.sections) {
+        let kept = [];
+        let created = 0;
+        for (let link in option_list_values(section, "selector_proxy_links")) {
+            link = trim(as_string(link));
+            if (lc(core_url.scheme(link)) != "warp") {
+                if (link != "")
+                    push(kept, link);
+                continue;
+            }
+            let query = object_or_empty(core_url.query_params(link));
+            let private_key = warp_query_value(query, "privatekey");
+            let public_key = warp_query_value(query, "publickey");
+            let reserved = warp_query_value(query, "reserved");
+            let host_port = warp_host_from_link(link);
+            let addresses = split(warp_query_value(query, "address"), ",");
+            let v4 = "";
+            let v6 = "";
+            for (let item in addresses) {
+                item = trim(item);
+                if (item == "")
+                    continue;
+                let slash = index(item, "/");
+                if (slash > 0)
+                    item = substr(item, 0, slash);
+                if (index(item, ":") >= 0) {
+                    if (v6 == "")
+                        v6 = item;
+                }
+                else if (v4 == "") {
+                    v4 = item;
+                }
+            }
+            if (private_key == "" || public_key == "" || v4 == "" || host_port[0] == "") {
+                push(kept, link);
+                continue;
+            }
+            let child = create_child_for_section(ctx, section, "warp");
+            let label = trim(core_url.fragment(link));
+            set_option(ctx, child, "name", label != "" ? label : "WARP " + v4);
+            set_option(ctx, child, "private_key", private_key);
+            set_option(ctx, child, "public_key", public_key);
+            set_option(ctx, child, "address_v4", v4);
+            if (v6 != "")
+                set_option(ctx, child, "address_v6", v6);
+            set_option(ctx, child, "endpoint_host", host_port[0]);
+            set_option(ctx, child, "endpoint_port", host_port[1]);
+            set_option(ctx, child, "reserved", reserved);
+            set_option(ctx, child, "mtu", "1280");
+            set_option(ctx, child, "keepalive", "25");
+            set_option(ctx, child, "ipv4_only", "0");
+            created++;
+            if (created == 1) {
+                let license = trim(option(section, "warp_license", ""));
+                if (license != "")
+                    set_option(ctx, child, "license", license);
+            }
+        }
+        if (length(kept) == 0)
+            delete_option(ctx, section, "selector_proxy_links");
+        else
+            set_list_option(ctx, section, "selector_proxy_links", kept);
+        delete_option(ctx, section, "warp_license");
+    }
+}
+
 function migrate_router_traffic_section(ctx) {
     let settings = ctx.model.settings;
     if (!bool_option(settings, "route_router_traffic", false)) {
@@ -1342,7 +1436,8 @@ const MIGRATIONS = [
     { id: "enable_component_checks", run: migrate_enable_component_checks },
     { id: "http_connection_urls", run: migrate_http_connection_urls },
     { id: "router_traffic_section", run: migrate_router_traffic_section },
-    { id: "openconnect_clients", run: migrate_openconnect_clients }
+    { id: "openconnect_clients", run: migrate_openconnect_clients },
+    { id: "warp_profiles", run: migrate_warp_profiles }
 ];
 
 function apply_migrations(ctx) {
@@ -1372,8 +1467,8 @@ function apply_migrations(ctx) {
     if (added)
         set_list_option(ctx, ctx.model.settings, APPLIED_MIGRATIONS_OPTION, applied);
 
-    if (release_at_most(ctx, "1.0.9"))
-        set_option(ctx, ctx.model.settings, CONFIG_VERSION_OPTION, "1.0.10");
+    if (release_at_most(ctx, "1.0.10"))
+        set_option(ctx, ctx.model.settings, CONFIG_VERSION_OPTION, "1.0.11");
 }
 
 function migrate_podkop_model(model, constants) {

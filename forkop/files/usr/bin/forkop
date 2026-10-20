@@ -130,8 +130,9 @@ function show_help() {
     print("    latency_test_async      Start a dashboard latency test in the background\n");
     print("    latency_test_status     Get background latency test status\n");
     print("    ui_action_ack           Acknowledge a finished UI action state\n");
-    print("    generate_reality_keypair\n");
-    print("                            Generate a sing-box Reality key pair in JSON format\n");
+    print("    generate_warp [license] [detour]\n");
+    print("                            Register a Cloudflare WARP profile\n");
+    print("    warp_account <json>     Register, license, or delete a WARP device\n");
     print("    get_tls_certificate_sha256 [server]\n");
     print("                            Get a server TLS certificate SHA-256 fingerprint in JSON format\n");
     print("    component_action        Manage Forkop, sing-box, Xray, zapret, zapret2, and ByeDPI components\n");
@@ -231,6 +232,8 @@ function command_spec(command) {
         latency_test_status: [ "service/ui.uc", "latency-test-status", 1 ],
         ui_action_ack: [ "service/ui.uc", "action-ack", 2 ],
         generate_reality_keypair: [ "server/service.uc", "generate-reality-keypair", 0 ],
+        generate_warp: [ "warp/register.uc", "register", 2 ],
+        warp_account: [ "warp/register.uc", "account", 1 ],
         get_tls_certificate_sha256: [ "server/service.uc", "tls-certificate-sha256", 1 ],
         component_action: [ "components/action.uc", "component-action", 2 ],
         component_action_async: [ "components/updates.uc", "component-action-async", 2 ],

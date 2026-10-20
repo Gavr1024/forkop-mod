@@ -98,20 +98,32 @@ function getDefaultOutboundDetourSection(currentSectionId) {
   return targetSections.length ? getUciSectionName(targetSections[0]) : "";
 }
 
+function savedRoutingEngineIsXray() {
+  if (settings.isXrayRoutingEngine(settings.currentRoutingEngine())) {
+    return true;
+  }
+  return settings.isXrayRoutingEngine(
+    uci.get(UCI_PACKAGE, "settings", "routing_engine"),
+  );
+}
+
+function sectionEffectiveProxyCore(section) {
+  const core = `${(section && section.proxy_core) || ""}`.trim().toLowerCase();
+  if (core === "xray" || core === "xray-core") {
+    return "xray";
+  }
+  if (core === "sing-box" || core === "singbox") {
+    return "sing-box";
+  }
+  return savedRoutingEngineIsXray() ? "xray" : "sing-box";
+}
+
 function isXrayFallbackSection(section, currentSectionId) {
   if (!isOutboundDetourTargetSection(section, currentSectionId)) {
     return false;
   }
 
-  const core = `${section.proxy_core || ""}`.trim();
-  if (core === "sing-box") {
-    return false;
-  }
-  if (core === "xray") {
-    return true;
-  }
-
-  return settings.currentRoutingEngine() === "xray";
+  return sectionEffectiveProxyCore(section) === "xray";
 }
 
 function xrayPlaneSection(option, sectionId) {
@@ -759,6 +771,34 @@ function dependOnObservatoryStrategy(option) {
   });
 }
 
+function xrayNodeChoices(section) {
+  const name = getUciSectionName(section);
+  const label = getUciSectionLabel(section);
+  if (!name) {
+    return Promise.resolve([]);
+  }
+  return fs
+    .read("/var/run/forkop/xray-nodes.json")
+    .then((raw) => {
+      const all = JSON.parse(raw || "{}");
+      const nodes = Array.isArray(all[name]) ? all[name] : [];
+      return nodes
+        .map((node) => {
+          const tag = `${(node && node.tag) || ""}`.trim();
+          if (!tag || tag === "__urltest__") {
+            return null;
+          }
+          const serverName = `${(node && node.name) || ""}`.trim() || tag;
+          return {
+            value: `${name}\t${tag}`,
+            label: `${label} — ${serverName}`,
+          };
+        })
+        .filter(Boolean);
+    })
+    .catch(() => []);
+}
+
 function xrayFallbackTargetChoices(sectionId) {
   const sections = (uci.sections(UCI_PACKAGE, "section") || []).filter(
     (section) => isXrayFallbackSection(section, sectionId),
@@ -768,12 +808,18 @@ function xrayFallbackTargetChoices(sectionId) {
     sections.map((section) => {
       const name = getUciSectionName(section);
       const label = getUciSectionLabel(section);
-      return readOutboundMetadataFromSectionCache(name).then((metadata) =>
-        Object.entries(plainObject(metadata.names)).map(([tag, serverName]) => ({
-          value: `${name}\t${tag}`,
-          label: `${label} — ${serverName || tag}`,
-        })),
-      );
+      return readOutboundMetadataFromSectionCache(name).then((metadata) => {
+        const fromCache = Object.entries(plainObject(metadata.names)).map(
+          ([tag, serverName]) => ({
+            value: `${name}\t${tag}`,
+            label: `${label} — ${serverName || tag}`,
+          }),
+        );
+        if (fromCache.length) {
+          return fromCache;
+        }
+        return xrayNodeChoices(section);
+      });
     }),
   ).then((groups) =>
     groups
@@ -2869,6 +2915,161 @@ function restrictSectionEngine(option, engine, parentSectionId) {
   return option;
 }
 
+function warpLinkLabel(value) {
+  const text = `${value || ""}`.trim();
+  if (!/^warp:\/\//i.test(text)) {
+    return "";
+  }
+  const hashAt = text.indexOf("#");
+  if (hashAt < 0) {
+    return "WARP";
+  }
+  const hash = text.slice(hashAt + 1);
+  try {
+    return decodeURIComponent(hash).trim() || "WARP";
+  } catch (_error) {
+    return hash.trim() || "WARP";
+  }
+}
+
+function connectionUrlSchemeUnsupported(value, engine) {
+  const text = `${value || ""}`.trim();
+  if (!text) {
+    return false;
+  }
+  const wireguard =
+    /^(wireguard|wg|awg|amneziawg|vpn):\/\//i.test(text) ||
+    /\[interface\]/i.test(text);
+  return settings.isXrayRoutingEngine(engine) && wireguard;
+}
+
+function maskUnsupportedConnectionUrls(root, engine) {
+  if (!root || typeof root.querySelectorAll !== "function") {
+    return;
+  }
+  root.querySelectorAll(".item").forEach((item) => {
+    const hidden = Array.from(item.children || []).find(
+      (child) =>
+        child.tagName === "INPUT" &&
+        `${child.type || ""}`.toLowerCase() === "hidden",
+    );
+    if (!hidden) {
+      return;
+    }
+    const hide = connectionUrlSchemeUnsupported(hidden.value, engine);
+    item.style.display = hide ? "none" : "";
+  });
+}
+
+function maskWarpListLabels(root) {
+  if (!root || typeof root.querySelectorAll !== "function") {
+    return;
+  }
+  root.querySelectorAll(".item").forEach((item) => {
+    const hidden = Array.from(item.children || []).find(
+      (child) =>
+        child.tagName === "INPUT" &&
+        `${child.type || ""}`.toLowerCase() === "hidden",
+    );
+    if (!hidden) {
+      return;
+    }
+    const label = warpLinkLabel(hidden.value);
+    if (!label) {
+      return;
+    }
+    const span = Array.from(item.children || []).find(
+      (child) => child.tagName === "SPAN",
+    );
+    if (span) {
+      span.textContent = label;
+    }
+  });
+}
+
+function connectionListNode(sectionId) {
+  return document.getElementById(
+    `cbid.${UCI_PACKAGE}.${sectionId}.selector_proxy_links`,
+  );
+}
+
+function sectionFieldText(sectionId, name) {
+  const node = document.getElementById(
+    `cbid.${UCI_PACKAGE}.${sectionId}.${name}`,
+  );
+  if (node) {
+    const tag = `${node.tagName || ""}`.toUpperCase();
+    if (node.value != null && tag !== "DIV" && tag !== "SPAN") {
+      return `${node.value}`.trim();
+    }
+    const input =
+      typeof node.querySelector === "function"
+        ? node.querySelector("input, textarea, select")
+        : null;
+    if (input && input.value != null) {
+      return `${input.value}`.trim();
+    }
+  }
+  const live = liveWidgetValue(name, sectionId);
+  if (live != null) {
+    return `${live}`.trim();
+  }
+  return trimmedUci(sectionId, name);
+}
+
+function sectionFlagOn(sectionId, name) {
+  const node = document.getElementById(
+    `cbid.${UCI_PACKAGE}.${sectionId}.${name}`,
+  );
+  const box =
+    node && node.matches && node.matches('input[type="checkbox"]')
+      ? node
+      : node && node.querySelector
+        ? node.querySelector('input[type="checkbox"]')
+        : null;
+  if (box) {
+    return !!box.checked;
+  }
+  return sectionFieldText(sectionId, name) === "1";
+}
+
+function notifyWarp(message, type) {
+  if (ui && typeof ui.addNotification === "function") {
+    ui.addNotification(null, E("p", {}, message), type || "info");
+  }
+}
+
+function connectionUrlHint(engine) {
+  if (settings.isXrayRoutingEngine(engine)) {
+    return _(
+      "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links.",
+    );
+  }
+  return _(
+    "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://, wg://, awg://, vpn:// links.",
+  );
+}
+
+function applyConnectionUrlHint(option, sectionId) {
+  if (!option) {
+    return;
+  }
+  const text = connectionUrlHint(effectiveSectionEngine(option, sectionId));
+  option.description = text;
+  if (typeof document === "undefined" || typeof option.cbid !== "function") {
+    return;
+  }
+  const fieldId = option.cbid(sectionId);
+  if (!fieldId || typeof document.querySelectorAll !== "function") {
+    return;
+  }
+  document
+    .querySelectorAll(`[data-field="${fieldId}"] .cbi-value-description`)
+    .forEach((node) => {
+      node.textContent = text;
+    });
+}
+
 function refreshSectionEngineFields(option, sectionId) {
   const section = option && option.section;
   if (!section || !section.children) {
@@ -2877,6 +3078,13 @@ function refreshSectionEngineFields(option, sectionId) {
 
   const owner = forkopSectionIdFrom(sectionId) || `${sectionId || ""}`;
   section.children.forEach((child) => {
+    if (child && child.forkopConnectionUrls) {
+      applyConnectionUrlHint(child, owner);
+      maskUnsupportedConnectionUrls(
+        connectionListNode(owner),
+        effectiveSectionEngine(child, owner),
+      );
+    }
     if (
       !child ||
       child.forkopEngineRestrict == null ||
@@ -4571,7 +4779,13 @@ function renderStackedJsonSettingsModal(title, map, onSave) {
       return map
         .parse()
         .then(() => {
-          onSave(cleanFormSectionData(map.data.get(map.config, "settings")));
+          let nextSettings = cleanFormSectionData(
+            map.data.get(map.config, "settings"),
+          );
+          if (typeof map.forkopMergeSave === "function") {
+            nextSettings = map.forkopMergeSave(nextSettings) || nextSettings;
+          }
+          onSave(nextSettings);
           close();
         })
         .catch((error) => {
@@ -4641,10 +4855,14 @@ function showChildItemSettingsModal(section_id, itemValue, option, settings) {
   const itemSection = map.section(form.NamedSection, "settings");
   itemSection.anonymous = true;
   itemSection.addremove = false;
-  settings.addOptions(itemSection, {
+  settings.addOptions(itemSection, Object.assign({
     parentSectionId: () => section_id,
     ownerId: () => value || section_id,
-  });
+  }, settings.context || {}));
+
+  if (typeof settings.mergeSave === "function") {
+    map.forkopMergeSave = settings.mergeSave;
+  }
 
   return renderStackedJsonSettingsModal(
     settings.title(inputValue),
@@ -4677,6 +4895,685 @@ function showChildItemSettingsModal(section_id, itemValue, option, settings) {
       }
     },
   );
+}
+
+const WARP_SETTING_KEYS = [
+  "name",
+  "license",
+  "endpoint_port",
+  "ipv4_only",
+  "private_key",
+  "public_key",
+  "address_v4",
+  "address_v6",
+  "endpoint_host",
+  "reserved",
+  "device_id",
+  "access_token",
+  "warp_plus",
+  "quota",
+  "account_type",
+  "mtu",
+  "keepalive",
+];
+
+function defaultWarpSettings() {
+  return {
+    name: "",
+    license: "",
+    endpoint_port: "2408",
+    ipv4_only: "0",
+    private_key: "",
+    public_key: "",
+    address_v4: "",
+    address_v6: "",
+    endpoint_host: "",
+    reserved: "",
+    device_id: "",
+    access_token: "",
+    warp_plus: "0",
+    quota: "",
+    account_type: "",
+    mtu: "1280",
+    keepalive: "25",
+  };
+}
+
+function warpAccountTypeText(value) {
+  const kind = `${value || ""}`.trim().toLowerCase();
+  if (kind === "free") {
+    return _("Free account");
+  }
+  if (kind === "limited") {
+    return _("Limited account");
+  }
+  if (kind === "unlimited") {
+    return _("Unlimited account");
+  }
+  if (kind === "team") {
+    return _("Team account");
+  }
+  return "";
+}
+
+function warpStatusText(draft) {
+  if (!`${draft.private_key || ""}`.trim()) {
+    return _("Not registered");
+  }
+  const plus = draft.warp_plus === "1" || draft.warp_plus === true;
+  const parts = [plus ? _("WARP+") : _("Free")];
+  const accountType = warpAccountTypeText(draft.account_type);
+  if (accountType) {
+    parts.push(accountType);
+  }
+  const quota = `${draft.quota || ""}`.trim();
+  if (quota) {
+    parts.push(`${_("Quota")}: ${quota}`);
+  }
+  if (!`${draft.access_token || ""}`.trim()) {
+    parts.push(_("No device token. New address registers this profile again."));
+  }
+  return parts.join(". ");
+}
+
+function setWarpOption(itemSection, key, value) {
+  const option = (itemSection.children || []).find(
+    (child) => child && child.option === key,
+  );
+  if (!option || typeof option.getUIElement !== "function") {
+    return;
+  }
+  const node = option.getUIElement("settings");
+  if (!node) {
+    return;
+  }
+  if (node.type === "checkbox") {
+    node.checked = value === "1" || value === true;
+    return;
+  }
+  if ("value" in node) {
+    node.value = value == null ? "" : `${value}`;
+  }
+}
+
+function warpCascade(parentId) {
+  if (!sectionFlagOn(parentId, "outbound_detour_enabled")) {
+    return "";
+  }
+  const detour = sectionFieldText(parentId, "outbound_detour_section");
+  if (!detour) {
+    notifyWarp(_("Select an intermediate section"), "error");
+    return null;
+  }
+  return detour;
+}
+
+function runWarpAccount(payload) {
+  let request;
+  try {
+    request = fs.exec("/usr/bin/forkop", [
+      "warp_account",
+      JSON.stringify(payload || {}),
+    ]);
+  } catch (_error) {
+    return Promise.reject(_error);
+  }
+  if (!request || typeof request.then !== "function") {
+    return Promise.reject(new Error("exec"));
+  }
+  return request.then((result) => {
+    let body = null;
+    try {
+      body = JSON.parse(`${(result && result.stdout) || ""}`.trim());
+    } catch (_error) {
+      body = null;
+    }
+    const code = result && typeof result.code === "number" ? result.code : 1;
+    if (code !== 0 || !body || body.success !== true) {
+      throw new Error(
+        (body && body.message) ||
+          `${(result && result.stderr) || ""}`.trim() ||
+          _("Could not register WARP"),
+      );
+    }
+    return body;
+  });
+}
+
+function rememberWarpProfile(draft, payload) {
+  draft.private_key = payload.private_key || "";
+  draft.public_key = payload.public_key || "";
+  draft.address_v4 = payload.address_v4 || "";
+  draft.address_v6 = payload.address_v6 || "";
+  draft.endpoint_host = payload.endpoint_host || "";
+  draft.endpoint_port = `${payload.endpoint_port || "2408"}`;
+  draft.reserved = payload.reserved || "";
+  draft.device_id = payload.device_id || "";
+  draft.access_token = payload.access_token || "";
+  draft.mtu = `${payload.mtu || draft.mtu || "1280"}`;
+  draft.keepalive = `${payload.keepalive || draft.keepalive || "25"}`;
+  draft.warp_plus = payload.warp_plus ? "1" : "0";
+  draft.quota = payload.quota == null ? "" : `${payload.quota}`;
+  if (payload.account_type != null) {
+    draft.account_type = `${payload.account_type}`;
+  }
+  if (payload.license != null) {
+    draft.license = `${payload.license}`;
+  }
+  if (payload.name) {
+    draft.name = payload.name;
+  }
+}
+
+function addWarpItemOptions(itemSection, uiState) {
+  let option = itemSection.option(form.Value, "name", _("Name"));
+  option.rmempty = false;
+  option.validate = function (_itemId, value) {
+    if (!`${value || ""}`.trim()) {
+      return _("Name is required");
+    }
+    if (!`${uiState.draft.private_key || ""}`.trim()) {
+      return _("Get WARP before saving");
+    }
+    return true;
+  };
+
+  option = itemSection.option(form.DummyValue, "_status", _("Status"));
+  option.renderWidget = function () {
+    uiState.statusNode = E("span", {}, warpStatusText(uiState.draft));
+    const button = E(
+      "button",
+      {
+        class: "btn cbi-button cbi-button-action",
+        style: "margin-left:0.6em",
+        type: "button",
+        click: (event) => {
+          event.preventDefault();
+          if (
+            !`${uiState.draft.device_id || ""}`.trim() ||
+            !`${uiState.draft.access_token || ""}`.trim()
+          ) {
+            notifyWarp(
+              _("This profile has no device token. Use New address once."),
+              "warning",
+            );
+            return;
+          }
+          const detour = warpCascade(uiState.parentId);
+          if (detour == null) {
+            return;
+          }
+          button.disabled = true;
+          runWarpAccount({
+            action: "status",
+            device_id: uiState.draft.device_id,
+            access_token: uiState.draft.access_token,
+            detour,
+          }).then(
+            (payload) => {
+              button.disabled = false;
+              uiState.draft.warp_plus = payload.warp_plus ? "1" : "0";
+              uiState.draft.quota = payload.quota == null ? "" : `${payload.quota}`;
+              uiState.draft.account_type =
+                payload.account_type == null ? "" : `${payload.account_type}`;
+              if (uiState.statusNode) {
+                uiState.statusNode.textContent = warpStatusText(uiState.draft);
+              }
+              notifyWarp(
+                _("Account status updated. Save this window, then save the section."),
+                "info",
+              );
+            },
+            (error) => {
+              button.disabled = false;
+              notifyWarp(error.message || _("Could not check the WARP account"), "error");
+            },
+          );
+        },
+      },
+      _("Check account"),
+    );
+    return E("div", {}, [uiState.statusNode, " ", button]);
+  };
+
+  option = itemSection.option(
+    form.Value,
+    "license",
+    _("WARP+ license"),
+    _("Optional. Applied to this device without changing its address."),
+  );
+  option.password = true;
+  option.optional = true;
+  option.rmempty = true;
+
+  option = itemSection.option(
+    form.ListValue,
+    "endpoint_port",
+    _("Endpoint port"),
+    _("UDP port of the Cloudflare server. 2408 is the usual one."),
+  );
+  ["2408", "500", "1701", "4500"].forEach((port) => option.value(port, port));
+  option.default = "2408";
+  option.rmempty = false;
+
+  option = itemSection.option(
+    form.Flag,
+    "ipv4_only",
+    _("IPv4 only"),
+    _("Do not add the IPv6 address to the tunnel."),
+  );
+  option.default = "0";
+  option.rmempty = true;
+
+  option = itemSection.option(form.DummyValue, "_actions", _("Actions"));
+  option.renderWidget = function () {
+    const buttons = [];
+    const lock = (busy) => {
+      buttons.forEach((button) => {
+        button.disabled = busy;
+      });
+    };
+    const parentId = uiState.parentId;
+    const refresh = () => {
+      if (uiState.statusNode) {
+        uiState.statusNode.textContent = warpStatusText(uiState.draft);
+      }
+    };
+    const licenseValue = () => {
+      const node = itemSection.children
+        .find((child) => child.option === "license")
+        ?.getUIElement?.("settings");
+      return `${(node && node.value) || ""}`.trim();
+    };
+    const applyProfile = (payload, rename) => {
+      const previousName = `${uiState.draft.name || ""}`.trim();
+      rememberWarpProfile(uiState.draft, payload);
+      if (
+        rename &&
+        previousName &&
+        previousName.indexOf("WARP") !== 0
+      ) {
+        uiState.draft.name = previousName;
+      }
+      setWarpOption(itemSection, "name", uiState.draft.name);
+      setWarpOption(itemSection, "license", uiState.draft.license);
+      setWarpOption(itemSection, "endpoint_port", uiState.draft.endpoint_port);
+      refresh();
+    };
+    const get = E(
+      "button",
+      {
+        class: "btn cbi-button cbi-button-action",
+        type: "button",
+        click: (event) => {
+          event.preventDefault();
+          if (`${uiState.draft.private_key || ""}`.trim()) {
+            notifyWarp(_("This profile already exists. Use New address."), "warning");
+            return;
+          }
+          const detour = warpCascade(parentId);
+          if (detour == null) {
+            return;
+          }
+          lock(true);
+          runWarpAccount({
+            action: "register",
+            license: licenseValue(),
+            detour,
+          }).then(
+            (payload) => {
+              lock(false);
+              applyProfile(payload, false);
+              notifyWarp(_("WARP registered. Save this window, then save the section."), "info");
+            },
+            (error) => {
+              lock(false);
+              notifyWarp(error.message || _("Could not register WARP"), "error");
+            },
+          );
+        },
+      },
+      _("Get WARP"),
+    );
+    const apply = E(
+      "button",
+      {
+        class: "btn cbi-button cbi-button-action",
+        type: "button",
+        click: (event) => {
+          event.preventDefault();
+          if (!`${uiState.draft.access_token || ""}`.trim()) {
+            notifyWarp(_("This profile has no device token. Use New address once."), "warning");
+            return;
+          }
+          const license = licenseValue();
+          if (!license) {
+            notifyWarp(_("Enter a WARP+ license"), "error");
+            return;
+          }
+          const detour = warpCascade(parentId);
+          if (detour == null) {
+            return;
+          }
+          lock(true);
+          runWarpAccount({
+            action: "license",
+            device_id: uiState.draft.device_id,
+            access_token: uiState.draft.access_token,
+            license,
+            detour,
+          }).then(
+            (payload) => {
+              lock(false);
+              uiState.draft.license = license;
+              uiState.draft.warp_plus = payload.warp_plus ? "1" : "0";
+              uiState.draft.quota = payload.quota == null ? "" : `${payload.quota}`;
+              if (payload.account_type != null) {
+                uiState.draft.account_type = `${payload.account_type}`;
+              }
+              setWarpOption(itemSection, "license", license);
+              refresh();
+              notifyWarp(_("License applied. Save this window, then save the section."), "info");
+            },
+            (error) => {
+              lock(false);
+              notifyWarp(error.message || _("WARP+ license was rejected"), "error");
+            },
+          );
+        },
+      },
+      _("Apply key"),
+    );
+    const renew = E(
+      "button",
+      {
+        class: "btn cbi-button cbi-button-action",
+        type: "button",
+        click: (event) => {
+          event.preventDefault();
+          const detour = warpCascade(parentId);
+          if (detour == null) {
+            return;
+          }
+          const oldId = `${uiState.draft.device_id || ""}`.trim();
+          const oldToken = `${uiState.draft.access_token || ""}`.trim();
+          lock(true);
+          runWarpAccount({
+            action: "register",
+            license: licenseValue(),
+            detour,
+          }).then(
+            (payload) => {
+              applyProfile(payload, true);
+              if (!oldId || !oldToken || oldId === `${payload.device_id || ""}`) {
+                lock(false);
+                notifyWarp(_("WARP address replaced. Save this window, then save the section."), "info");
+                return;
+              }
+              runWarpAccount({
+                action: "delete",
+                device_id: oldId,
+                access_token: oldToken,
+                detour,
+              }).then(
+                () => {
+                  lock(false);
+                  notifyWarp(_("WARP address replaced. Save this window, then save the section."), "info");
+                },
+                () => {
+                  lock(false);
+                  notifyWarp(_("New WARP profile is ready, but the old device could not be removed."), "warning");
+                },
+              );
+            },
+            (error) => {
+              lock(false);
+              notifyWarp(error.message || _("Could not register WARP"), "error");
+            },
+          );
+        },
+      },
+      _("New address"),
+    );
+    const remove = E(
+      "button",
+      {
+        class: "btn cbi-button cbi-button-negative",
+        type: "button",
+        click: (event) => {
+          event.preventDefault();
+          const detour = warpCascade(parentId);
+          if (detour == null) {
+            return;
+          }
+          const finishLocal = () => {
+            const button = uiState.itemNode && uiState.itemNode.querySelector(".cbi-button-remove");
+            if (button) {
+              button.click();
+            }
+            const row = document.querySelector("#modal_overlay > .modal.cbi-modal div.button-row");
+            const close = row && row.querySelector(".cbi-button");
+            if (close) {
+              close.click();
+            }
+          };
+          if (!`${uiState.draft.access_token || ""}`.trim()) {
+            finishLocal();
+            notifyWarp(_("Removed from the list. Cloudflare still has this device."), "warning");
+            return;
+          }
+          lock(true);
+          runWarpAccount({
+            action: "delete",
+            device_id: uiState.draft.device_id,
+            access_token: uiState.draft.access_token,
+            detour,
+          }).then(
+            () => {
+              lock(false);
+              finishLocal();
+              notifyWarp(_("WARP device removed. Save the section."), "info");
+            },
+            (error) => {
+              lock(false);
+              notifyWarp(error.message || _("Could not delete the WARP device"), "error");
+            },
+          );
+        },
+      },
+      _("Delete device"),
+    );
+    buttons.push(get, apply, renew, remove);
+    return E("div", {}, [get, " ", apply, " ", renew, " ", remove]);
+  };
+}
+
+function showWarpSettingsModal(section_id, itemValue, option, widget, itemNode, context = {}) {
+  const value = `${itemValue || ""}`.trim();
+  const existing = isExistingChildItem(section_id, value, "warp");
+  const inputValue = childItemInputValue(section_id, value, "warp", "name");
+  const defaults = defaultWarpSettings();
+  const initialSettings = existing
+    ? readChildSettings(value, WARP_SETTING_KEYS, defaults)
+    : Object.assign({}, pendingChildSettings(option, section_id, inputValue, defaults));
+  const uiState = {
+    draft: Object.assign({}, initialSettings),
+    statusNode: null,
+    parentId: context.parentSectionId || section_id,
+    itemNode,
+  };
+  const data = { settings: Object.assign({}, initialSettings) };
+  const map = new form.JSONMap(data);
+  const itemSection = map.section(form.NamedSection, "settings");
+  itemSection.anonymous = true;
+  itemSection.addremove = false;
+  addWarpItemOptions(itemSection, uiState);
+
+  return renderStackedJsonSettingsModal(
+    uiState.draft.name ? `WARP WIREGUARD: ${uiState.draft.name}` : "WARP WIREGUARD",
+    map,
+    (nextSettings) => {
+      const merged = Object.assign({}, uiState.draft, {
+        name: `${nextSettings.name || ""}`.trim(),
+        license: `${nextSettings.license || ""}`.trim(),
+        endpoint_port: `${nextSettings.endpoint_port || "2408"}`.trim(),
+        ipv4_only: nextSettings.ipv4_only === "1" || nextSettings.ipv4_only === true ? "1" : "0",
+      });
+      if (existing) {
+        const diff = changedSettings(initialSettings, merged, WARP_SETTING_KEYS);
+        if (hasChangedSettings(diff)) {
+          applyChildItemSettings(value, diff);
+        }
+        updateDynamicListItemLabel(itemNode, merged.name);
+        return;
+      }
+      const nextInputValue = `${merged.name || inputValue || ""}`.trim();
+      const store = childPendingSettingsStore(option, section_id);
+      if (nextInputValue !== inputValue) {
+        delete store[inputValue];
+      }
+      store[nextInputValue] = merged;
+      if (context.adding) {
+        addDynamicListItem(widget, nextInputValue, nextInputValue);
+      } else if (itemNode) {
+        const hidden = itemNode.querySelector('input[type="hidden"]');
+        if (hidden && hidden.parentNode === itemNode) {
+          hidden.value = nextInputValue;
+        }
+        updateDynamicListItemLabel(itemNode, nextInputValue);
+      }
+    },
+  );
+}
+
+const MASQUE_SETTING_KEYS = ["name", "license", "ipv4_only"];
+
+function defaultMasqueSettings() {
+  return {
+    name: "",
+    license: "",
+    ipv4_only: "1",
+  };
+}
+
+function addMasqueItemOptions(itemSection) {
+  let option = itemSection.option(form.Value, "name", _("Name"));
+  option.rmempty = false;
+  option.validate = function (_section_id, value) {
+    return `${value || ""}`.trim() ? true : _("Enter a name");
+  };
+
+  option = itemSection.option(
+    form.Value,
+    "license",
+    _("WARP+ license"),
+    _("Optional. sing-box-extended sends this key when it registers the device."),
+  );
+  option.password = true;
+  option.optional = true;
+  option.rmempty = true;
+
+  option = itemSection.option(
+    form.Flag,
+    "ipv4_only",
+    _("IPv4 only"),
+    _("Do not connect to the WARP MASQUE server over IPv6."),
+  );
+  option.default = "1";
+  option.rmempty = false;
+}
+
+function showMasqueSettingsModal(
+  section_id,
+  itemValue,
+  option,
+  widget,
+  itemNode,
+  context = {},
+) {
+  return showChildItemSettingsModal(section_id, itemValue, option, {
+    typeName: "masque",
+    valueOption: "name",
+    keys: MASQUE_SETTING_KEYS,
+    defaults: defaultMasqueSettings(),
+    addOptions: addMasqueItemOptions,
+    title: (name) => (name ? `WARP MASQUE: ${name}` : "WARP MASQUE"),
+    afterSave: (_itemId, inputValue, settings, existing) => {
+      const displayName = `${settings.name || inputValue || ""}`.trim();
+      if (existing) {
+        updateDynamicListItemLabel(itemNode, displayName);
+        return;
+      }
+      if (context.adding) {
+        addDynamicListItem(widget, displayName, displayName);
+        return;
+      }
+      const hidden = itemNode
+        ? itemNode.querySelector('input[type="hidden"]')
+        : null;
+      if (hidden && hidden.parentNode === itemNode) {
+        hidden.value = displayName;
+      }
+      updateDynamicListItemLabel(itemNode, displayName);
+    },
+  });
+}
+
+function validateMasqueItemsBeforeSave(section_id, values, option) {
+  const store = childPendingSettingsStore(option, section_id);
+  const names = new Set();
+  for (const value of normalizeDynamicListItems(values)) {
+    const itemId = `${value || ""}`;
+    let fields = {};
+    if (isExistingChildItem(section_id, itemId, "masque")) {
+      fields = {
+        name: uci.get(UCI_PACKAGE, itemId, "name") || "",
+      };
+    } else if (store[itemId]) {
+      fields = store[itemId];
+      fields.name = fields.name || itemId;
+    } else {
+      fields = { name: itemId };
+    }
+    const name = `${fields.name || ""}`.trim();
+    if (!name) {
+      return _("Enter a name");
+    }
+    if (names.has(name)) {
+      return _("Use a different name for each WARP MASQUE profile");
+    }
+    names.add(name);
+  }
+  return true;
+}
+
+
+function validateWarpItemsBeforeSave(section_id, values, option) {
+  const store = childPendingSettingsStore(option, section_id);
+  const names = new Set();
+  for (const value of normalizeDynamicListItems(values)) {
+    const itemId = `${value || ""}`;
+    let name = "";
+    let privateKey = "";
+    if (isExistingChildItem(section_id, itemId, "warp")) {
+      name = uci.get(UCI_PACKAGE, itemId, "name") || "";
+      privateKey = uci.get(UCI_PACKAGE, itemId, "private_key") || "";
+    } else if (store[itemId]) {
+      name = store[itemId].name || itemId;
+      privateKey = store[itemId].private_key || "";
+    } else {
+      name = itemId;
+    }
+    name = `${name || ""}`.trim();
+    if (!`${privateKey || ""}`.trim()) {
+      return _("Get WARP before saving");
+    }
+    if (names.has(name)) {
+      return _("Use a different name for each WARP profile");
+    }
+    names.add(name);
+  }
+  return true;
 }
 
 function ruleSetIncludesSubnets(section_id, value) {
@@ -9360,12 +10257,38 @@ function createSectionContent(section) {
     "selector_proxy_links",
     _("Connection URL"),
     _(
-      "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links",
+      "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://, wg://, awg://, vpn:// links.",
     ),
   );
+  o.forkopConnectionUrls = true;
   o.depends("action", "connection");
   o.rmempty = true;
   o.modalonly = true;
+  const connectionUrlRender = o.render;
+  o.render = function () {
+    const section_id = arguments.length >= 2 ? arguments[1] : arguments[0];
+    applyConnectionUrlHint(this, section_id);
+    return Promise.resolve(connectionUrlRender.apply(this, arguments)).then(
+      (node) => {
+        maskWarpListLabels(node);
+        maskUnsupportedConnectionUrls(
+          node,
+          effectiveSectionEngine(this, section_id),
+        );
+        if (node && node.addEventListener && !node.dataset.fkpWarpMask) {
+          node.dataset.fkpWarpMask = "1";
+          node.addEventListener("cbi-dynlist-change", () => {
+            maskWarpListLabels(node);
+            maskUnsupportedConnectionUrls(
+              node,
+              effectiveSectionEngine(this, section_id),
+            );
+          });
+        }
+        return node;
+      },
+    );
+  };
   o.validate = function (_section_id, value) {
     if (value == null || value === "") {
       return true;
@@ -9383,13 +10306,51 @@ function createSectionContent(section) {
     if (!text) {
       return true;
     }
-    const validation = main.validateProxyUrl(text);
+    if (connectionUrlSchemeUnsupported(text, effectiveSectionEngine(this, _section_id))) {
+      return true;
+    }
+    const validation = main.validateProxyUrl(
+      text,
+      effectiveSectionEngine(this, _section_id),
+    );
     return validation.valid ? true : validation.message;
   };
   o.onchange = function (_event, section_id) {
     refreshDashboardFilterChoiceWidgets(section_id);
   };
   outboundNameSourceOptions.set("selector_proxy_links", o);
+  const connectionUrlWrite = o.write;
+  o.write = function (section_id, value) {
+    const engine = effectiveSectionEngine(this, section_id);
+    const incoming = Array.isArray(value) ? value.slice() : value ? [value] : [];
+    const stored = uci.get(UCI_PACKAGE, section_id, "selector_proxy_links");
+    const previous = Array.isArray(stored) ? stored : stored ? [stored] : [];
+    previous.forEach((item) => {
+      const text = `${item || ""}`.trim();
+      if (
+        text &&
+        connectionUrlSchemeUnsupported(text, engine) &&
+        incoming.indexOf(item) < 0 &&
+        incoming.indexOf(text) < 0
+      ) {
+        incoming.push(item);
+      }
+    });
+    return connectionUrlWrite.call(this, section_id, incoming);
+  };
+  const connectionUrlRemove = o.remove;
+  o.remove = function (section_id) {
+    const engine = effectiveSectionEngine(this, section_id);
+    const stored = uci.get(UCI_PACKAGE, section_id, "selector_proxy_links");
+    const previous = Array.isArray(stored) ? stored : stored ? [stored] : [];
+    const kept = previous.filter((item) =>
+      connectionUrlSchemeUnsupported(`${item || ""}`.trim(), engine),
+    );
+    if (!kept.length) {
+      return connectionUrlRemove.call(this, section_id);
+    }
+    uci.set(UCI_PACKAGE, section_id, "selector_proxy_links", kept);
+  };
 
   o = section.taboption(
     "settings",
@@ -9586,6 +10547,107 @@ function createSectionContent(section) {
     return this.inputValueForItem(section_id, itemId);
   };
   outboundNameSourceOptions.set("openvpn", o);
+
+  o = section.taboption(
+    "settings",
+    ButtonAddSettingsDynamicList,
+    "warp",
+    _("WARP WIREGUARD"),
+    _("Cloudflare WARP over WireGuard. The row shows the name. Open it for the license, port, and buttons. If a cascade is enabled in this section, it is used for registration."),
+  );
+  o.depends("action", "connection");
+  o.rmempty = true;
+  o.modalonly = true;
+  o.addButtonLabel = _("+ Add WARP WIREGUARD");
+  o.childType = "warp";
+  o.childValueOption = "name";
+  o.childDefaults = defaultWarpSettings();
+  o.renderItemSettingsModal = showWarpSettingsModal;
+  o.validateItemsOnSave = function (section_id, values) {
+    return validateWarpItemsBeforeSave(section_id, values, this);
+  };
+  o.hasItemSettings = function (section_id, value) {
+    const normalized = `${value || ""}`.trim();
+    if (isExistingChildItem(section_id, normalized, "warp")) {
+      return true;
+    }
+    return normalized.length > 0;
+  };
+  o.inputValueForItem = function (section_id, value) {
+    const inputValue = childItemInputValue(section_id, value, "warp", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[inputValue] && store[inputValue].name
+      ? store[inputValue].name
+      : inputValue;
+  };
+  o.stagedChildSettings = function (section_id, value) {
+    const id = childItemInputValue(section_id, value, "warp", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[id] ? Object.assign({}, store[id]) : null;
+  };
+  o.clearStagedChildSettings = function (section_id) {
+    if (this.pendingChildSettings) {
+      delete this.pendingChildSettings[section_id];
+    }
+  };
+  o.renderListItemLabel = function (section_id, itemId) {
+    return this.inputValueForItem(section_id, itemId);
+  };
+  o.onListChange = refreshDashboardFilterChoiceWidgets;
+  outboundNameSourceOptions.set("warp", o);
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      ButtonAddSettingsDynamicList,
+      "masque",
+      _("WARP MASQUE"),
+      _(
+        "Cloudflare WARP over MASQUE for sing-box-extended. The core registers the device itself and stores it in the cache. If the cache file is in RAM, the device is created again after a router reboot, after the cache is deleted, or after a sing-box version change. This is a limitation of sing-box-extended. A WARP+ key is optional.",
+      ),
+    ),
+    "sing-box",
+  );
+  o.depends("action", "connection");
+  o.rmempty = true;
+  o.modalonly = true;
+  o.addButtonLabel = _("+ Add WARP MASQUE");
+  o.childType = "masque";
+  o.childValueOption = "name";
+  o.childDefaults = defaultMasqueSettings();
+  o.renderItemSettingsModal = showMasqueSettingsModal;
+  o.validateItemsOnSave = function (section_id, values) {
+    return validateMasqueItemsBeforeSave(section_id, values, this);
+  };
+  o.hasItemSettings = function (section_id, value) {
+    const normalized = `${value || ""}`.trim();
+    if (isExistingChildItem(section_id, normalized, "masque")) {
+      return true;
+    }
+    return normalized.length > 0;
+  };
+  o.inputValueForItem = function (section_id, value) {
+    const inputValue = childItemInputValue(section_id, value, "masque", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[inputValue] && store[inputValue].name
+      ? store[inputValue].name
+      : inputValue;
+  };
+  o.stagedChildSettings = function (section_id, value) {
+    const id = childItemInputValue(section_id, value, "masque", "name");
+    const store = childPendingSettingsStore(this, section_id);
+    return store[id] ? Object.assign({}, store[id]) : null;
+  };
+  o.clearStagedChildSettings = function (section_id) {
+    if (this.pendingChildSettings) {
+      delete this.pendingChildSettings[section_id];
+    }
+  };
+  o.renderListItemLabel = function (section_id, itemId) {
+    return this.inputValueForItem(section_id, itemId);
+  };
+  o.onListChange = refreshDashboardFilterChoiceWidgets;
+  outboundNameSourceOptions.set("masque", o);
 
   o = section.taboption(
     "settings",

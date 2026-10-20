@@ -1547,9 +1547,21 @@ function latency_tag_is_singbox(tag) {
     return index(tag, "-openconnect-") >= 0 || index(tag, "-openvpn-") >= 0 || index(tag, "sb-full-") == 0;
 }
 
+function section_is_byedpi(section_name) {
+    section_name = as_string(section_name);
+    if (section_name == "" || !uci_core.available())
+        return false;
+    let section = object_or_empty(uci_core.get_all(CONFIG_NAME, section_name));
+    return as_string(section.action || "") == "byedpi";
+}
+
 function latency_worker(path, latency_type, tag, timeout, section) {
     let status = 1;
-    if (latency_probe_xray(section) && !latency_tag_is_singbox(tag)) {
+    if (section_is_byedpi(section)) {
+        let method = latency_clash_method(latency_type).method;
+        status = command_status(command_from_args([ BIN_PATH, "clash_api", method, tag, timeout, path ]) + " >/dev/null 2>&1");
+    }
+    else if (latency_probe_xray(section) && !latency_tag_is_singbox(tag)) {
         let cmd = [
             "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
             "latency-test", latency_type, tag, timeout

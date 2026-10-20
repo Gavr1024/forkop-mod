@@ -290,6 +290,18 @@ msgstr "Стратегия ByeDPI"
 msgid "ByeDPI strategy cannot be empty"
 msgstr "Стратегия ByeDPI не может быть пустой"
 
+msgid "sing-box config file"
+msgstr "Конфиг sing-box"
+
+msgid "Path of the sing-box config. A section can still run on sing-box when Xray is the main engine, so this path stays available. Change it ONLY if you know what you are doing."
+msgstr "Путь к конфигу sing-box. Секция может работать на sing-box и при основном Xray, поэтому путь остаётся доступен. Меняйте его, только если знаете, что делаете."
+
+msgid "sing-box cache file"
+msgstr "Кэш sing-box"
+
+msgid "Path of the sing-box cache. A section can still run on sing-box when Xray is the main engine, so this path stays available. Xray does not use this file. Change it ONLY if you know what you are doing."
+msgstr "Путь к кэшу sing-box. Секция может работать на sing-box и при основном Xray, поэтому путь остаётся доступен. Xray этот файл не использует. Меняйте его, только если знаете, что делаете."
+
 msgid "Cache File Path"
 msgstr "Путь к файлу кэша"
 
@@ -2546,6 +2558,9 @@ msgstr "Исходящий"
 msgid "Uploaded"
 msgstr "Отдано"
 
+msgid "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, hy2://, wireguard://, wg://, awg://, or vpn://"
+msgstr "URL должен начинаться с vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, hy2://, wireguard://, wg://, awg:// или vpn://"
+
 msgid "URL must start with vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2://, or hy2://"
 msgstr "URL должен начинаться с vless://, vmess://, ss://, trojan://, socks4://, socks4a://, socks5://, hysteria2:// или hy2://"
 
@@ -2761,6 +2776,15 @@ msgstr "VLESS flow"
 
 msgid "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2:// links"
 msgstr "ссылки vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://"
+
+msgid "vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://, wg://, awg://, vpn:// links"
+msgstr "ссылки vless://, vmess://, ss://, trojan://, socks4/5://, hy2/hysteria2://, wg://, awg://, vpn://"
+
+msgid "Invalid WireGuard link"
+msgstr "Некорректная ссылка WireGuard"
+
+msgid "WireGuard and AmneziaWG links work only in a sing-box section"
+msgstr "ссылки WireGuard и AmneziaWG работают только в секции с движком sing-box"
 
 msgid "WAN"
 msgstr "WAN"
@@ -3367,3 +3391,247 @@ msgstr "Введите число"
 
 msgid "Enter an MTU from 576 to 65535"
 msgstr "Введите MTU от 576 до 65535"
+
+msgid "WARP WIREGUARD"
+msgstr "WARP WIREGUARD"
+
+msgid "+ Add WARP WIREGUARD"
+msgstr "+ Добавить WARP WIREGUARD"
+
+msgid "Cloudflare WARP over WireGuard. The row shows the name. Open it for the license, port, and buttons. If a cascade is enabled in this section, it is used for registration."
+msgstr "Cloudflare WARP через WireGuard. В строке только имя. Откройте её для ключа, порта и кнопок. Если в секции включён каскад, он используется для регистрации."
+
+msgid "WARP MASQUE"
+msgstr "WARP MASQUE"
+
+msgid "+ Add WARP MASQUE"
+msgstr "+ Добавить WARP MASQUE"
+
+msgid "Cloudflare WARP over MASQUE for sing-box-extended. The core registers the device itself and stores it in the cache. If the cache file is in RAM, the device is created again after a router reboot, after the cache is deleted, or after a sing-box version change. This is a limitation of sing-box-extended. A WARP+ key is optional."
+msgstr "Cloudflare WARP через MASQUE для sing-box-extended. Ядро само регистрирует устройство и хранит его в кэше. Если файл кэша лежит в оперативной памяти, устройство создаётся заново после перезагрузки роутера, удаления кэша или смены версии sing-box. Это ограничение sing-box-extended. Ключ WARP+ необязателен."
+
+msgid "Optional. sing-box-extended sends this key when it registers the device."
+msgstr "Необязательно. sing-box-extended передаёт этот ключ, когда регистрирует устройство."
+
+msgid "Do not connect to the WARP MASQUE server over IPv6."
+msgstr "Не подключаться к серверу WARP MASQUE по IPv6."
+
+msgid "Use a different name for each WARP MASQUE profile"
+msgstr "У каждого профиля WARP MASQUE должно быть своё имя"
+
+msgid "WARP"
+msgstr "WARP"
+
+msgid "MASQUE"
+msgstr "MASQUE"
+
+msgid "+ Add MASQUE"
+msgstr "+ Добавить MASQUE"
+
+msgid "Cloudflare WARP over MASQUE on sing-box-extended, or a MASQUE server on ordinary sing-box 1.15. Extended registers the device itself. Ordinary sing-box 1.15 needs a server and port. A WARP+ key is optional and is used only by extended."
+msgstr "Cloudflare WARP через MASQUE на sing-box-extended или сервер MASQUE на обычном sing-box 1.15. Extended сам регистрирует устройство. Обычному sing-box 1.15 нужны сервер и порт. Ключ WARP+ необязателен и используется только extended."
+
+msgid "Optional. sing-box-extended sends this key when it registers the MASQUE device. Ordinary sing-box 1.15 ignores it."
+msgstr "Необязательно. sing-box-extended передаёт этот ключ при регистрации устройства MASQUE. Обычный sing-box 1.15 его не использует."
+
+msgid "Enter a server and port for sing-box 1.15"
+msgstr "Для sing-box 1.15 укажите сервер и порт"
+
+msgid "Not sent to sing-box-extended. That core enrolls a new MASQUE key on start, and a saved token makes Cloudflare answer 401."
+msgstr "В sing-box-extended не передаётся. Это ядро само записывает ключ MASQUE при запуске, а сохранённый токен Cloudflare отклоняет с ошибкой 401."
+
+msgid "Not sent to sing-box-extended. Kept only for ordinary sing-box, which does not use it either."
+msgstr "В sing-box-extended не передаётся. Обычный sing-box тоже его не использует."
+
+msgid "Optional. Applied to this device. sing-box-extended also receives it as the MASQUE license key."
+msgstr "Необязательно. Применяется к этому устройству. sing-box-extended также получает его как ключ лицензии MASQUE."
+
+msgid "Get MASQUE"
+msgstr "Получить MASQUE"
+
+msgid "MASQUE profile is ready. Save this window, then save the section."
+msgstr "Профиль MASQUE готов. Сохраните это окно, затем сохраните секцию."
+
+msgid "MASQUE address replaced. Save this window, then save the section."
+msgstr "Адрес MASQUE заменён. Сохраните это окно, затем сохраните секцию."
+
+msgid "New MASQUE profile is ready, but the old device could not be removed."
+msgstr "Новый профиль MASQUE готов, но старое устройство удалить не удалось."
+
+msgid "Removed from the profile. Cloudflare still has this device."
+msgstr "Убрано из профиля. У Cloudflare это устройство остаётся."
+
+msgid "Cloudflare profile for sing-box-extended. Leave empty on ordinary sing-box 1.15, which uses the server below."
+msgstr "Профиль Cloudflare для sing-box-extended. На обычном sing-box 1.15 оставьте пустым: там используется сервер ниже."
+
+msgid "Token of the extended MASQUE device. Not used by ordinary sing-box."
+msgstr "Токен устройства MASQUE для extended. Обычный sing-box его не использует."
+
+msgid "Address for ordinary sing-box 1.15 masque-client. sing-box-extended ignores it and uses the address from its own registration."
+msgstr "Адрес для обычного sing-box 1.15, тип masque-client. sing-box-extended его не использует и берёт адрес из своей регистрации."
+
+msgid "Server port"
+msgstr "Порт сервера"
+
+msgid "TCP/UDP port of the MASQUE server. 443 is the usual one."
+msgstr "Порт сервера MASQUE. Обычно это 443."
+
+msgid "TLS server name"
+msgstr "Имя сервера TLS"
+
+msgid "SNI. Leave empty to use the server address."
+msgstr "SNI. Пустое поле берёт адрес сервера."
+
+msgid "Enter a device id and token for extended, or a server and port for sing-box 1.15"
+msgstr "Для extended введите id устройства и токен, для sing-box 1.15 — сервер и порт"
+
+msgid "Device id"
+msgstr "Id устройства"
+
+msgid "Cloudflare MASQUE profile id. Required. An empty id would make sing-box-extended register a new device on every start."
+msgstr "Id профиля Cloudflare MASQUE. Обязательно. Пустой id заставит sing-box-extended регистрировать новое устройство при каждом запуске."
+
+msgid "Enter the device id"
+msgstr "Введите id устройства"
+
+msgid "Access token"
+msgstr "Токен доступа"
+
+msgid "Token of this MASQUE device. Stored with the profile and sent again on the next start."
+msgstr "Токен этого устройства MASQUE. Хранится в профиле и подставляется при следующем запуске."
+
+msgid "Enter the access token"
+msgstr "Введите токен доступа"
+
+msgid "Optional. Passed to sing-box-extended as the MASQUE license key."
+msgstr "Необязательно. Передаётся в sing-box-extended как ключ лицензии MASQUE."
+
+msgid "Do not connect to the MASQUE server over IPv6."
+msgstr "Не подключаться к серверу MASQUE по IPv6."
+
+msgid "Enter the MASQUE device id and token before saving"
+msgstr "Перед сохранением введите id устройства MASQUE и токен"
+
+msgid "Use a different name for each MASQUE profile"
+msgstr "Дайте каждому профилю MASQUE своё имя"
+
+msgid "Enter a name"
+msgstr "Введите имя"
+
+msgid "+ Add WARP"
+msgstr "+ Добавить WARP"
+
+msgid "Cloudflare WARP profiles. The row shows the name. Open it for the license, port, and buttons. If a cascade is enabled in this section, it is used for registration."
+msgstr "Профили Cloudflare WARP. В строке только имя. Откройте её для ключа, порта и кнопок. Если в секции включён каскад, он используется для регистрации."
+
+msgid "WARP+ license"
+msgstr "Ключ WARP+"
+
+msgid "Optional. Applied to this device without changing its address."
+msgstr "Необязательно. Применяется к этому устройству, адрес при этом не меняется."
+
+msgid "Endpoint port"
+msgstr "Порт сервера"
+
+msgid "UDP port of the Cloudflare server. 2408 is the usual one."
+msgstr "UDP-порт сервера Cloudflare. Обычно это 2408."
+
+msgid "Do not add the IPv6 address to the tunnel."
+msgstr "Не добавлять IPv6-адрес в туннель."
+
+msgid "Get WARP"
+msgstr "Получить WARP"
+
+msgid "Apply key"
+msgstr "Применить ключ"
+
+msgid "New address"
+msgstr "Новый адрес"
+
+msgid "Delete device"
+msgstr "Удалить устройство"
+
+msgid "Not registered"
+msgstr "Не зарегистрирован"
+
+msgid "WARP+"
+msgstr "WARP+"
+
+msgid "Free"
+msgstr "Бесплатный"
+
+msgid "Quota"
+msgstr "Квота"
+
+msgid "Actions"
+msgstr "Действия"
+
+msgid "Name is required"
+msgstr "Укажите имя"
+
+msgid "No device token. New address registers this profile again."
+msgstr "Нет токена устройства. «Новый адрес» регистрирует этот профиль заново."
+
+msgid "Could not register WARP"
+msgstr "Не удалось зарегистрировать WARP"
+
+msgid "Get WARP before saving"
+msgstr "Сначала получите WARP"
+
+msgid "This profile already exists. Use New address."
+msgstr "Этот профиль уже есть. Используйте «Новый адрес»."
+
+msgid "WARP registered. Save this window, then save the section."
+msgstr "WARP зарегистрирован. Сохраните это окно, затем секцию."
+
+msgid "This profile has no device token. Use New address once."
+msgstr "У этого профиля нет токена устройства. Один раз нажмите «Новый адрес»."
+
+msgid "Enter a WARP+ license"
+msgstr "Введите ключ WARP+"
+
+msgid "WARP+ license was rejected"
+msgstr "Ключ WARP+ не принят"
+
+msgid "License applied. Save this window, then save the section."
+msgstr "Ключ применён. Сохраните это окно, затем секцию."
+
+msgid "WARP address replaced. Save this window, then save the section."
+msgstr "Адрес WARP заменён. Сохраните это окно, затем секцию."
+
+msgid "New WARP profile is ready, but the old device could not be removed."
+msgstr "Новый профиль WARP готов, но старое устройство удалить не удалось."
+
+msgid "Removed from the list. Cloudflare still has this device."
+msgstr "Убрано из списка. В Cloudflare это устройство осталось."
+
+msgid "WARP device removed. Save the section."
+msgstr "Устройство WARP удалено. Сохраните секцию."
+
+msgid "Could not delete the WARP device"
+msgstr "Не удалось удалить устройство WARP"
+
+msgid "Use a different name for each WARP profile"
+msgstr "У каждого профиля WARP должно быть своё имя"
+
+msgid "Free account"
+msgstr "Бесплатный"
+
+msgid "Limited account"
+msgstr "Ограниченный"
+
+msgid "Unlimited account"
+msgstr "Безлимитный"
+
+msgid "Team account"
+msgstr "Командный"
+
+msgid "Check account"
+msgstr "Проверить"
+
+msgid "Account status updated. Save this window, then save the section."
+msgstr "Статус обновлён. Сохраните это окно, затем секцию."
+
+msgid "Could not check the WARP account"
+msgstr "Не удалось проверить аккаунт WARP"
+

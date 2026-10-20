@@ -206,8 +206,20 @@ esac
   fail "monitored WAN up should reload a running service"
 [ "$(initd_ucode wan-up-action 1 1 1 0)" = "skip_running" ] ||
   fail "unmonitored WAN up should not reload a running service"
-[ "$(initd_ucode wan-up-action 0 1 1 1)" = "restart" ] ||
-  fail "stopped monitored WAN up should keep failed-start retry"
+[ "$(initd_ucode wan-up-action 0 1 1 1)" = "start" ] ||
+  fail "stopped monitored WAN up should start Forkop"
+[ "$(initd_ucode wan-up-action 0 1 0 1)" = "start" ] ||
+  fail "stopped monitored WAN up should start even without a failed-start retry"
+[ "$(initd_ucode wan-up-action 0 1 1 0)" = "restart" ] ||
+  fail "stopped unmonitored WAN up should keep failed-start retry"
+[ "$(initd_ucode boot-start-action boot 1 0)" = "wait" ] ||
+  fail "boot with a down monitored interface should wait"
+[ "$(initd_ucode boot-start-action boot 1 1)" = "delay_start" ] ||
+  fail "boot with an already up monitored interface should wait the delay"
+[ "$(initd_ucode boot-start-action boot 0 0)" = "start" ] ||
+  fail "boot without monitored interfaces should start immediately"
+[ "$(initd_ucode boot-start-action '' 1 0)" = "start" ] ||
+  fail "manual start should not wait for a monitored interface"
 
 for legacy in \
   service_trigger_sync_requested \

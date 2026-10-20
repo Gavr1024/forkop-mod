@@ -13,6 +13,8 @@ const ITEM_TYPES = [
     "section_interface",
     "openconnect",
     "openvpn",
+    "warp",
+    "masque",
     "urltest",
     "priority_group",
     "priority_level"
@@ -381,6 +383,14 @@ function openvpn_clients(section) {
     return child_items(section, "openvpn");
 }
 
+function warp_clients(section) {
+    return child_items(section, "warp");
+}
+
+function masque_clients(section) {
+    return child_items(section, "masque");
+}
+
 function outbound_jsons(section) {
     let result = list_value(section, "outbound_jsons");
     if (length(result) == 0) {
@@ -595,7 +605,9 @@ function has_connection_sources(section) {
     return length(connection_urls(section)) > 0 ||
         length(subscription_urls(section)) > 0 ||
         length(interfaces(section)) > 0 ||
-        length(outbound_jsons(section)) > 0;
+        length(outbound_jsons(section)) > 0 ||
+        length(warp_clients(section)) > 0 ||
+        length(masque_clients(section)) > 0;
 }
 
 function subscription_url_settings(section, value) {
@@ -1147,6 +1159,8 @@ return {
     interfaces,
     openconnect_clients,
     openvpn_clients,
+    warp_clients,
+    masque_clients,
     outbound_jsons,
     urltests,
     dashboard_filter_mode,

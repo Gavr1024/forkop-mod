@@ -811,7 +811,22 @@ function start_runtime() {
         log_message("Xray service script is missing; install Xray from Components", "fatal");
         return 1;
     }
-    if (process_detected() && (engine.is_xray_primary() ? plane_listen_ready() : configured_ports_listening())) {
+    let primary = engine.is_xray_primary();
+    let running = process_detected();
+    let holds_plane = port_is_listening(listen_table(), xray_constants.XRAY_TPROXY_PORT);
+    if (running && ((primary && !plane_listen_ready()) || (!primary && holds_plane))) {
+        log_message("Restarting Xray after the routing engine change", "info");
+        let stop_cmd = command_from_args([ xray_constants.XRAY_SERVICE_INIT, "stop" ]);
+        command_status(
+            stop_cmd + " >/dev/null 2>&1 & child=$!; " +
+            "(sleep 15; kill -KILL $child >/dev/null 2>&1) & watchdog=$!; " +
+            "wait $child >/dev/null 2>&1; kill -KILL $watchdog >/dev/null 2>&1"
+        );
+        command_success("killall xray >/dev/null 2>&1");
+        command_success("killall -9 xray >/dev/null 2>&1");
+        running = false;
+    }
+    if (running && (primary ? plane_listen_ready() : configured_ports_listening())) {
         apply_saved_balancer_overrides();
         start_urltest_worker();
         return 0;
@@ -893,10 +908,23 @@ function stop_runtime() {
     return 0;
 }
 
-function reload_runtime() {
+function reload_runtime(force) {
     if (!xray_needed()) {
         stop_runtime();
         return 0;
+    }
+    if (force === true || force == "1" || force == "true") {
+        log_message("Restarting Xray so it uses the current network", "info");
+        stop_runtime();
+        return start_runtime();
+    }
+    let primary = engine.is_xray_primary();
+    let running = process_detected();
+    let holds_plane = port_is_listening(listen_table(), xray_constants.XRAY_TPROXY_PORT);
+    if (running && ((primary && !plane_listen_ready()) || (!primary && holds_plane))) {
+        log_message("Restarting Xray after the routing engine change", "info");
+        stop_runtime();
+        return start_runtime();
     }
     if (process_running()) {
         if (command_success_from_args([ xray_constants.XRAY_SERVICE_INIT, "reload" ])) {
@@ -1128,6 +1156,23 @@ function section_traffic_map(by_tag) {
             downlink += int(item.downlink || 0);
         }
         sections[section_name] = { uplink, downlink };
+    }
+    if (uci_core.available()) {
+        for (let section in uci_core.section_objects("forkop", "section")) {
+            section = object_or_empty(section);
+            if (as_string(section.enabled || "1") == "0")
+                continue;
+            if (as_string(section.action || "") != "byedpi")
+                continue;
+            let name = as_string(section[".name"] || "");
+            if (name == "")
+                continue;
+            let item = object_or_empty(by_tag["xray-" + name]);
+            sections[name] = {
+                uplink: int(item.uplink || 0),
+                downlink: int(item.downlink || 0)
+            };
+        }
     }
     return sections;
 }
@@ -2306,7 +2351,7 @@ else if (mode == "start-runtime")
 else if (mode == "stop-runtime")
     exit(stop_runtime());
 else if (mode == "reload-runtime")
-    exit(reload_runtime());
+    exit(reload_runtime(ARGV[1]));
 else if (mode == "status")
     exit(status_json());
 else if (mode == "running")

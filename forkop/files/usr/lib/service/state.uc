@@ -1134,6 +1134,38 @@ function openconnect_signature(section) {
     return sprintf("%J", result);
 }
 
+function warp_signature(section) {
+    let result = [];
+    for (let client in connections.warp_clients(section)) {
+        push(result, {
+            name: option(client, "name", ""),
+            private_key: option(client, "private_key", ""),
+            public_key: option(client, "public_key", ""),
+            address_v4: option(client, "address_v4", ""),
+            address_v6: option(client, "address_v6", ""),
+            endpoint_host: option(client, "endpoint_host", ""),
+            endpoint_port: option(client, "endpoint_port", ""),
+            reserved: option(client, "reserved", ""),
+            ipv4_only: bool_option(client, "ipv4_only", false) ? "1" : "0",
+            mtu: option(client, "mtu", ""),
+            keepalive: option(client, "keepalive", "")
+        });
+    }
+    return sprintf("%J", result);
+}
+
+function masque_signature(section) {
+    let result = [];
+    for (let client in connections.masque_clients(section)) {
+        push(result, {
+            name: option(client, "name", ""),
+            license: option(client, "license", ""),
+            ipv4_only: bool_option(client, "ipv4_only", true) ? "1" : "0"
+        });
+    }
+    return sprintf("%J", result);
+}
+
 function openvpn_signature(section) {
     let result = [];
     for (let client in connections.openvpn_clients(section)) {
@@ -1423,6 +1455,8 @@ function append_sing_box_rule_signature_body(body, section, sections, settings) 
         body = signature_add_value(body, prefix + ".interfaces", interfaces_signature(section));
         body = signature_add_value(body, prefix + ".openconnect", openconnect_signature(section));
         body = signature_add_value(body, prefix + ".openvpn", openvpn_signature(section));
+        body = signature_add_value(body, prefix + ".warp", warp_signature(section));
+        body = signature_add_value(body, prefix + ".masque", masque_signature(section));
         body = signature_add_value(body, prefix + ".outbound_jsons", option(section, "outbound_jsons", ""));
         body = signature_add_value(body, prefix + ".legacy_interface", option(section, "interface", ""));
         body = signature_add_value(body, prefix + ".legacy_outbound_json", option(section, "outbound_json", ""));

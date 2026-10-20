@@ -3,8 +3,8 @@
 
 START=99
 USE_PROCD=1
-EXTRA_COMMANDS="retry_start_on_wan_up handle_wan_up"
-EXTRA_HELP="        retry_start_on_wan_up Retry failed cold start after WAN comes up\n        handle_wan_up Reload or retry after monitored WAN comes up\n"
+EXTRA_COMMANDS="retry_start_on_wan_up handle_wan_up handle_monitored_up"
+EXTRA_HELP="        retry_start_on_wan_up Retry failed cold start after WAN comes up\n        handle_wan_up Reload or start after monitored WAN comes up\n        handle_monitored_up Reload or start after a monitored interface comes up\n"
 
 script=$(readlink "$initscript")
 NAME="$(basename ${script:-$initscript})"
@@ -33,6 +33,10 @@ start_service() {
     initd_ucode start-service "$1" "$$"
     FORKOP_LAST_START_STATUS="$?"
     return "$FORKOP_LAST_START_STATUS"
+}
+
+boot() {
+    start boot
 }
 
 service_started() {
@@ -66,6 +70,10 @@ retry_start_on_wan_up() {
 
 handle_wan_up() {
     initd_ucode handle-wan-up "$$"
+}
+
+handle_monitored_up() {
+    initd_ucode handle-monitored-up "$$"
 }
 
 service_triggers() {
