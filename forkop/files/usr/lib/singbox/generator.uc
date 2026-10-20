@@ -2458,9 +2458,14 @@ function wireguard_fields_from_uri(link) {
     return fields;
 }
 
+function awg_flag_enabled(value) {
+    value = lc(trim(as_string(value || "")));
+    return value == "1" || value == "on" || value == "true" || value == "yes";
+}
+
 function awg_version_from_fields(fields) {
     fields = object_or_empty(fields);
-    if (trim(as_string(fields.randomtrailers || "")) != "" || trim(as_string(fields.disablecookies || "")) != "")
+    if (awg_flag_enabled(fields.randomtrailers) || awg_flag_enabled(fields.disablecookies))
         return "3.1";
     for (let key in [ "headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout", "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts" ])
         if (trim(as_string(fields[key] || "")) != "")
@@ -2477,7 +2482,7 @@ function wireguard_has_awg(fields) {
     for (let key in [ "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout", "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts" ])
         if (trim(as_string(fields[key] || "")) != "")
             return true;
-    return false;
+    return awg_flag_enabled(fields.randomtrailers) || awg_flag_enabled(fields.disablecookies);
 }
 
 function wireguard_endpoint_from_fields(fields, tag_name) {
@@ -2578,6 +2583,14 @@ function wireguard_endpoint_from_fields(fields, tag_name) {
     let protection = wireguard_key(fields.headerprotectionkey);
     if (protection != "") {
         amnezia.header_protection_key = protection;
+        amnezia_set = true;
+    }
+    if (awg_flag_enabled(fields.randomtrailers)) {
+        amnezia.random_trailers = true;
+        amnezia_set = true;
+    }
+    if (awg_flag_enabled(fields.disablecookies)) {
+        amnezia.disable_cookies = true;
         amnezia_set = true;
     }
     if (amnezia_set)
