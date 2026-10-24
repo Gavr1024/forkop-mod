@@ -893,18 +893,18 @@ function start_main() {
     }
 
     let verify_timeout = xray_primary ? XRAY_START_VERIFY_TIMEOUT : SING_BOX_START_VERIFY_TIMEOUT;
-    if (xray_primary)
+    let stable_min_age = xray_primary ? 0 : SING_BOX_START_STABLE_MIN_AGE;
+    if (!xray_primary)
         log_message(
-            "Waiting up to " + as_string(verify_timeout) +
-            "s for Xray DNS 127.0.0.42:53 and TPROXY :1602",
-            "info"
+            "Waiting up to " + as_string(verify_timeout) + "s for the routing plane",
+            "debug"
         );
     status = module_status(STATE_UC, [
         "wait-forkop-stable-start",
         RT_TABLE_NAME,
         NFT_TABLE_NAME,
         NFT_FAKEIP_MARK,
-        as_string(SING_BOX_START_STABLE_MIN_AGE),
+        as_string(stable_min_age),
         as_string(verify_timeout)
     ]);
     if (status != 0) {

@@ -24,6 +24,8 @@ const RUNTIME_STATE_DIR = getenv("FORKOP_RUNTIME_STATE_DIR") || "/var/run/forkop
 const PENDING_RELOAD_FILE = getenv("FORKOP_PENDING_RELOAD_FILE") || RUNTIME_STATE_DIR + "/reload.pending";
 const START_RETRY_FILE = getenv("FORKOP_START_RETRY_FILE") || RUNTIME_STATE_DIR + "/start.retry";
 const START_RETRY_PID_FILE = getenv("FORKOP_START_RETRY_PID_FILE") || RUNTIME_STATE_DIR + "/start-retry.pid";
+const INTERFACE_WATCH_PID = getenv("FORKOP_INTERFACE_WATCH_PID") || RUNTIME_STATE_DIR + "/interface-watch.pid";
+const INTERFACE_WATCH_INTERVAL = "5";
 const START_RETRY_DELAY_SECONDS = getenv("FORKOP_START_RETRY_DELAY_SECONDS") || "30";
 const SERVICE_TRIGGER_SYNC_FILE = getenv("FORKOP_SERVICE_TRIGGER_SYNC_FILE") || RUNTIME_STATE_DIR + "/service-triggers.sync";
 const INTERNAL_CONFIG_TRIGGER_GUARD = getenv("FORKOP_INTERNAL_CONFIG_TRIGGER_GUARD") || "/var/run/forkop.internal-config-change";
@@ -145,6 +147,11 @@ function file_executable(path) {
 
 function unlink_file(path) {
     fs.unlink(as_string(path));
+}
+
+function ensure_dir(path) {
+    path = as_string(path);
+    return path == "" || fs.mkdir(path, 0755) || fs.stat(path) != null;
 }
 
 function ensure_parent_dir(path) {
@@ -501,15 +508,50 @@ function badwan_delay_ms(settings) {
     return delay;
 }
 
-function interface_is_up(name) {
+function interface_status_text(name) {
     name = trim(as_string(name));
     if (name == "" || match(name, /^[A-Za-z0-9._-]+$/) == null)
-        return false;
+        return "";
 
     let output = command_output_from_args([ "ifstatus", name ]);
     if (output == "")
         output = command_output_from_args([ "ubus", "call", "network.interface." + name, "status" ]);
-    return index(output, "\"up\": true") >= 0 || index(output, "\"up\":true") >= 0;
+    return as_string(output);
+}
+
+function interface_active_status(text) {
+    text = as_string(text);
+    let cut = index(text, "\"inactive\"");
+    if (cut >= 0)
+        return substr(text, 0, cut);
+    return text;
+}
+
+function interface_is_up_text(text) {
+    text = as_string(text);
+    return index(text, "\"up\": true") >= 0 || index(text, "\"up\":true") >= 0;
+}
+
+function interface_is_up(name) {
+    return interface_is_up_text(interface_active_status(interface_status_text(name)));
+}
+
+function interface_has_address(text) {
+    text = interface_active_status(text);
+    if (index(text, "\"address\"") >= 0)
+        return true;
+    if (index(text, "\"target\": \"0.0.0.0\"") >= 0 || index(text, "\"target\":\"0.0.0.0\"") >= 0)
+        return true;
+    if (index(text, "\"target\": \"::\"") >= 0 || index(text, "\"target\":\"::\"") >= 0)
+        return true;
+    return false;
+}
+
+function interface_is_ready(name) {
+    let text = interface_status_text(name);
+    if (!interface_is_up_text(interface_active_status(text)))
+        return false;
+    return interface_has_address(text);
 }
 
 function any_monitored_interface_up(names) {
@@ -519,10 +561,20 @@ function any_monitored_interface_up(names) {
     return false;
 }
 
+function any_monitored_interface_ready(names) {
+    for (let name in names)
+        if (interface_is_ready(name))
+            return true;
+    return false;
+}
+
 function boot_start_action(reason, monitored_count, any_up) {
-    if (as_string(reason) != "boot")
-        return "start";
+    reason = as_string(reason);
     if (int(monitored_count || 0) <= 0)
+        return "start";
+    if (reason == "triggered")
+        return "delay_start";
+    if (reason != "boot")
         return "start";
     return bool_text(any_up) ? "delay_start" : "wait";
 }
@@ -544,6 +596,69 @@ function sleep_ms(delay) {
     if (command_status_from_args([ "sleep", text ]) == 0)
         return 0;
     return command_status_from_args([ "sleep", as_string(seconds + (frac > 0 ? 1 : 0)) ]);
+}
+
+function interface_watch_pid() {
+    let pid = "";
+    try {
+        pid = trim(as_string(fs.readfile(INTERFACE_WATCH_PID)));
+    }
+    catch (e) {
+        pid = "";
+    }
+    if (match(pid, /^[0-9]+$/) == null)
+        return "";
+    if (fs.stat("/proc/" + pid) == null)
+        return "";
+    return pid;
+}
+
+function stop_interface_watch() {
+    let pid = interface_watch_pid();
+    if (pid != "")
+        command_status_from_args([ "kill", pid ]);
+    try { fs.unlink(INTERFACE_WATCH_PID); } catch (e) { }
+}
+
+function start_interface_watch() {
+    if (interface_watch_pid() != "")
+        return 0;
+    ensure_dir(RUNTIME_STATE_DIR);
+    let once = command_from_args([ "ucode", "-L", LIB_DIR, LIB_DIR + "/service/initd.uc", "monitor-poll-once" ]);
+    let start = command_from_args([ SERVICE_INIT, "start", "monitor" ]);
+    let script = "while true; do " + once + "; code=$?; " +
+        "if [ \"$code\" -eq 10 ]; then " + start + "; continue; fi; " +
+        "if [ \"$code\" -ne 0 ]; then exit 0; fi; " +
+        "sleep " + INTERFACE_WATCH_INTERVAL + "; done";
+    let launched = command_status_from_args([
+        "start-stop-daemon", "-S", "-b", "-m",
+        "-p", INTERFACE_WATCH_PID,
+        "-x", "/bin/sh",
+        "--", "-c", script
+    ]);
+    if (launched != 0)
+        command_status("sh -c " + shell_quote(script) + " >/dev/null 2>&1 &");
+    command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Waiting in the background until a monitored interface has an address" ]);
+    return 0;
+}
+
+function monitor_poll_once() {
+    if (!service_is_enabled())
+        return 11;
+    if (runtime_is_running())
+        return 11;
+    let settings = uci_settings();
+    let monitored = badwan_monitored_names(settings);
+    if (length(monitored) == 0)
+        return 11;
+    if (!any_monitored_interface_ready(monitored))
+        return 0;
+    sleep_ms(badwan_delay_ms(settings));
+    if (runtime_is_running() || !service_is_enabled())
+        return 11;
+    if (!any_monitored_interface_ready(badwan_monitored_names(uci_settings())))
+        return 0;
+    return 10;
 }
 
 function badwan_interface_monitored(settings, interface_name) {
@@ -586,7 +701,7 @@ function handle_wan_up(owner_pid) {
     if (action == "start") {
         clear_start_retry(START_RETRY_FILE);
         cancel_scheduled_start_retry(START_RETRY_PID_FILE);
-        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Starting Forkop after monitored WAN came up" ]);
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Starting Forkop after the monitored WAN has an address" ]);
         return command_status_from_args([ SERVICE_INIT, "start", "triggered" ]);
     }
 
@@ -611,8 +726,23 @@ function handle_monitored_up(owner_pid) {
 
     clear_start_retry(START_RETRY_FILE);
     cancel_scheduled_start_retry(START_RETRY_PID_FILE);
-    command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Starting Forkop after monitored interface came up" ]);
+    command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Monitored interface came up; checking for an address" ]);
     return command_status_from_args([ SERVICE_INIT, "start", "triggered" ]);
+}
+
+function handle_monitored_update(owner_pid, iface) {
+    if (!service_is_enabled())
+        return 0;
+    let settings = uci_settings();
+    if (length(badwan_monitored_names(settings)) == 0)
+        return 0;
+    iface = trim(as_string(iface));
+    if (iface != "" && !badwan_interface_monitored(settings, iface))
+        return 0;
+    if (runtime_is_running())
+        return 0;
+    command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Monitored interface was updated; waiting until it has an address" ]);
+    return start_interface_watch();
 }
 
 function active_service_action_value() {
@@ -654,16 +784,28 @@ function start_plan(reason, owner_pid, settings, bin_ok) {
 function start_service(reason, owner_pid) {
     let settings = uci_settings();
     let monitored = badwan_monitored_names(settings);
-    let action = boot_start_action(reason, length(monitored), any_monitored_interface_up(monitored) ? "1" : "0");
+    let seen_up = any_monitored_interface_up(monitored) || any_monitored_interface_ready(monitored);
+    let action = boot_start_action(reason, length(monitored), seen_up ? "1" : "0");
     if (action == "wait") {
-        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Waiting for a monitored interface before starting Forkop" ]);
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Waiting for a monitored interface with an address before starting Forkop" ]);
+        start_interface_watch();
         return 0;
     }
     if (action == "delay_start") {
         let delay = badwan_delay_ms(settings);
-        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Monitored interface is already up; starting Forkop after " + delay + " ms" ]);
+        command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Monitored interface changed; checking for an address after " + delay + " ms" ]);
         sleep_ms(delay);
+        if (!any_monitored_interface_ready(badwan_monitored_names(uci_settings()))) {
+            command_success_from_args([ "logger", "-t", SERVICE_NAME, "[info] Monitored interface has no address after the delay; still waiting" ]);
+            start_interface_watch();
+            return 0;
+        }
     }
+
+    if (as_string(reason) == "monitor" && !any_monitored_interface_ready(badwan_monitored_names(uci_settings())))
+        return 0;
+    if (as_string(reason) != "monitor")
+        stop_interface_watch();
 
     print("Start Forkop\n");
     let plan = start_plan_value(reason, owner_pid, uci_settings(), null);
@@ -706,6 +848,7 @@ function stop_finish(job_id, status) {
 }
 
 function stop_service(owner_pid) {
+    stop_interface_watch();
     clear_start_retry(START_RETRY_FILE);
     cancel_scheduled_start_retry(START_RETRY_PID_FILE);
     let job_id = begin_external_service_action("stop", "initd", owner_pid);
@@ -827,9 +970,11 @@ function trigger_plan(settings) {
     if (badwan_enabled) {
         for (let iface in badwan_interfaces) {
             iface = trim(iface);
-            if (iface == "" || iface == "wan")
+            if (iface == "")
                 continue;
-            print("interface\tinterface.*.up\t", iface, "\t", SERVICE_INIT, "\thandle_monitored_up\t\n");
+            if (iface != "wan")
+                print("interface\tinterface.*.up\t", iface, "\t", SERVICE_INIT, "\thandle_monitored_up\t\n");
+            print("interface\tinterface.update\t", iface, "\t", SERVICE_INIT, "\thandle_monitored_update\t\n");
         }
     }
 }
@@ -848,6 +993,10 @@ else if (mode == "handle-wan-up")
     exit(handle_wan_up(ARGV[1]));
 else if (mode == "handle-monitored-up")
     exit(handle_monitored_up(ARGV[1]));
+else if (mode == "handle-monitored-update")
+    exit(handle_monitored_update(ARGV[1], ARGV[2]));
+else if (mode == "monitor-poll-once")
+    exit(monitor_poll_once());
 else if (mode == "boot-start-action")
     print(boot_start_action(ARGV[1], ARGV[2], ARGV[3]), "\n");
 else if (mode == "retry-start-on-wan-up-action")

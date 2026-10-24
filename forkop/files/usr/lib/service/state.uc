@@ -570,7 +570,12 @@ function sing_box_service_running() {
 }
 
 function sing_box_service_stable(min_age) {
-    min_age = int(min_age || 2);
+    if (min_age == null || trim(as_string(min_age)) == "")
+        min_age = 2;
+    else
+        min_age = int(min_age);
+    if (min_age < 0)
+        min_age = 0;
 
     let pid = sing_box_service_pid_runtime();
     if (pid <= 0 || !pid_is_sing_box(pid))
@@ -1160,7 +1165,10 @@ function masque_signature(section) {
         push(result, {
             name: option(client, "name", ""),
             license: option(client, "license", ""),
-            ipv4_only: bool_option(client, "ipv4_only", true) ? "1" : "0"
+            endpoint_port: option(client, "endpoint_port", ""),
+            ipv4_only: bool_option(client, "ipv4_only", true) ? "1" : "0",
+            l4_proxy: bool_option(client, "l4_proxy", false) ? "1" : "0",
+            handshake_timeout: option(client, "handshake_timeout", "")
         });
     }
     return sprintf("%J", result);

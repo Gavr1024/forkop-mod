@@ -639,8 +639,8 @@ msgstr ""
 msgid "Default address for checking server availability and latency. URLTest uses its own address."
 msgstr ""
 
-#: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:436
-msgid "Delay in milliseconds before reloading Forkop after interface UP"
+#: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:1034
+msgid "Delay in milliseconds after the interface comes up. The first start waits for this too; a later rise reloads Forkop."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/settings.js:443
@@ -2757,6 +2757,36 @@ msgstr ""
 
 #: src/forkop/tabs/dashboard/initController.ts:1650
 msgid "Services info"
+msgstr ""
+
+msgid "Restart Xray outbound"
+msgstr ""
+
+msgid "Xray on"
+msgstr ""
+
+msgid "Xray off"
+msgstr ""
+
+msgid "Turn off Xray outbound"
+msgstr ""
+
+msgid "Turn on Xray outbound"
+msgstr ""
+
+msgid "Failed to switch Xray outbound"
+msgstr ""
+
+msgid "Check latency"
+msgstr ""
+
+msgid "Forkop ping"
+msgstr ""
+
+msgid "Xray outbound restarted"
+msgstr ""
+
+msgid "Failed to restart Xray outbound"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js:436

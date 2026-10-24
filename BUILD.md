@@ -1,8 +1,8 @@
 # Сборка пакетов Forkop-Mod
 
-Полное дерево исходников **1.0.12** плюс патчи, из которых собираются `ipk` (OpenWrt 24.10) и `apk` (OpenWrt 25.12).
+Полное дерево исходников **1.0.13** плюс патчи, из которых собираются `ipk` (OpenWrt 24.10) и `apk` (OpenWrt 25.12).
 
-Версия пакета **1.0.12**. Идентификатор opkg остаётся `forkop` (конфиг `/etc/config/forkop`, `/etc/init.d/forkop`, `/usr/lib/forkop`). В сведениях о пакете отображается **Forkop-Mod**. Над установленным стоковым 1.0.5 ставьте с `--force-reinstall`.
+Версия пакета **1.0.13**. Идентификатор opkg остаётся `forkop` (конфиг `/etc/config/forkop`, `/etc/init.d/forkop`, `/usr/lib/forkop`). В сведениях о пакете отображается **Forkop-Mod**. Над установленным стоковым 1.0.5 ставьте с `--force-reinstall`.
 
 ## Что внутри, чего не было в стоковом 1.0.5
 
@@ -19,12 +19,12 @@
 
 ```
 dist/
-  forkop_1.0.12.ipk
-  luci-app-forkop_1.0.12.ipk
-  luci-i18n-forkop-ru_1.0.12.ipk
-  forkop_1.0.12.apk
-  luci-app-forkop_1.0.12.apk
-  luci-i18n-forkop-ru_1.0.12.apk
+  forkop_1.0.13.ipk
+  luci-app-forkop_1.0.13.ipk
+  luci-i18n-forkop-ru_1.0.13.ipk
+  forkop_1.0.13.apk
+  luci-app-forkop_1.0.13.apk
+  luci-i18n-forkop-ru_1.0.13.apk
 ```
 
 `forkop` — backend (ucode), в opkg info отображается как **Forkop-Mod**. `luci-app-forkop` — LuCI. `luci-i18n-forkop-ru` — русский.
@@ -64,7 +64,7 @@ export SDK_CACHE_DIR=/path/to/cache
 tar -xzf forkop-mod-1.0.9-src.tar.gz
 cd forkop-mod-1.0.9-src
 chmod +x build.sh
-./build.sh 1.0.12 ./dist
+./build.sh 1.0.13 ./dist
 ```
 
 Первый прогон долгий из-за скачивания SDK. Повторные — минуты.
@@ -76,17 +76,17 @@ chmod +x build.sh
 OpenWrt 24.x (`opkg`):
 
 ```sh
-opkg install --force-reinstall ./forkop_1.0.12.ipk
-opkg install --force-reinstall ./luci-app-forkop_1.0.12.ipk
-opkg install --force-reinstall ./luci-i18n-forkop-ru_1.0.12.ipk
+opkg install --force-reinstall ./forkop_1.0.13.ipk
+opkg install --force-reinstall ./luci-app-forkop_1.0.13.ipk
+opkg install --force-reinstall ./luci-i18n-forkop-ru_1.0.13.ipk
 ```
 
 OpenWrt 25.x (`apk`):
 
 ```sh
-apk add --allow-untrusted ./forkop_1.0.12.apk
-apk add --allow-untrusted ./luci-app-forkop_1.0.12.apk
-apk add --allow-untrusted ./luci-i18n-forkop-ru_1.0.12.apk
+apk add --allow-untrusted ./forkop_1.0.13.apk
+apk add --allow-untrusted ./luci-app-forkop_1.0.13.apk
+apk add --allow-untrusted ./luci-i18n-forkop-ru_1.0.13.apk
 ```
 
 После установки:

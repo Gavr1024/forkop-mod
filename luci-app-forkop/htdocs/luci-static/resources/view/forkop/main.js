@@ -1181,7 +1181,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.12";
+var FORKOP_LUCI_APP_VERSION = "1.0.13";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -2236,6 +2236,7 @@ function renderDefaultState({
   onShowUrlTestInfo,
   onShowPriorityInfo,
   onTestLatency,
+  onProbeOutbound,
   onUpdateSubscription,
   latencyFetching,
   latencyProgress,
@@ -2359,6 +2360,25 @@ function renderDefaultState({
               renderCopyIcon24()
             )
           ] : [],
+          ...canRestartXrayOutbound(outbound) ? [
+            E(
+              "button",
+              {
+                type: "button",
+                class: "btn fkp_dashboard-page__outbound-grid__item__copy-button fkp_dashboard-page__outbound-grid__item__restart-button" + (xrayOutboundOff(outbound.code) ? " is-off" : ""),
+                "data-xray-restart": outbound.code,
+                title: xrayRestartTitle(outbound.code),
+                "aria-label": xrayRestartTitle(outbound.code),
+                disabled: xrayPower.running ? true : void 0,
+                click: (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void restartXrayOutbound(outbound);
+                }
+              },
+              xrayRestartLabel(outbound.code)
+            )
+          ] : [],
           ...outbound.urlTestInfo ? [
             E(
               "button",
@@ -2389,6 +2409,25 @@ function renderDefaultState({
                 }
               },
               renderInfoIcon24()
+            )
+          ] : [],
+          ...outbound.code ? [
+            E(
+              "button",
+              {
+                type: "button",
+                class: "btn fkp_dashboard-page__outbound-grid__item__copy-button fkp_dashboard-page__outbound-grid__item__ping-button",
+                "data-ping-tag": outbound.code,
+                title: _("Check latency"),
+                "aria-label": _("Check latency"),
+                disabled: outboundProbeRunning[outbound.code] ? true : void 0,
+                click: (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void onProbeOutbound(section, outbound);
+                }
+              },
+              outboundProbeRunning[outbound.code] ? "…" : _("Forkop ping")
             )
           ] : []
         ]),
@@ -3067,8 +3106,20 @@ var ForkopShellMethods = {
     { timeout: 12e3 }
   ),
   getXrayNodes: async () => callBaseMethod(Forkop.AvailableMethods.GET_XRAY_NODES, [], "/usr/bin/forkop", {
-    timeout: 4e3
+    timeout: 6e3
   }),
+  restartXrayOutbound: async (tag) => callBaseMethod(
+    "restart_xray_outbound",
+    [tag],
+    "/usr/bin/forkop",
+    { timeout: 2e4, allowNonZeroWithStdout: true }
+  ),
+  getXrayStoppedOutbounds: async () => callBaseMethod(
+    "xray_stopped_outbounds",
+    [],
+    "/usr/bin/forkop",
+    { timeout: 4e3, allowNonZeroWithStdout: true }
+  ),
   setXrayGroupProxy: async (section, tag) => callBaseMethod(
     Forkop.AvailableMethods.SET_XRAY_GROUP_PROXY,
     [section, tag],
@@ -3093,9 +3144,11 @@ var ForkopShellMethods = {
   getClashApiConnections: async () => callBaseMethod(Forkop.AvailableMethods.CLASH_API, [
     Forkop.AvailableClashAPIMethods.GET_CONNECTIONS
   ]),
-  getClashApiProxyLatency: async (tag, timeout = "5000") => callBaseMethod(
+  getClashApiProxyLatency: async (tag, timeout = "5000", rpcTimeout) => callBaseMethod(
     Forkop.AvailableMethods.CLASH_API,
-    [Forkop.AvailableClashAPIMethods.GET_PROXY_LATENCY, tag, timeout]
+    [Forkop.AvailableClashAPIMethods.GET_PROXY_LATENCY, tag, timeout],
+    "/usr/bin/forkop",
+    rpcTimeout ? { timeout: rpcTimeout } : {}
   ),
   getClashApiProxyLatencies: async (tags) => callBaseMethod(
     Forkop.AvailableMethods.CLASH_API,
@@ -4665,6 +4718,110 @@ function transportFromShareLink(link) {
   }
   return "";
 }
+function canRestartXrayOutbound(outbound) {
+  if (String(outbound?.proxyCore || "").toLowerCase() !== "xray") {
+    return false;
+  }
+  if (outbound?.urlTestInfo || outbound?.priorityInfo) {
+    return false;
+  }
+  const head = String(outbound?.type || "").toLowerCase().split("·")[0].trim();
+  return head === "vless" || head === "vmess" || head === "trojan" || head === "shadowsocks" || head === "wireguard" || head === "socks" || head === "hysteria2" || head === "hysteria";
+}
+var xrayPower = {
+  running: "",
+  failed: "",
+  reason: "",
+  off: {}
+};
+function xrayOutboundOff(code) {
+  return xrayPower.off[code] === true;
+}
+function xrayRestartLabel(code) {
+  if (xrayPower.running === code) {
+    return "…";
+  }
+  if (xrayPower.failed === code) {
+    return _("No");
+  }
+  return xrayOutboundOff(code) ? _("Xray off") : _("Xray on");
+}
+function xrayRestartTitle(code) {
+  if (xrayPower.running === code) {
+    return xrayOutboundOff(code) ? _("Turn on Xray outbound") : _("Turn off Xray outbound");
+  }
+  if (xrayPower.failed === code) {
+    const reason = String(xrayPower.reason || "").trim();
+    return reason || _("Failed to switch Xray outbound");
+  }
+  return xrayOutboundOff(code) ? _("Turn on Xray outbound") : _("Turn off Xray outbound");
+}
+function paintXrayRestartButtons() {
+  document.querySelectorAll("[data-xray-restart]").forEach((button) => {
+    const code = button.getAttribute("data-xray-restart") || "";
+    const title = xrayRestartTitle(code);
+    button.textContent = xrayRestartLabel(code);
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.disabled = xrayPower.running !== "";
+    button.classList.toggle("is-off", xrayOutboundOff(code) && xrayPower.running !== code);
+  });
+}
+function xrayRestartPayload(response) {
+  if (response?.data && typeof response.data === "object") {
+    return response.data;
+  }
+  if (typeof response?.error === "string" && response.error.trim().startsWith("{")) {
+    try {
+      return JSON.parse(response.error);
+    } catch {
+      return { success: false };
+    }
+  }
+  return { success: false };
+}
+function rememberXrayStopped(response) {
+  if (xrayPower.running) {
+    return;
+  }
+  const payload = xrayRestartPayload(response);
+  const next = {};
+  const tags = Array.isArray(payload.tags) ? payload.tags : [];
+  tags.forEach((tag) => {
+    const code = String(tag || "").trim();
+    if (code) {
+      next[code] = true;
+    }
+  });
+  xrayPower.off = next;
+  xrayPower.failed = "";
+}
+async function restartXrayOutbound(outbound) {
+  if (xrayPower.running || !outbound?.code) {
+    return;
+  }
+  const code = outbound.code;
+  xrayPower.running = code;
+  xrayPower.failed = "";
+  xrayPower.reason = "";
+  paintXrayRestartButtons();
+  const response = await ForkopShellMethods.restartXrayOutbound(code);
+  const payload = xrayRestartPayload(response);
+  xrayPower.running = "";
+  if (payload.success === true) {
+    if (payload.enabled === true) {
+      delete xrayPower.off[code];
+    } else {
+      xrayPower.off[code] = true;
+    }
+    xrayPower.failed = "";
+    xrayPower.reason = "";
+  } else {
+    xrayPower.failed = code;
+    xrayPower.reason = String(payload.error || "");
+  }
+  paintXrayRestartButtons();
+}
 function clashProtocolType(protocol, kind) {
   const value = String(protocol || kind || "").trim().toLowerCase();
   if (value === "hysteria" || value === "hysteria2" || value === "hy2") {
@@ -4825,10 +4982,12 @@ function keepOpenConnectDelays(sections) {
 async function getDashboardSections(options = {}) {
   const includeSubscriptionCopyState = options.includeSubscriptionCopyState ?? true;
   const configSections = hydrateConfigSections(await getConfigSections());
-  const [clashProxies, xrayNodes] = await Promise.all([
+  const [clashProxies, xrayNodes, xrayStopped] = await Promise.all([
     getClashApiProxies(configSections),
-    ForkopShellMethods.getXrayNodes?.() ?? Promise.resolve({ success: true, data: { nodes: {}, selected: {} } })
+    ForkopShellMethods.getXrayNodes?.() ?? Promise.resolve({ success: true, data: { nodes: {}, selected: {} } }),
+    ForkopShellMethods.getXrayStoppedOutbounds?.() ?? Promise.resolve({ success: true, data: { tags: [] } })
   ]);
+  rememberXrayStopped(xrayStopped);
   const mergedProxies = mergeXrayNodesIntoClashProxies(
     clashProxies.success ? clashProxies.data?.proxies || {} : {},
     configSections,
@@ -5030,7 +5189,7 @@ async function getDashboardSections(options = {}) {
   );
   return {
     success: true,
-    data
+    data: data.map((section) => markDashboardNodeList(section, xrayNodes))
   };
 }
 
@@ -5892,6 +6051,7 @@ function applyServiceState(uiState) {
     },
     diagnosticsSystemInfo: normalizeSingBoxVariantFields(nextSystemInfo)
   });
+  noteDashboardServiceSample();
 }
 function applyActionState(actions = {}) {
   const current = store.get();
@@ -6462,6 +6622,7 @@ async function fetchServicesInfo() {
       }
     }
   });
+  noteDashboardServiceSample();
   return void 0;
 }
 
@@ -6525,6 +6686,55 @@ if (typeof window !== "undefined") {
     pageUnloading = false;
   });
 }
+function xraySidecarCode(sectionName) {
+  return `${sectionName}-xray`;
+}
+function withoutXraySidecar(section) {
+  if (!section || !Array.isArray(section.outbounds)) {
+    return section;
+  }
+  const bridge = xraySidecarCode(section.sectionName);
+  const outbounds = section.outbounds.filter((outbound) => outbound?.code !== bridge);
+  return outbounds.length === section.outbounds.length ? section : { ...section, outbounds };
+}
+function dashboardSectionHasServers(section) {
+  if (!section || !Array.isArray(section.outbounds)) {
+    return false;
+  }
+  const bridge = xraySidecarCode(section.sectionName);
+  return section.outbounds.some((outbound) => outbound?.code && outbound.code !== bridge);
+}
+function markDashboardNodeList(section, xrayNodes) {
+  if (!section) {
+    return section;
+  }
+  const ready = Boolean(xrayNodes?.success);
+  if (section.action === "byedpi") {
+    return { ...section, nodeListReady: ready };
+  }
+  if (section.proxyCore === "xray" && isConnectionAction(section.action)) {
+    const nodes = ready ? xrayNodes.data?.nodes || {} : {};
+    const list = nodes[section.sectionName];
+    return { ...section, nodeListReady: Array.isArray(list) && list.length > 0 };
+  }
+  return { ...section, nodeListReady: true };
+}
+function keepStableDashboardSections(previous, next) {
+  const previousByName = new Map(
+    (Array.isArray(previous) ? previous : []).map((section) => [section.sectionName, section])
+  );
+  return (Array.isArray(next) ? next : []).map((section) => {
+    const stripped = withoutXraySidecar(section);
+    const earlier = previousByName.get(section?.sectionName);
+    if (section?.nodeListReady === false && dashboardSectionHasServers(earlier)) {
+      return earlier;
+    }
+    if (!dashboardSectionHasServers(stripped) && dashboardSectionHasServers(earlier)) {
+      return earlier;
+    }
+    return stripped;
+  });
+}
 async function fetchDashboardSectionsOnce(mountId) {
   if (getDashboardServiceAvailability() === "stopped") {
     return false;
@@ -6552,7 +6762,7 @@ async function fetchDashboardSectionsOnce(mountId) {
         ...current,
         loading: false,
         failed: false,
-        data: keepOpenConnectDelays(data)
+        data: keepOpenConnectDelays(keepStableDashboardSections(current.data, data))
       }
     });
     return true;
@@ -6941,6 +7151,23 @@ function getDashboardServiceAvailability() {
     running: service.data.forkopRunning
   });
 }
+var dashboardStoppedStreak = 0;
+var DASHBOARD_STOPPED_CONFIRMATIONS = 3;
+function dashboardForkopReportedStopped() {
+  const status = String(store.get().servicesInfoWidget.data.forkopStatus || "");
+  if (status === "starting" || status === "restarting" || status === "reloading") {
+    return false;
+  }
+  return getDashboardServiceAvailability() === "stopped";
+}
+function noteDashboardServiceSample() {
+  if (dashboardForkopReportedStopped()) {
+    dashboardStoppedStreak += 1;
+  } else {
+    dashboardStoppedStreak = 0;
+  }
+  syncDashboardServiceAvailability();
+}
 function stopDashboardDataUpdates() {
   dashboardDataUpdatesStarted = false;
   dashboardDataUpdatesId += 1;
@@ -7195,7 +7422,7 @@ function startDashboardDataUpdates() {
 }
 function syncDashboardServiceAvailability() {
   const availability = getDashboardServiceAvailability();
-  const stopped = availability === "stopped";
+  const stopped = dashboardStoppedStreak >= DASHBOARD_STOPPED_CONFIRMATIONS;
   const container = document.getElementById("dashboard-status");
   container?.classList.toggle("fkp_dashboard-page--service-stopped", stopped);
   if (stopped || availability === "loading") {
@@ -7241,6 +7468,51 @@ function getInitialLatencyProgress(latencyType, tag) {
     return total > 0 ? { completed: 0, total, failed: 0 } : void 0;
   } catch {
     return void 0;
+  }
+}
+var outboundProbeRunning = {};
+function paintPingButtons() {
+  document.querySelectorAll("[data-ping-tag]").forEach((button) => {
+    const tag = button.getAttribute("data-ping-tag") || "";
+    const running = Boolean(outboundProbeRunning[tag]);
+    button.textContent = running ? "…" : _("Forkop ping");
+    button.disabled = running;
+  });
+}
+function probeResultFromResponse(response) {
+  const data = response?.data;
+  if (!data || typeof data !== "object") {
+    return { delay: 0, server: "" };
+  }
+  const delay = Number(data.delay || 0);
+  return {
+    delay: response.success && !data.message && delay > 0 ? delay : 0,
+    server: String(data.server || "")
+  };
+}
+async function handleProbeOutbound(section, outbound) {
+  const tag = String(outbound?.code || "");
+  const sectionName = String(section?.sectionName || "");
+  if (!tag || !sectionName || outboundProbeRunning[tag]) {
+    return;
+  }
+  outboundProbeRunning[tag] = true;
+  paintPingButtons();
+  try {
+    const timeout = String(section.latencyTestTimeout || "10000");
+    const response = await ForkopShellMethods.getClashApiProxyLatency(tag, timeout, 20000);
+    const result = probeResultFromResponse(response);
+    const alive = result.delay > 0;
+    if (result.server && result.server !== tag) {
+      applyLatencyProbeToSection(sectionName, result.server, result.delay, alive);
+    }
+    applyLatencyProbeToSection(sectionName, tag, result.delay, alive);
+  } catch (error) {
+    logger.error("[DASHBOARD]", "handleProbeOutbound failed", error);
+    applyLatencyProbeToSection(sectionName, tag, 0, false);
+  } finally {
+    delete outboundProbeRunning[tag];
+    paintPingButtons();
   }
 }
 function applyLatencyProbeToSection(sectionName, tag, delay, alive) {
@@ -7890,6 +8162,8 @@ async function renderSectionsWidget() {
       },
       onShowPriorityInfo: () => {
       },
+      onProbeOutbound: () => {
+      },
       onUpdateSubscription: () => {
       },
       latencyFetching: false,
@@ -7943,6 +8217,9 @@ async function renderSectionsWidget() {
       },
       onShowPriorityInfo: (outbound) => {
         handleShowPriorityInfo(outbound);
+      },
+      onProbeOutbound: (section2, outbound) => {
+        void handleProbeOutbound(section2, outbound);
       },
       onUpdateSubscription: (section2) => {
         void handleUpdateSubscription(section2);
@@ -8685,13 +8962,14 @@ var styles = `
 
 .fkp_dashboard-page__outbound-grid__item__header {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: flex-start;
     gap: 8px;
 }
 
 .fkp_dashboard-page__outbound-grid__item__title {
     min-width: 0;
+    flex: 1 1 auto;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -8729,6 +9007,26 @@ var styles = `
     height: 13px;
     display: block;
     flex: 0 0 auto;
+}
+
+.fkp_dashboard-page .btn.fkp_dashboard-page__outbound-grid__item__restart-button {
+    width: 46px;
+    min-width: 46px;
+    padding: 0 4px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.fkp_dashboard-page .btn.fkp_dashboard-page__outbound-grid__item__restart-button.is-off {
+    opacity: 0.55;
+}
+
+.fkp_dashboard-page .btn.fkp_dashboard-page__outbound-grid__item__ping-button {
+    width: 46px;
+    min-width: 46px;
+    padding: 0 4px;
+    font-size: 11px;
+    font-weight: 700;
 }
 
 .fkp_dashboard-page__outbound-grid__item__footer {

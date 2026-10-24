@@ -111,18 +111,20 @@ function file_md5(path) {
     return length(fields) > 0 ? as_string(fields[0]) : "";
 }
 
-function file_stamp(path) {
-    let st = fs.stat(as_string(path));
-    if (st == null)
-        return as_string(path) + ":0:0";
-    return as_string(path) + ":" + as_string(st.size || 0) + ":" + as_string(st.mtime || 0);
+function file_content_stamp(path) {
+    path = as_string(path);
+    if (!file_exists(path))
+        return path + ":missing";
+    let st = fs.stat(path);
+    let size = st == null ? 0 : int(st.size || 0);
+    return path + ":" + as_string(size) + ":" + file_md5(path);
 }
 
 function subscription_cache_stamp() {
     let dir = getenv("TMP_SUBSCRIPTION_FOLDER") || "/tmp/sing-box/subscriptions";
     let stamps = [];
     for (let path in fs.glob(dir + "/*.json"))
-        push(stamps, file_stamp(path));
+        push(stamps, file_content_stamp(path));
     sort(stamps);
     if (length(stamps) == 0)
         return dir + ":empty";
@@ -131,14 +133,14 @@ function subscription_cache_stamp() {
 
 function config_input_fingerprint() {
     let body = join("\n", [
-        file_stamp("/etc/config/forkop"),
-        file_stamp(xray_constants.XRAY_SELECTED_FILE),
-        file_stamp(xray_constants.ALLOW_DOMAINS_DAT),
-        file_stamp(xray_constants.ALLOW_DOMAINS_DAT_ETC),
-        file_stamp(xray_constants.XRAY_LOCATION_ASSET + "/geosite.dat"),
-        file_stamp(xray_constants.XRAY_LOCATION_ASSET + "/adlist.dat"),
+        file_content_stamp("/etc/config/forkop"),
+        file_content_stamp(xray_constants.XRAY_SELECTED_FILE),
+        file_content_stamp(xray_constants.ALLOW_DOMAINS_DAT),
+        file_content_stamp(xray_constants.ALLOW_DOMAINS_DAT_ETC),
+        file_content_stamp(xray_constants.XRAY_LOCATION_ASSET + "/geosite.dat"),
+        file_content_stamp(xray_constants.XRAY_LOCATION_ASSET + "/adlist.dat"),
         subscription_cache_stamp(),
-        "balancer-live-switch-2"
+        "balancer-live-switch-3"
     ]);
     let tmp = "/tmp/forkop-xray-fp." + as_string(clock()[0]);
     write_file(tmp, body + "\n");
@@ -676,6 +678,170 @@ function retarget_section_rules(config, section_name, tag) {
     return config;
 }
 
+function lower_text(value) {
+    let text = as_string(value);
+    let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let lower = "abcdefghijklmnopqrstuvwxyz";
+    let result = "";
+    let i = 0;
+    while (i < length(text)) {
+        let ch = substr(text, i, 1);
+        let pos = index(upper, ch);
+        result += pos >= 0 ? substr(lower, pos, 1) : ch;
+        i++;
+    }
+    return result;
+}
+
+function restartable_xray_protocol(protocol) {
+    protocol = lower_text(trim(as_string(protocol)));
+    return protocol == "vless" || protocol == "vmess" || protocol == "trojan" ||
+        protocol == "shadowsocks" || protocol == "wireguard" || protocol == "socks" ||
+        protocol == "hysteria" || protocol == "hysteria2";
+}
+
+function outbound_by_tag(config, tag) {
+    for (let outbound in array_or_empty(object_or_empty(config).outbounds)) {
+        outbound = object_or_empty(outbound);
+        if (as_string(outbound.tag || "") == tag)
+            return outbound;
+    }
+    return null;
+}
+
+function xray_api_status(args, output_path) {
+    return command_status(command_from_args(args) + " >" + shell_quote(output_path) + " 2>&1");
+}
+
+function stopped_outbounds_path() {
+    return "/var/run/forkop/xray-stopped.json";
+}
+
+function read_stopped_tags() {
+    let data = read_json_object(stopped_outbounds_path());
+    let tags = [];
+    let seen = {};
+    for (let tag in array_or_empty(data.tags)) {
+        tag = trim(as_string(tag));
+        if (tag == "" || seen[tag])
+            continue;
+        seen[tag] = true;
+        push(tags, tag);
+    }
+    return tags;
+}
+
+function tag_is_stopped(tag) {
+    for (let item in read_stopped_tags())
+        if (item == tag)
+            return true;
+    return false;
+}
+
+function write_stopped_tags(tags) {
+    let path = stopped_outbounds_path();
+    let slash = rindex(path, "/");
+    let parent = slash > 0 ? substr(path, 0, slash) : "";
+    if (parent != "" && !ensure_dir(parent))
+        return false;
+    return write_file(path, sprintf("%J\n", { tags: tags })) != null;
+}
+
+function remember_stopped_tag(tag, stopped) {
+    let tags = [];
+    for (let item in read_stopped_tags())
+        if (item != tag)
+            push(tags, item);
+    if (stopped)
+        push(tags, tag);
+    return write_stopped_tags(tags);
+}
+
+function clear_stopped_outbounds() {
+    remove_file(stopped_outbounds_path());
+}
+
+function stopped_outbounds_json() {
+    write_json({ success: true, tags: read_stopped_tags() });
+    return 0;
+}
+
+function restart_outbound_json(tag) {
+    tag = trim(as_string(tag));
+    if (tag == "" || length(tag) > 180 || index(tag, "\n") >= 0 || index(tag, "\r") >= 0 || index(tag, "\0") >= 0) {
+        write_json({ success: false, error: "invalid outbound tag" });
+        return 1;
+    }
+    if (!process_running()) {
+        write_json({ success: false, error: "xray is not running" });
+        return 1;
+    }
+
+    let config = read_json_object(xray_constants.XRAY_CONFIG);
+    let outbound = outbound_by_tag(config, tag);
+    if (outbound == null) {
+        write_json({ success: false, error: "outbound was not found" });
+        return 1;
+    }
+    if (!restartable_xray_protocol(outbound.protocol)) {
+        write_json({ success: false, error: "this outbound cannot be restarted" });
+        return 1;
+    }
+
+    let server = "127.0.0.1:" + as_string(xray_constants.XRAY_API_PORT);
+    let turning_on = tag_is_stopped(tag);
+    if (turning_on) {
+        let path = "/tmp/forkop-xray-outbound.json";
+        let add_log = "/tmp/forkop-xray-ado.out";
+        // Current Xray reads ado files as a config document and takes the
+        // outbounds array. A bare outbound object is reported as empty.
+        let documents = [
+            { outbounds: [ outbound ] },
+            outbound
+        ];
+        let reason = "";
+        let added = 1;
+        for (let document in documents) {
+            if (write_file(path, sprintf("%J\n", document)) == null) {
+                remove_file(path);
+                write_json({ success: false, error: "failed to write outbound", enabled: false, tag: tag });
+                return 1;
+            }
+            added = xray_api_status([
+                xray_constants.XRAY_BIN, "api", "ado", "-s", server, "-t", "10", path
+            ], add_log);
+            reason = trim(read_file(add_log));
+            let folded = lower_text(reason);
+            if (added == 0 || index(folded, "already") >= 0 || index(folded, "exist") >= 0)
+                break;
+        }
+        remove_file(path);
+        if (added != 0 && index(lower_text(reason), "already") < 0 && index(lower_text(reason), "exist") < 0) {
+            log_message("Failed to enable Xray outbound '" + tag + "'" + (reason != "" ? ": " + reason : ""), "error");
+            write_json({ success: false, error: reason != "" ? reason : "failed to add outbound", enabled: false, tag: tag });
+            return 1;
+        }
+        remember_stopped_tag(tag, false);
+        log_message("Enabled Xray outbound '" + tag + "'", "info");
+        write_json({ success: true, tag: tag, enabled: true });
+        return 0;
+    }
+
+    let remove_log = "/tmp/forkop-xray-rmo.out";
+    let removed = xray_api_status([
+        xray_constants.XRAY_BIN, "api", "rmo", "-s", server, tag
+    ], remove_log);
+    if (removed != 0) {
+        let reason = trim(read_file(remove_log));
+        write_json({ success: false, error: reason != "" ? reason : "failed to remove outbound", enabled: true, tag: tag });
+        return 1;
+    }
+    remember_stopped_tag(tag, true);
+    log_message("Disabled Xray outbound '" + tag + "'", "info");
+    write_json({ success: true, tag: tag, enabled: false });
+    return 0;
+}
+
 function replace_routing_live(config) {
     if (type(object_or_empty(config).routing) != "object")
         return false;
@@ -860,12 +1026,14 @@ function start_runtime() {
     while (tries < limit) {
         if (engine.is_xray_primary()) {
             if (process_detected() && plane_listen_ready()) {
+                clear_stopped_outbounds();
                 apply_saved_balancer_overrides();
                 start_urltest_worker();
                 return 0;
             }
         }
         else if (process_detected() || configured_ports_listening()) {
+            clear_stopped_outbounds();
             apply_saved_balancer_overrides();
             start_urltest_worker();
             return 0;
@@ -928,10 +1096,12 @@ function reload_runtime(force) {
     }
     if (process_running()) {
         if (command_success_from_args([ xray_constants.XRAY_SERVICE_INIT, "reload" ])) {
+            clear_stopped_outbounds();
             apply_saved_balancer_overrides();
             return 0;
         }
         command_success_from_args([ xray_constants.XRAY_SERVICE_INIT, "restart" ]);
+        clear_stopped_outbounds();
         apply_saved_balancer_overrides();
         return 0;
     }
@@ -1709,12 +1879,17 @@ function strategy_tile_name(raw) {
 function lowest_delay_tag(list) {
     let best = "";
     let best_delay = 0;
+    let saved = read_json_object(xray_constants.XRAY_LATENCY_FILE);
+    if (type(saved) != "object")
+        saved = {};
     for (let node in list) {
         node = object_or_empty(node);
         let tag = as_string(node.tag || "");
-        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG)
+        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG || tag_is_stopped(tag))
             continue;
         let delay = int(node.delay || 0);
+        if (delay <= 0)
+            delay = int(saved[tag] || 0);
         if (delay <= 0)
             continue;
         if (best == "" || delay < best_delay) {
@@ -2013,26 +2188,78 @@ function resolve_probe_port(tag) {
     return node_port_by_tag(tag);
 }
 
+function strategy_section_from_tag(tag) {
+    tag = trim(as_string(tag));
+    let prefix = xray_constants.XRAY_URLTEST_TAG + "@";
+    if (index(tag, prefix) == 0)
+        return substr(tag, length(prefix));
+    return "";
+}
+
+function current_strategy_server(section_name, strategy_name) {
+    section_name = trim(as_string(section_name));
+    if (section_name == "")
+        return "";
+    if (strategy_name != "leastPing" && strategy_name != "leastLoad")
+        return "";
+    let list = array_or_empty(read_nodes()[section_name]);
+    let pin = as_string(object_or_empty(read_selected_outbounds())[section_name] || "");
+    if (pin != "" && pin != xray_constants.XRAY_URLTEST_TAG && !tag_is_stopped(pin))
+        return pin;
+    let detours = latest_detour_index();
+    let best = "";
+    let best_i = 0;
+    for (let node in list) {
+        let node_tag = as_string(object_or_empty(node).tag || "");
+        if (node_tag == "" || node_tag == xray_constants.XRAY_URLTEST_TAG || tag_is_stopped(node_tag))
+            continue;
+        let seen = int(object_or_empty(detours)[node_tag] || 0);
+        if (seen > best_i) {
+            best = node_tag;
+            best_i = seen;
+        }
+    }
+    if (best != "")
+        return best;
+    let fallback = lowest_delay_tag(list);
+    if (fallback != "" && !tag_is_stopped(fallback))
+        return fallback;
+    return "";
+}
+
 function proxy_latency_json(tag, timeout) {
     tag = trim(as_string(tag));
-    if (tag == xray_constants.XRAY_URLTEST_TAG) {
-        write_json({ delay: 0 });
-        return 0;
+    let probe_tag = tag;
+    let section_name = strategy_section_from_tag(tag);
+    if (section_name != "" || tag == xray_constants.XRAY_URLTEST_TAG) {
+        if (section_name == "") {
+            write_json({ message: "timeout" });
+            return 0;
+        }
+        let section = uci_section_by_name(section_name);
+        let strategy_name = strategy_tile_name(section.xray_balancer_strategy);
+        probe_tag = current_strategy_server(section_name, strategy_name);
+        if (probe_tag == "") {
+            write_json({ message: "timeout" });
+            return 0;
+        }
     }
-    let port = resolve_probe_port(tag);
+    let port = resolve_probe_port(probe_tag);
     if (port <= 0) {
         write_json({ message: "timeout" });
         return 0;
     }
     let delay = probe_socks_delay(port, latency_test_url(), int(timeout || 5000));
     let updates = {};
-    updates[tag] = delay;
+    updates[probe_tag] = delay;
+    if (probe_tag != tag)
+        updates[xray_constants.XRAY_URLTEST_TAG] = delay;
     write_latency_delays(updates);
     if (delay > 0) {
-        write_json({ delay });
+        write_json({ delay: delay, server: probe_tag });
         return 0;
     }
-    write_json({ message: "timeout" });
+    write_json({ message: "timeout", server: probe_tag });
     return 0;
 }
 
@@ -2389,6 +2616,10 @@ else if (mode == "urltest-worker")
     exit(urltest_worker());
 else if (mode == "select-outbound")
     exit(select_outbound_json(ARGV[1] || "", ARGV[2] || ""));
+else if (mode == "restart-outbound")
+    exit(restart_outbound_json(ARGV[1] || ""));
+else if (mode == "stopped-outbounds")
+    exit(stopped_outbounds_json());
 else if (mode == "close-connection")
     exit(close_connection_json(ARGV[1] || ""));
 else if (mode == "close-all-connections")

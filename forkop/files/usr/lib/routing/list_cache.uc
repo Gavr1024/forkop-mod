@@ -869,7 +869,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.12",
+        "-A", "forkop-list-cache/1.0.13",
         "-o", output_path,
         "--url", as_string(url)
     ];

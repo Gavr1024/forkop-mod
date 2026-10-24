@@ -65,6 +65,9 @@ define Package/forkop/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/forkop $(1)/etc/init.d/forkop
 
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_DATA) ./files/etc/hotplug.d/iface/99-forkop $(1)/etc/hotplug.d/iface/99-forkop
+
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/forkop $(1)/etc/config/forkop
 

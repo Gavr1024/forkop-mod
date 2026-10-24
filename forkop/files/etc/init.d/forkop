@@ -3,8 +3,8 @@
 
 START=99
 USE_PROCD=1
-EXTRA_COMMANDS="retry_start_on_wan_up handle_wan_up handle_monitored_up"
-EXTRA_HELP="        retry_start_on_wan_up Retry failed cold start after WAN comes up\n        handle_wan_up Reload or start after monitored WAN comes up\n        handle_monitored_up Reload or start after a monitored interface comes up\n"
+EXTRA_COMMANDS="retry_start_on_wan_up handle_wan_up handle_monitored_up handle_monitored_update"
+EXTRA_HELP="        retry_start_on_wan_up Retry failed cold start after WAN comes up\n        handle_wan_up Reload or start after monitored WAN comes up\n        handle_monitored_up Reload or start after a monitored interface comes up\n        handle_monitored_update Check again after a monitored interface update\n"
 
 script=$(readlink "$initscript")
 NAME="$(basename ${script:-$initscript})"
@@ -74,6 +74,10 @@ handle_wan_up() {
 
 handle_monitored_up() {
     initd_ucode handle-monitored-up "$$"
+}
+
+handle_monitored_update() {
+    initd_ucode handle-monitored-update "$$" "$1"
 }
 
 service_triggers() {

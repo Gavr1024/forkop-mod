@@ -4858,6 +4858,7 @@ function showChildItemSettingsModal(section_id, itemValue, option, settings) {
   settings.addOptions(itemSection, Object.assign({
     parentSectionId: () => section_id,
     ownerId: () => value || section_id,
+    initialSettings,
   }, settings.context || {}));
 
   if (typeof settings.mergeSave === "function") {
@@ -4957,8 +4958,10 @@ function warpAccountTypeText(value) {
 }
 
 function warpStatusText(draft) {
+  const port = `${draft.endpoint_port || "2408"}`.trim() || "2408";
+  const portText = `${_("Port")}: ${port}`;
   if (!`${draft.private_key || ""}`.trim()) {
-    return _("Not registered");
+    return `${_("Not registered")}. ${portText}`;
   }
   const plus = draft.warp_plus === "1" || draft.warp_plus === true;
   const parts = [plus ? _("WARP+") : _("Free")];
@@ -4970,6 +4973,7 @@ function warpStatusText(draft) {
   if (quota) {
     parts.push(`${_("Quota")}: ${quota}`);
   }
+  parts.push(portText);
   if (!`${draft.access_token || ""}`.trim()) {
     parts.push(_("No device token. New address registers this profile again."));
   }
@@ -5155,6 +5159,12 @@ function addWarpItemOptions(itemSection, uiState) {
   ["2408", "500", "1701", "4500"].forEach((port) => option.value(port, port));
   option.default = "2408";
   option.rmempty = false;
+  option.onchange = function (_event, _section_id, value) {
+    uiState.draft.endpoint_port = `${value || "2408"}`.trim() || "2408";
+    if (uiState.statusNode) {
+      uiState.statusNode.textContent = warpStatusText(uiState.draft);
+    }
+  };
 
   option = itemSection.option(
     form.Flag,
@@ -5446,32 +5456,80 @@ function showWarpSettingsModal(section_id, itemValue, option, widget, itemNode, 
   );
 }
 
-const MASQUE_SETTING_KEYS = ["name", "license", "ipv4_only"];
+const MASQUE_SETTING_KEYS = [
+  "name",
+  "license",
+  "endpoint_port",
+  "ipv4_only",
+  "l4_proxy",
+  "handshake_timeout",
+];
 
 function defaultMasqueSettings() {
   return {
     name: "",
     license: "",
+    endpoint_port: "443",
     ipv4_only: "1",
+    l4_proxy: "0",
+    handshake_timeout: "",
   };
 }
 
-function addMasqueItemOptions(itemSection) {
+function masqueStatusText(draft) {
+  const license = `${draft.license || ""}`.trim();
+  const port = `${draft.endpoint_port || "443"}`.trim() || "443";
+  return [(license ? _("WARP+") : _("Free")), `${_("Port")}: ${port}`].join(". ");
+}
+
+function addMasqueItemOptions(itemSection, context) {
+  const uiState = {
+    draft: Object.assign(defaultMasqueSettings(), (context && context.initialSettings) || {}),
+    statusNode: null,
+  };
   let option = itemSection.option(form.Value, "name", _("Name"));
   option.rmempty = false;
   option.validate = function (_section_id, value) {
     return `${value || ""}`.trim() ? true : _("Enter a name");
   };
 
+  option = itemSection.option(form.DummyValue, "_status", _("Status"));
+  option.renderWidget = function () {
+    uiState.statusNode = E("span", {}, masqueStatusText(uiState.draft));
+    return uiState.statusNode;
+  };
+
   option = itemSection.option(
     form.Value,
     "license",
     _("WARP+ license"),
-    _("Optional. sing-box-extended sends this key when it registers the device."),
+    _("Optional. sing-box-extended sends this key when it registers the device. Account type and quota stay unknown: the core registers MASQUE itself."),
   );
   option.password = true;
   option.optional = true;
   option.rmempty = true;
+  option.onchange = function (_event, _section_id, value) {
+    uiState.draft.license = `${value || ""}`.trim();
+    if (uiState.statusNode) {
+      uiState.statusNode.textContent = masqueStatusText(uiState.draft);
+    }
+  };
+
+  option = itemSection.option(
+    form.ListValue,
+    "endpoint_port",
+    _("Endpoint port"),
+    _("UDP port of the Cloudflare server. 443 is the usual one and keeps the address chosen by Cloudflare. Another port uses 162.159.198.1, because otherwise the core stays on 443."),
+  );
+  ["443", "500", "1701", "4500", "4443", "8443", "8095"].forEach((port) => option.value(port, port));
+  option.default = "443";
+  option.rmempty = false;
+  option.onchange = function (_event, _section_id, value) {
+    uiState.draft.endpoint_port = `${value || "443"}`.trim() || "443";
+    if (uiState.statusNode) {
+      uiState.statusNode.textContent = masqueStatusText(uiState.draft);
+    }
+  };
 
   option = itemSection.option(
     form.Flag,
@@ -5481,6 +5539,40 @@ function addMasqueItemOptions(itemSection) {
   );
   option.default = "1";
   option.rmempty = false;
+
+  option = itemSection.option(
+    form.Flag,
+    "l4_proxy",
+    _("TCP only (L4)"),
+    _(
+      "Faster mode for websites over TCP. Client UDP does not go through this profile: QUIC, games and DNS through the tunnel stay on another server in the section. The path to Cloudflare is still UDP. Needs sing-box-extended 2.7.3. On an older core the option is saved but not written into the config.",
+    ),
+  );
+  option.default = "0";
+  option.rmempty = false;
+
+  option = itemSection.option(
+    form.Value,
+    "handshake_timeout",
+    _("Handshake timeout, seconds"),
+    _(
+      "Enter seconds, from 1 to 300. Leave empty for no such limit. QUIC still drops the handshake after 5 seconds without a single packet. Needs sing-box-extended 2.7.3. On an older core the option is saved but not written into the config.",
+    ),
+  );
+  option.rmempty = true;
+  option.optional = true;
+  option.datatype = "uinteger";
+  option.placeholder = _("empty");
+  option.validate = function (_section_id, value) {
+    const raw = `${value || ""}`.trim();
+    if (!raw) {
+      return true;
+    }
+    if (!/^[0-9]+$/.test(raw) || Number(raw) < 1 || Number(raw) > 300) {
+      return _("Enter a number from 1 to 300, or leave empty");
+    }
+    return true;
+  };
 }
 
 function showMasqueSettingsModal(

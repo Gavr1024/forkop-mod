@@ -533,8 +533,8 @@ msgstr "Дашборд сейчас недоступен"
 msgid "Default address for checking server availability and latency. URLTest uses its own address."
 msgstr "Адрес по умолчанию для проверки доступности и задержки серверов. Для URLTest используется собственный адрес."
 
-msgid "Delay in milliseconds before reloading Forkop after interface UP"
-msgstr "Задержка в миллисекундах перед перезапуском Forkop после поднятия интерфейса"
+msgid "Delay in milliseconds after the interface comes up. The first start waits for this too; a later rise reloads Forkop."
+msgstr "Задержка в миллисекундах после поднятия интерфейса. Первый запуск тоже ждёт это время; более позднее поднятие перезапускает Forkop."
 
 msgid "Delay value cannot be empty"
 msgstr "Значение задержки не может быть пустым"

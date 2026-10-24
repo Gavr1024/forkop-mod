@@ -173,7 +173,7 @@ const urltests = childByType('urltest');
 
 assert(JSON.stringify(config.settings.dns_server) === JSON.stringify(['9.9.9.9']), 'legacy main DNS scalar migrated to ordered list');
 assert(JSON.stringify(config.settings.bootstrap_dns_server) === JSON.stringify(['1.1.1.1']), 'legacy Bootstrap DNS scalar migrated to ordered list');
-assert(config.settings.config_version === '1.0.12', 'legacy config should be marked at the current schema version');
+assert(config.settings.config_version === '1.0.13', 'legacy config should be marked at the current schema version');
 assert(config.settings.component_update_check_enabled === '1', 'component update checks should be enabled during migration');
 assert(JSON.stringify(config.settings.applied_migrations) === JSON.stringify(['interface_sections', 'enable_component_checks', 'http_connection_urls', 'router_traffic_section', 'openconnect_clients']), 'legacy config should record named migrations');
 
@@ -392,7 +392,7 @@ function assert(condition, message) {
 }
 
 assert(out.changed === true, '1.0.1 config should require migration');
-assert(out.config.settings.config_version === '1.0.12', 'config schema version should advance to 1.0.12');
+assert(out.config.settings.config_version === '1.0.13', 'config schema version should advance to 1.0.13');
 assert(out.config.settings.component_update_check_enabled === '1', 'updates from 1.0.1 and below should enable component update checks');
 assert(JSON.stringify(out.config.settings.applied_migrations) === JSON.stringify(['interface_sections', 'enable_component_checks', 'http_connection_urls', 'router_traffic_section', 'openconnect_clients']), 'named migrations should be recorded');
 assert(!Object.prototype.hasOwnProperty.call(section, 'interfaces'), 'parent interface list should be removed');
@@ -431,7 +431,7 @@ function assert(condition, message) {
 }
 
 assert(out.config.settings.component_update_check_enabled === '0', '1.0.2 config must preserve an explicitly disabled component check');
-assert(out.config.settings.config_version === '1.0.12', '1.0.2 config should advance through the HTTP URL migration schema');
+assert(out.config.settings.config_version === '1.0.13', '1.0.2 config should advance through the HTTP URL migration schema');
 assert(JSON.stringify(out.config.settings.applied_migrations) === JSON.stringify(['interface_sections', 'enable_component_checks', 'http_connection_urls', 'router_traffic_section', 'openconnect_clients']), 'newer configs should mark skipped migrations');
 NODE
 
@@ -476,7 +476,7 @@ function assert(condition, message) {
   }
 }
 
-assert(out.config.settings.config_version === '1.0.12', '1.0.4 config should advance to schema 1.0.12');
+assert(out.config.settings.config_version === '1.0.13', '1.0.4 config should advance to schema 1.0.13');
 assert(JSON.stringify(section.selector_proxy_links) === JSON.stringify([
   'vless://00000000-0000-4000-8000-000000000001@example.com:443',
   'https://invalid.example/no-port',
@@ -609,7 +609,7 @@ FORKOP_CONFIG_NAME="forkop" \
 FORKOP_INTERNAL_CONFIG_TRIGGER_GUARD="$WORK_DIR/internal-config-change" \
 ucode -L "$FORKOP_LIB" "$MIGRATION" migrate
 
-grep -Fxq 'forkop.settings.config_version=1.0.12' "$WORK_DIR/runtime-version.state" ||
+grep -Fxq 'forkop.settings.config_version=1.0.13' "$WORK_DIR/runtime-version.state" ||
   fail "runtime version migration must advance config_version"
 grep -Fxq 'forkop.settings.component_update_check_enabled=1' "$WORK_DIR/runtime-version.state" ||
   fail "runtime version migration must enable component update checks"

@@ -121,6 +121,9 @@ function show_help() {
     print("    get_xray_connections    Get Xray plane connections as JSON\n");
     print("    get_xray_nodes          Get Xray section outbounds as JSON\n");
     print("    set_xray_group_proxy    Pin an Xray section to a specific outbound\n");
+    print("    restart_xray_outbound <tag>\n");
+    print("                            Turn one Xray outbound off or back on\n");
+    print("    xray_stopped_outbounds  List Xray outbounds turned off from the dashboard\n");
     print("    get_system_info         Get system information in JSON format\n");
     print("    get_server_capabilities Get server UI capabilities in JSON format\n");
     print("    get_ui_capabilities     Get lightweight UI capabilities in JSON format\n");
@@ -217,6 +220,8 @@ function command_spec(command) {
         get_xray_connections: [ "xray/runtime.uc", "connections", 0 ],
         get_xray_nodes: [ "xray/runtime.uc", "nodes", 0 ],
         set_xray_group_proxy: [ "xray/runtime.uc", "select-outbound", 2 ],
+        restart_xray_outbound: [ "xray/runtime.uc", "restart-outbound", 1 ],
+        xray_stopped_outbounds: [ "xray/runtime.uc", "stopped-outbounds", 0 ],
         xray_close_connection: [ "xray/runtime.uc", "close-connection", 1 ],
         xray_close_all_connections: [ "xray/runtime.uc", "close-all-connections", 0 ],
         get_zapret_status: [ "diagnostics/runtime.uc", "get-zapret-status", 0 ],

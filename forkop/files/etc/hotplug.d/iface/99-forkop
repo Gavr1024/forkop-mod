@@ -1,0 +1,5 @@
+# Forkop waits for a monitored modem address. netifd reports a later
+# address as ifupdate, which does not repeat interface.*.up.
+if [ "$ACTION" = "ifupdate" ] || [ "$ACTION" = "ifup" ]; then
+	[ -n "$INTERFACE" ] && [ -x /etc/init.d/forkop ] && /etc/init.d/forkop handle_monitored_update "$INTERFACE"
+fi

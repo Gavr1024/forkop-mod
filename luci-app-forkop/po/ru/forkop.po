@@ -545,8 +545,8 @@ msgstr "Дашборд сейчас недоступен"
 msgid "Default address for checking server availability and latency. URLTest uses its own address."
 msgstr "Адрес по умолчанию для проверки доступности и задержки серверов. Для URLTest используется собственный адрес."
 
-msgid "Delay in milliseconds before reloading Forkop after interface UP"
-msgstr "Задержка в миллисекундах перед перезапуском Forkop после поднятия интерфейса"
+msgid "Delay in milliseconds after the interface comes up. The first start waits for this too; a later rise reloads Forkop."
+msgstr "Задержка в миллисекундах после поднятия интерфейса. Первый запуск тоже ждёт это время; более позднее поднятие перезапускает Forkop."
 
 msgid "Delay value cannot be empty"
 msgstr "Значение задержки не может быть пустым"
@@ -2129,6 +2129,36 @@ msgstr "Списки сервисов"
 msgid "Services info"
 msgstr "Информация о сервисах"
 
+msgid "Restart Xray outbound"
+msgstr "Перезапустить исходящее Xray"
+
+msgid "Xray on"
+msgstr "Вкл"
+
+msgid "Xray off"
+msgstr "Выкл"
+
+msgid "Turn off Xray outbound"
+msgstr "Выключить исходящее Xray"
+
+msgid "Turn on Xray outbound"
+msgstr "Включить исходящее Xray"
+
+msgid "Failed to switch Xray outbound"
+msgstr "Не удалось переключить исходящее Xray"
+
+msgid "Check latency"
+msgstr "Проверить задержку"
+
+msgid "Forkop ping"
+msgstr "Пинг"
+
+msgid "Xray outbound restarted"
+msgstr "Исходящее Xray перезапущено"
+
+msgid "Failed to restart Xray outbound"
+msgstr "Не удалось перезапустить исходящее Xray"
+
 msgid "Settings"
 msgstr "Настройки"
 
@@ -3412,6 +3442,30 @@ msgstr "Cloudflare WARP через MASQUE для sing-box-extended. Ядро с�
 
 msgid "Optional. sing-box-extended sends this key when it registers the device."
 msgstr "Необязательно. sing-box-extended передаёт этот ключ, когда регистрирует устройство."
+
+msgid "Optional. sing-box-extended sends this key when it registers the device. Account type and quota stay unknown: the core registers MASQUE itself."
+msgstr "Необязательно. sing-box-extended передаёт этот ключ, когда регистрирует устройство. Тип учётной записи и квота неизвестны: устройство регистрирует само ядро."
+
+msgid "UDP port of the Cloudflare server. 443 is the usual one and keeps the address chosen by Cloudflare. Another port uses 162.159.198.1, because otherwise the core stays on 443."
+msgstr "UDP-порт сервера Cloudflare. Обычно это 443, и тогда остаётся адрес, который выбрал Cloudflare. Другой порт использует 162.159.198.1, иначе ядро останется на 443."
+
+msgid "Handshake timeout, seconds"
+msgstr "Таймаут рукопожатия, секунды"
+
+msgid "Enter seconds, from 1 to 300. Leave empty for no such limit. QUIC still drops the handshake after 5 seconds without a single packet. Needs sing-box-extended 2.7.3. On an older core the option is saved but not written into the config."
+msgstr "Введите секунды, от 1 до 300. Пусто — без этого предела. Если 5 секунд нет ни одного пакета, QUIC обрывает рукопожатие сам. Нужен sing-box-extended 2.7.3. На более старом ядре опция сохранится, но в конфиг не попадёт."
+
+msgid "TCP only (L4)"
+msgstr "Только TCP (L4)"
+
+msgid "Faster mode for websites over TCP. Client UDP does not go through this profile: QUIC, games and DNS through the tunnel stay on another server in the section. The path to Cloudflare is still UDP. Needs sing-box-extended 2.7.3. On an older core the option is saved but not written into the config."
+msgstr "Быстрее для сайтов по TCP. UDP клиентов через этот профиль не идёт: QUIC, игры и DNS через туннель останутся на другом сервере секции. Путь до Cloudflare по-прежнему UDP. Нужен sing-box-extended 2.7.3. На более старом ядре опция сохранится, но в конфиг не попадёт."
+
+msgid "Enter a number from 1 to 300, or leave empty"
+msgstr "Введите число от 1 до 300 или оставьте пустым"
+
+msgid "empty"
+msgstr "пусто"
 
 msgid "Do not connect to the WARP MASQUE server over IPv6."
 msgstr "Не подключаться к серверу WARP MASQUE по IPv6."

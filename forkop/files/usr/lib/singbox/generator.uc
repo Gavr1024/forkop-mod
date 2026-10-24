@@ -405,6 +405,24 @@ function sing_box_at_least_1_15() {
     return v.major > 1 || (v.major == 1 && v.minor >= 15);
 }
 
+function sing_box_extended_revision() {
+    let m = match(sing_box_version_text(), /extended-([0-9]+)\.([0-9]+)\.([0-9]+)/);
+    if (m == null)
+        return null;
+    return { major: int(m[1]), minor: int(m[2]), patch: int(m[3]) };
+}
+
+function sing_box_masque_l4_supported() {
+    let v = sing_box_extended_revision();
+    if (v == null)
+        return false;
+    if (v.major != 2)
+        return v.major > 2;
+    if (v.minor != 7)
+        return v.minor > 7;
+    return v.patch >= 3;
+}
+
 const RULESET_HTTP_CLIENT_TAG = "ruleset-http";
 
 function usable_http_client_detour(detour) {
@@ -3737,10 +3755,20 @@ function openconnect_resolve_ipv4(host, label) {
         return host;
     if (host == "" || match(host, /^[a-z0-9._-]+$/) == null)
         return "";
+    let ip = openconnect_direct_ipv4(host, 1);
+    if (ip != "") {
+        openconnect_remember_ipv4(host, ip);
+        return ip;
+    }
+    let saved = openconnect_saved_ipv4(host);
+    if (saved != "") {
+        openconnect_notice("OpenConnect '" + label + "' is using the saved address " + saved + ".");
+        return saved;
+    }
     if (openconnect_dns_deadline == 0)
         openconnect_dns_deadline = clock()[0] + 60;
     while (clock()[0] < openconnect_dns_deadline) {
-        let ip = openconnect_direct_ipv4(host, 1);
+        ip = openconnect_direct_ipv4(host, 1);
         if (ip != "") {
             openconnect_remember_ipv4(host, ip);
             return ip;
@@ -3748,11 +3776,6 @@ function openconnect_resolve_ipv4(host, label) {
         if (clock()[0] + 3 >= openconnect_dns_deadline)
             break;
         system("sleep 3");
-    }
-    let saved = openconnect_saved_ipv4(host);
-    if (saved != "") {
-        openconnect_notice("OpenConnect '" + label + "' is using the saved address " + saved + ".");
-        return saved;
     }
     return "";
 }
@@ -3884,7 +3907,7 @@ function openconnect_run_auth(server, username, password, auth_group, fingerprin
         " <" + openconnect_shell_quote(pass_path) +
         " >" + openconnect_shell_quote(out_path) + " 2>&1 & " +
         "pid=$!; i=0; " +
-        "while [ \"$i\" -lt 25 ]; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; i=$((i+1)); done; " +
+        "while [ \"$i\" -lt 10 ]; do kill -0 \"$pid\" 2>/dev/null || break; sleep 1; i=$((i+1)); done; " +
         "kill \"$pid\" 2>/dev/null; wait \"$pid\" 2>/dev/null";
     system(command);
     let raw = "";
@@ -3896,6 +3919,21 @@ function openconnect_run_auth(server, username, password, auth_group, fingerprin
     }
     system("rm -f " + openconnect_shell_quote(pass_path) + " " + openconnect_shell_quote(out_path) + " >/dev/null 2>&1");
     return raw;
+}
+
+let openconnect_last_auth_raw = "";
+
+function openconnect_group_required(raw) {
+    let text = lc(as_string(raw));
+    if (index(text, "authentication group") >= 0)
+        return true;
+    if (index(text, "authgroup") >= 0)
+        return true;
+    if (index(text, "auth group") >= 0)
+        return true;
+    if (index(text, "select your group") >= 0)
+        return true;
+    return false;
 }
 
 function openconnect_fetch_cookie(label, server, username, password, auth_group, fingerprint, proxy_port, flavor, soft, max_tries, quiet, insecure) {
@@ -3911,6 +3949,7 @@ function openconnect_fetch_cookie(label, server, username, password, auth_group,
     let limit = int(max_tries || 0);
     if (limit <= 0)
         limit = 3;
+    openconnect_last_auth_raw = "";
     while (tries < limit) {
         raw = openconnect_run_auth(server, username, password, auth_group, fingerprint_now, proxy_port, flavor, sprintf("%d-%d-%d", stamp[0], stamp[1], tries), insecure);
         if (raw == null) {
@@ -3922,6 +3961,7 @@ function openconnect_fetch_cookie(label, server, username, password, auth_group,
         if (learned != "")
             openconnect_peer_put(server, { sha: learned });
         let cookie = openconnect_parse_cookie(raw);
+        openconnect_last_auth_raw = raw;
         if (cookie != "") {
             openconnect_notice("OpenConnect '" + label + "' obtained a session cookie.");
             return cookie;
@@ -4103,7 +4143,7 @@ function add_openconnect_connection(config, state, section, taken, selector_tags
             let auth_server = target.port == "" ? auth_host : auth_host + ":" + target.port;
             let flavor = openconnect_flavor(client);
             let cookie = openconnect_fetch_cookie(label, auth_server, username, password, auth_group, fingerprint, 0, flavor, true, 0, false, skip_cert);
-            if (cookie == "" && trim(auth_group) == "")
+            if (cookie == "" && trim(auth_group) == "" && openconnect_group_required(openconnect_last_auth_raw))
                 cookie = openconnect_fetch_cookie(label, auth_server, username, password, "all", fingerprint, 0, flavor, true, 0, false, skip_cert);
             if (cookie != "")
                 endpoint.cookie = cookie;
@@ -4858,6 +4898,30 @@ function add_masque_profiles(config, state, section, taken, selector_tags, urlte
             profile: profile,
             routing_mark: runtime_constants.OUTBOUND_MARK
         };
+        let port = trim(option(client, "endpoint_port", "443"));
+        if (port != "443" && port != "500" && port != "1701" && port != "4500" && port != "4443" && port != "8443" && port != "8095")
+            port = "443";
+        if (port != "443") {
+            endpoint.address = "162.159.198.1";
+            endpoint.port = int(port, 10);
+        }
+        let l4 = bool_option(client, "l4_proxy", false);
+        let handshake = trim(option(client, "handshake_timeout", ""));
+        let handshake_seconds = 0;
+        if (match(handshake, /^[0-9]+$/) != null)
+            handshake_seconds = int(handshake, 10);
+        if (handshake_seconds == null || handshake_seconds < 0)
+            handshake_seconds = 0;
+        if (handshake_seconds > 300)
+            handshake_seconds = 300;
+        if ((l4 || handshake_seconds > 0) && !sing_box_masque_l4_supported())
+            warn("WARP MASQUE '", label, "': TCP-only and handshake timeout need sing-box-extended 2.7.3 or newer, so they were not written\n");
+        else {
+            if (l4)
+                endpoint.use_l4_proxy = true;
+            if (handshake_seconds > 0)
+                endpoint.handshake_timeout = handshake_seconds + "s";
+        }
         if (!openvpn_apply_detour(config, section, taken, endpoint, label))
             continue;
         if (as_string(endpoint.detour || "") != "" && type(endpoint.profile) == "object")
@@ -7266,7 +7330,7 @@ function repair_openconnect_auth() {
         let cookie = openconnect_fetch_cookie(
             label, key, endpoint.username, endpoint.password, auth_group, fingerprint, proxy_port, flavor, proxy_port <= 0, 0, false, skip_cert
         );
-        if (cookie == "" && auth_group == "")
+        if (cookie == "" && auth_group == "" && openconnect_group_required(openconnect_last_auth_raw))
             cookie = openconnect_fetch_cookie(
                 label, key, endpoint.username, endpoint.password, "all", fingerprint, proxy_port, flavor, proxy_port <= 0, 0, false, skip_cert
             );
