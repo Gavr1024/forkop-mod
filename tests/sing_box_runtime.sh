@@ -33,8 +33,10 @@ grep -Fq 'endpoint.cookie = cookie' "$SINGBOX_GENERATOR_UC" ||
   fail "OpenConnect must pass the session cookie through"
 grep -Fq 'endpoint.detour = detour_tag' "$SINGBOX_GENERATOR_UC" ||
   fail "OpenConnect cascade must use the section detour"
-grep -Fq 'openconnect --protocol=anyconnect --authenticate' "$SINGBOX_GENERATOR_UC" ||
+grep -Fq 'openconnect --protocol=' "$SINGBOX_GENERATOR_UC" ||
   fail "OpenConnect cascade must obtain a session cookie with openconnect"
+grep -Fq ' --authenticate ' "$SINGBOX_GENERATOR_UC" ||
+  fail "OpenConnect cascade must authenticate before reading the cookie"
 grep -Fq 'socks5://127.0.0.1:' "$SINGBOX_GENERATOR_UC" ||
   fail "OpenConnect cascade cookie must be requested through the section SOCKS proxy"
 grep -Fq 'cascade SOCKS port is not ready' "$SINGBOX_GENERATOR_UC" ||

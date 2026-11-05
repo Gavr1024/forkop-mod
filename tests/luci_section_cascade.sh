@@ -38,6 +38,8 @@ assert.strictEqual(sectionRef.handleRemove('parent', event), result);
 assert.deepStrictEqual(cleanupCalls, [
   ['parent', 'subscription_url', []],
   ['parent', 'section_interface', []],
+  ['parent', 'openconnect', []],
+  ['parent', 'openvpn', []],
   ['parent', 'urltest', []],
   ['parent', 'priority_group', []],
 ]);

@@ -484,8 +484,8 @@ extract_fn "$XRAY_GEN" "primary_dns_config" | grep -Fq 'bootstrap_dns_server' ||
   fail "Xray DoH hostnames must be resolved via bootstrap DNS"
 extract_fn "$XRAY_GEN" "dns_proxy_target" | grep -Fq 'singbox_forced_outbound' ||
   fail "DNS through a sing-box section must use that section's own SOCKS entrance"
-extract_fn "$LIB/core/engine.uc" "fullroute_sidecar_specs" | grep -Fq 'section_is_dns_detour_target' ||
-  fail "a sing-box DNS detour section needs its own sidecar even without full routing"
+extract_fn "$LIB/core/engine.uc" "fullroute_sidecar_specs" | grep -Fq 'proxy_core(section) != "sing-box"' ||
+  fail "every enabled sing-box connection section keeps its own sidecar entrance"
 extract_fn "$XRAY_GEN" "generate_config" | grep -Fq 'apply_dns_client_routes' ||
   fail "DNS client routes must be applied after section outbounds exist"
 extract_fn "$XRAY_GEO" "community_matchers" | grep -Fq 'v2fly_geosite_tag' ||
@@ -734,11 +734,11 @@ grep -Fq 'sing-box sidecar is not required' "$LIFECYCLE" ||
   fail "Xray-only configs must skip starting sing-box"
 grep -Fq 'sing-box is not required; Xray is the routing plane' "$LIB/config/validator.uc" ||
   fail "check-requirements must not abort on missing sing-box when Xray-only"
-extract_fn "$LIB/config/validator.uc" "check_runtime_requirements" | grep -Fq 'need_singbox' ||
+extract_fn "$LIB/config/validator.uc" "check_runtime_requirement_steps" | grep -Fq 'need_singbox' ||
   fail "check_runtime_requirements must skip sing-box when Xray owns the plane"
-extract_fn "$LIB/config/validator.uc" "check_runtime_requirements" | grep -Fq 'need_xray' ||
+extract_fn "$LIB/config/validator.uc" "check_runtime_requirement_steps" | grep -Fq 'need_xray' ||
   fail "check_runtime_requirements must skip Xray when sing-box owns the plane"
-extract_fn "$LIB/config/validator.uc" "check_runtime_requirements" | grep -Fq 'Install it from Components' ||
+extract_fn "$LIB/config/validator.uc" "check_runtime_requirement_steps" | grep -Fq 'Install it from Components' ||
   fail "missing cores must be installed from Components, not as package dependencies"
 extract_fn "$LIFECYCLE" "stop_sing_box_service" | grep -Fq 'file_exists' ||
   fail "stop must ignore a missing sing-box init script"

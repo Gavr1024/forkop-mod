@@ -156,8 +156,6 @@ for (const [key, engine] of [
   ["dns_recovery_check_interval", "sing-box"],
   ["dns_check_timeout", "sing-box"],
   ["enable_yacd", "sing-box"],
-  ["config_path", "sing-box"],
-  ["cache_path", "sing-box"],
 ]) {
   const at = settings.indexOf('"' + key + '"');
   if (at < 0) throw new Error("missing settings option " + key);
@@ -167,7 +165,7 @@ for (const [key, engine] of [
   }
 }
 
-for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strategy", "dns_rewrite_ttl"]) {
+for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strategy", "dns_rewrite_ttl", "config_path", "cache_path"]) {
   const at = settings.indexOf('"' + key + '"');
   if (at < 0) throw new Error("missing settings option " + key);
   const window = settings.slice(at, at + 700);
@@ -254,7 +252,10 @@ const fn = new Function(
   "settings",
   "document",
   "UCI_PACKAGE",
-  throughBind + "\nreturn { restrictSectionEngine };",
+  "const proxyCoreTouched = new Set();\n" +
+    "function savedProxyCore(sectionId) { return trimmedUci(sectionId, \"proxy_core\"); }\n" +
+    throughBind +
+    "\nreturn { restrictSectionEngine };",
 );
 const api = fn(uci, settingsApi, document, "forkop");
 
@@ -299,8 +300,8 @@ widgets["cbid.forkop.cfg.action"] = dropdown("connection");
 widgets["cbid.forkop.cfg.proxy_core"] = dropdown("");
 uciStore.cfg = { ".type": "section", action: "connection", proxy_core: "xray" };
 currentEngine = "sing-box";
-if (optionFor("xray").checkDepends("cfg") !== false) {
-  throw new Error("a cleared proxy core widget must not keep the stale UCI core");
+if (optionFor("xray").checkDepends("cfg") !== true) {
+  throw new Error("an untouched proxy core widget must keep the saved UCI core");
 }
 
 const nested = api.restrictSectionEngine(

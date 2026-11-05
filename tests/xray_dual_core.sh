@@ -292,7 +292,7 @@ require_contains "$LIFECYCLE_UC" 'start sing-box sidecar' \
   "Xray plane still starts the sing-box sidecar when a section needs it"
 require_contains "$LIFECYCLE_UC" 'module_success(XRAY_UC, [ "stop-runtime" ])' \
   "lifecycle must stop xray after sing-box"
-require_contains "$LIFECYCLE_UC" 'module_success(XRAY_UC, [ "reload-runtime" ])' \
+require_contains "$LIFECYCLE_UC" 'module_success(XRAY_UC, [ "reload-runtime"' \
   "reload must refresh the xray sidecar"
 
 require_contains "$ACTION_UC" 'function install_xray' \
@@ -391,7 +391,7 @@ require_contains "$FE_SRC/forkop/tabs/diagnostic/checks/runXrayCheck.ts" 'export
   "diagnostics must run an Xray check"
 require_contains "$FE_SRC/forkop/tabs/monitoring/initController.ts" "type MonitoringTabId = 'active' | 'closed' | 'cores'" \
   "monitoring must have a Cores tab"
-require_contains "$FE_SRC/forkop/tabs/monitoring/initController.ts" "normalizeString(section.proxy_core).toLowerCase() === 'xray'" \
+require_contains "$FE_SRC/forkop/tabs/monitoring/initController.ts" 'const explicit = normalizeString(section.proxy_core).toLowerCase();' \
   "monitoring must map section.proxy_core to Xray"
 require_contains "$FE_SRC/forkop/tabs/monitoring/render.ts" "_('Cores')" \
   "monitoring UI must render the Cores tab button"

@@ -52,8 +52,10 @@ grep -Fq 'refresh-cron-from-uci' "$LIFECYCLE_UC" ||
   fail "service/lifecycle.uc start/reload must call the ucode cron refresh operation"
 grep -Fq 'remove-cron-jobs' "$LIFECYCLE_UC" ||
   fail "service/lifecycle.uc stop must call the ucode cron removal operation"
-grep -Fq '"list-update"' "$LIFECYCLE_UC" ||
-  fail "service/lifecycle.uc start/reload must run list updates through components/updates.uc"
+grep -Fq 'list-update-if-missing' "$LIFECYCLE_UC" ||
+  fail "service/lifecycle.uc start must fill missing lists through components/updates.uc"
+grep -Fq 'list-update-unless-disabled' "$LIFECYCLE_UC" ||
+  fail "service/lifecycle.uc reload must update lists through components/updates.uc"
 grep -Fq 'subscription_update: [ "components/updates.uc", "subscription-update", 2 ]' "$CLI_UC" ||
   fail "service/cli.uc must run subscription updates through components/updates.uc"
 if grep -R -n -F 'updates_runtime.sh' "$FORKOP_BIN" "$ROOT_DIR/forkop/files/usr/lib" --include='*.sh' >/dev/null 2>&1; then

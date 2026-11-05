@@ -145,6 +145,14 @@ function enrichUiValues(fileData, option, block, values) {
     for (const value of extractFunctionSecondStringArgs(fileData, "populateTransportValues", "addOptionValue"))
       addUnique(values, value);
   }
+
+  if (option === "dns_type" && (block.includes("dnsProtocolChoices(") || block.includes("dnsTypeChoices("))) {
+    for (const functionName of ["dnsProtocolChoices", "dnsTypeChoices"]) {
+      const body = extractBraceBody(fileData, `function ${functionName}`);
+      for (const match of body.matchAll(/["'](doh3|doh|doq|dot|udp)["']/g))
+        addUnique(values, match[1]);
+    }
+  }
 }
 
 function extractUi(repo, fields) {

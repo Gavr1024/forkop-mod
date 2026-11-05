@@ -56,8 +56,8 @@ reject_pattern "clear_startup_failsafe_trap" \
   "forkop shell entrypoint must not keep old trap helper"
 require_pattern 'module_background(UPDATES_UC, [ "list-update-if-missing" ])' \
   "startup must not download lists when flash cache already has DAT"
-require_pattern 'module_background(UPDATES_UC, [ "list-update" ])' \
-  "reload still force-updates lists when the plan says lists changed"
+require_pattern 'module_background(UPDATES_UC, [ "list-update-unless-disabled" ])' \
+  "reload updates lists through updates.uc when the plan says lists changed"
 require_pattern 'module_background(DIAGNOSTICS_UC, [ "get-system-info" ])' \
   "startup system-info background job must be owned by service/lifecycle.uc"
 require_pattern 'startup_config_fingerprint = external_config_fingerprint();' \

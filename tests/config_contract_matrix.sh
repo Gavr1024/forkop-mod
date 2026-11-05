@@ -4,6 +4,7 @@ set -eo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STABLE_REF="${FORKOP_STABLE_REF:-0.7.19.9}"
 STABLE_REPO="${FORKOP_STABLE_REPO:-}"
+UPSTREAM_REPO="${FORKOP_UPSTREAM_REPO:-https://github.com/ushan0v/forkop.git}"
 MATRIX_SCRIPT="$ROOT_DIR/tests/helpers/config_contract_matrix.js"
 WORK_DIR="$(mktemp -d)"
 LEGACY_STEM="$(printf '\160\157\144\153\157\160')"
@@ -23,7 +24,8 @@ ensure_stable_ref() {
     return 0
   fi
 
-  git -C "$ROOT_DIR" fetch --force --depth=1 origin "refs/tags/$STABLE_REF:refs/tags/$STABLE_REF" >/dev/null 2>&1 ||
+  git -C "$ROOT_DIR" fetch --force --depth=1 origin "refs/tags/$STABLE_REF:refs/tags/$STABLE_REF" >/dev/null 2>&1 && return 0
+  git -C "$ROOT_DIR" fetch --force --depth=1 "$UPSTREAM_REPO" "refs/tags/$STABLE_REF:refs/tags/$STABLE_REF" >/dev/null 2>&1 ||
     fail "stable ref is unavailable and could not be fetched: $STABLE_REF"
 }
 

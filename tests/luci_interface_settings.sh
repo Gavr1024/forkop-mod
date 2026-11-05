@@ -9,7 +9,7 @@ fail() {
   exit 1
 }
 
-grep -Fq 'function dnsTypeChoices() {' "$SECTION_JS" ||
+grep -Fq 'function dnsTypeChoices(' "$SECTION_JS" ||
   fail "network interface settings must define DNS protocol choices"
 grep -Fq 'dnsTypeChoices().forEach((choice) => o.value(choice.value, choice.label));' "$SECTION_JS" ||
   fail "network interface settings must populate the DNS protocol field"
