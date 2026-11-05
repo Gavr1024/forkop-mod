@@ -1441,9 +1441,9 @@ function settings_list(key, fallback) {
 
 function xray_query_strategy() {
     let strategy = lc(option(settings_section(), "dns_strategy", "prefer_ipv4"));
-    if (strategy == "ipv6_only" || strategy == "prefer_ipv6")
+    if (strategy == "ipv6_only")
         return "UseIPv6";
-    if (strategy == "ipv4_only" || strategy == "prefer_ipv4")
+    if (strategy == "ipv4_only")
         return "UseIPv4";
     return "UseIP";
 }
@@ -2177,12 +2177,37 @@ function plane_fallback_tag() {
     return xray_constants.FREEDOM_TAG;
 }
 
+function ensure_singbox_fullroute_outbound(config, spec) {
+    for (let outbound in array_or_empty(config.outbounds)) {
+        if (type(outbound) == "object" && as_string(outbound.tag) == spec.outbound_tag)
+            return;
+    }
+    push(config.outbounds, {
+        protocol: "socks",
+        tag: spec.outbound_tag,
+        settings: {
+            servers: [{
+                address: "127.0.0.1",
+                port: spec.port
+            }]
+        },
+        streamSettings: {
+            sockopt: xray_outbound.sockopt()
+        }
+    });
+}
+
 function section_tproxy_target(config, section) {
     let name = option(section, ".name", "");
     if (name == "")
         return null;
     if (connections.proxy_core(section) == "xray")
         return section_socks_route_target(config, name);
+    let spec = engine.fullroute_sidecar_spec(name);
+    if (spec != null) {
+        ensure_singbox_fullroute_outbound(config, spec);
+        return { outboundTag: spec.outbound_tag };
+    }
     return { outboundTag: xray_constants.SINGBOX_SIDECAR_TAG };
 }
 
@@ -2207,26 +2232,6 @@ function apply_section_tproxy_matchers(config, section, target) {
         push_tproxy_rule(config, target, { domain: domains });
     if (length(ips) > 0)
         push_tproxy_rule(config, target, { ip: ips });
-}
-
-function ensure_singbox_fullroute_outbound(config, spec) {
-    for (let outbound in array_or_empty(config.outbounds)) {
-        if (type(outbound) == "object" && as_string(outbound.tag) == spec.outbound_tag)
-            return;
-    }
-    push(config.outbounds, {
-        protocol: "socks",
-        tag: spec.outbound_tag,
-        settings: {
-            servers: [{
-                address: "127.0.0.1",
-                port: spec.port
-            }]
-        },
-        streamSettings: {
-            sockopt: xray_outbound.sockopt()
-        }
-    });
 }
 
 function apply_section_tproxy_sources(config, section, target) {
@@ -2514,6 +2519,15 @@ function apply_stats_api(config) {
         statsOutboundUplink: true,
         statsOutboundDownlink: true
     };
+    // Drop connections that went quiet. Otherwise a sleeping phone keeps them until Forkop stops.
+    if (type(config.policy.levels) != "object")
+        config.policy.levels = {};
+    config.policy.levels["0"] = {
+        handshake: 4,
+        connIdle: 300,
+        uplinkOnly: 2,
+        downlinkOnly: 5
+    };
 }
 
 function empty_config() {
@@ -2631,11 +2645,22 @@ function add_native_policy_outbounds(config, taken) {
     }
 }
 
+function socks_server_address(outbound) {
+    let settings = object_or_empty(outbound.settings);
+    let address = lc(trim(as_string(settings.address || "")));
+    if (address != "")
+        return address;
+    let servers = array_or_empty(settings.servers);
+    if (length(servers) == 0)
+        return "";
+    return lc(trim(as_string(object_or_empty(servers[0]).address || "")));
+}
+
 function outbound_is_local_socks(outbound) {
     outbound = object_or_empty(outbound);
     if (lc(as_string(outbound.protocol || "")) != "socks")
         return false;
-    let address = lc(trim(as_string(object_or_empty(outbound.settings).address || "")));
+    let address = socks_server_address(outbound);
     return address == "127.0.0.1" || address == "::1" || address == "localhost";
 }
 
@@ -2656,14 +2681,20 @@ function outbound_is_provider_direct(outbound) {
 
 function apply_output_interface(config) {
     let iface = output_network_interface();
-    if (iface == "")
-        return;
     for (let outbound in array_or_empty(config.outbounds)) {
         if (type(outbound) != "object")
             continue;
         if (lc(as_string(outbound.protocol || "")) == "blackhole")
             continue;
-        if (outbound_is_local_socks(outbound) || outbound_is_provider_direct(outbound))
+        if (outbound_is_local_socks(outbound)) {
+            // Same as sing-box dialing Xray: keep the outbound mark, but do not
+            // bind the modem. The mark does not pull a 127.0.0.1 dial outside.
+            if (type(outbound.settings) == "object" && type(outbound.settings.servers) == "array" &&
+                type(outbound.streamSettings) == "object" && type(outbound.streamSettings.sockopt) == "object")
+                delete outbound.streamSettings.sockopt.interface;
+            continue;
+        }
+        if (iface == "" || outbound_is_provider_direct(outbound))
             continue;
         if (type(outbound.streamSettings) != "object")
             outbound.streamSettings = {};

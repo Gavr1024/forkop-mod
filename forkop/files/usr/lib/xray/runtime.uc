@@ -133,6 +133,7 @@ function subscription_cache_stamp() {
 
 function config_input_fingerprint() {
     let body = join("\n", [
+        file_content_stamp((getenv("FORKOP_LIB") || "/usr/lib/forkop") + "/xray/generator.uc"),
         file_content_stamp("/etc/config/forkop"),
         file_content_stamp(xray_constants.XRAY_SELECTED_FILE),
         file_content_stamp(xray_constants.ALLOW_DOMAINS_DAT),
@@ -2259,17 +2260,62 @@ function probe_socks_delay(port, url, timeout_ms) {
     return delay > 0 ? delay : 1;
 }
 
-function latency_test_json(latency_type, tag, timeout) {
+function report_latency_progress(path, completed, total, failed, current) {
+    path = trim(as_string(path));
+    if (path == "")
+        return;
+    let lib = getenv("FORKOP_LIB") || "/usr/lib/forkop";
+    command_success_from_args([
+        "ucode", "-L", lib, lib + "/service/ui.uc",
+        "latency-progress-state", path,
+        as_string(completed), as_string(total), as_string(failed), as_string(current)
+    ]);
+}
+
+function latency_job_running(path) {
+    path = trim(as_string(path));
+    if (path == "")
+        return true;
+    let data = fs.readfile(path);
+    if (data == null)
+        return true;
+    try {
+        let value = json(data);
+        if (type(value) != "object" || value == null)
+            return true;
+        return value.running === true;
+    }
+    catch (e) {
+        return true;
+    }
+}
+
+function latency_test_json(latency_type, tag, timeout, progress_path) {
     let tags = latency_tags(latency_type, tag);
     let url = latency_test_url();
     let timeout_ms = int(timeout || 5000);
     let delays = read_json_object(xray_constants.XRAY_LATENCY_FILE);
     if (type(delays) != "object")
         delays = {};
+    let total = length(tags);
+    let count = 0;
+    let failed = 0;
+    report_latency_progress(progress_path, count, total, failed, "");
     for (let item in tags) {
+        if (!latency_job_running(progress_path))
+            break;
+        report_latency_progress(progress_path, count, total, failed, item);
         let port = node_port_by_tag(item);
-        delays[item] = probe_socks_delay(port, url, timeout_ms);
+        let delay = probe_socks_delay(port, url, timeout_ms);
+        delays[item] = delay;
+        let one = {};
+        one[item] = delay;
+        write_latency_delays(one);
+        if (delay <= 0)
+            failed++;
+        count++;
     }
+    report_latency_progress(progress_path, count, total, failed, "");
     if (!write_latency_delays(delays))
         return 1;
     return 0;
@@ -2705,7 +2751,7 @@ else if (mode == "connections")
 else if (mode == "nodes")
     exit(nodes_json());
 else if (mode == "latency-test")
-    exit(latency_test_json(ARGV[1] || "", ARGV[2] || "", ARGV[3] || ""));
+    exit(latency_test_json(ARGV[1] || "", ARGV[2] || "", ARGV[3] || "", ARGV[4] || ""));
 else if (mode == "proxy-latency")
     exit(proxy_latency_json(ARGV[1] || "", ARGV[2] || ""));
 else if (mode == "group-latency")

@@ -97,6 +97,7 @@ const ZAPRET2_DESYNC_MARK_POSTNAT = constant_value("ZAPRET2_DESYNC_MARK_POSTNAT"
 const BYEDPI_BIN = constant_value("BYEDPI_BIN", "/usr/bin/ciadpi");
 
 const DNS_APPLY_UC = LIB_DIR + "/dns/apply.uc";
+const IPV6_RELAY_UC = LIB_DIR + "/ipv6/relay.uc";
 const VALIDATOR_UC = LIB_DIR + "/config/validator.uc";
 const SERVER_UC = LIB_DIR + "/server/service.uc";
 const NFT_UC = LIB_DIR + "/nft/apply.uc";
@@ -105,6 +106,7 @@ const SINGBOX_UC = LIB_DIR + "/singbox/runtime.uc";
 const XRAY_UC = LIB_DIR + "/xray/runtime.uc";
 const PRIORITY_UC = LIB_DIR + "/singbox/priority.uc";
 const DNS_FAILOVER_UC = LIB_DIR + "/singbox/dns_failover.uc";
+const SINGBOX_IDLE_UC = LIB_DIR + "/singbox/idle.uc";
 const SUBSCRIPTION_CACHE_UC = LIB_DIR + "/subscription/cache.uc";
 const UPDATES_UC = LIB_DIR + "/components/updates.uc";
 const SLOTS_UC = LIB_DIR + "/config/slots.uc";
@@ -588,6 +590,16 @@ function dnsmasq_restore_fail_safe() {
     return dns_apply_status([ "failsafe-restore" ]);
 }
 
+function ipv6_relay_sync() {
+    if (setting_bool("dont_touch_dhcp", false))
+        return module_status(IPV6_RELAY_UC, [ "restore" ]);
+    return module_status(IPV6_RELAY_UC, [ "sync" ]);
+}
+
+function ipv6_relay_restore() {
+    return module_status(IPV6_RELAY_UC, [ "restore" ]);
+}
+
 function sync_excluded_dns() {
     if (!dns_apply_success([ "sync-excluded" ])) {
         log_message("Failed to start DNS for fully excluded devices", "warn");
@@ -1020,9 +1032,12 @@ function start_impl() {
         log_message("Failed to start DNS failover runtime", "fatal");
         return status;
     }
+    if (!module_success(SINGBOX_IDLE_UC, [ "start-runtime" ]))
+        log_message("Silent sing-box connections will not be closed automatically", "warn");
 
     module_background(DIAGNOSTICS_UC, [ "get-system-info" ]);
     schedule_interface_restarts();
+    ipv6_relay_sync();
     return 0;
 }
 
@@ -1031,6 +1046,7 @@ function stop_main() {
 
     log_message("Stopping Forkop", "info");
     module_success(DNS_FAILOVER_UC, [ "stop-runtime" ]);
+    module_success(SINGBOX_IDLE_UC, [ "stop-runtime" ]);
     module_success(PRIORITY_UC, [ "stop-runtime" ]);
     module_success(SUBSCRIPTION_CACHE_UC, [ "stop-deferred-bootstrap-worker" ]);
     module_success(UPDATES_UC, [ "stop-list-update" ]);
@@ -1078,6 +1094,8 @@ function cleanup_failed_runtime() {
     let dns_status = dnsmasq_restore_fail_safe();
     if (dns_status != 0 && status == 0)
         status = dns_status;
+
+    ipv6_relay_restore();
 
     let mark_status = mark_runtime_stopped_clean();
     if (mark_status != 0 && status == 0)
@@ -1167,6 +1185,8 @@ function stop_impl() {
         if (dns_status != 0)
             status = dns_status;
     }
+
+    ipv6_relay_restore();
 
     let runtime_status = stop_main();
     if (runtime_status != 0)
@@ -1483,6 +1503,7 @@ function reload(reason) {
 
     if (plan.needs_sing_box_reload == 1) {
         module_success(DNS_FAILOVER_UC, [ "stop-runtime" ]);
+        module_success(SINGBOX_IDLE_UC, [ "stop-runtime" ]);
         module_success(PRIORITY_UC, [ "stop-runtime" ]);
         let need_sidecar = need_singbox_process();
         if (need_sidecar) {
@@ -1547,6 +1568,8 @@ function reload(reason) {
             cleanup_failed_runtime();
             return status;
         }
+        if (!module_success(SINGBOX_IDLE_UC, [ "start-runtime" ]))
+            log_message("Silent sing-box connections will not be closed automatically", "warn");
     }
     else if (plan.needs_nft_rebuild == 1 && nft_populate_enabled == 1) {
         status = nft_populate_runtime_sets();
@@ -1585,6 +1608,7 @@ function reload(reason) {
     }
 
     sync_excluded_dns();
+    ipv6_relay_sync();
 
     if (plan.needs_cron_refresh == 1) {
         status = refresh_cron();

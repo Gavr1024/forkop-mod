@@ -686,6 +686,12 @@ msgstr "DNS-серверы"
 msgid "DNS Strategy"
 msgstr "Стратегия DNS"
 
+msgid "Share the provider IPv6"
+msgstr "Раздавать устройствам IPv6 провайдера"
+
+msgid "If devices on the local network have no IPv6 of their own, turn this on. The router gives them an address from the provider, and they can open sites over IPv6. Traffic still goes through Forkop and the proxy, not straight to the internet. While this is off or Forkop is stopped, nothing changes and the router's previous IPv6 settings stay."
+msgstr "Если у устройств в локальной сети нет своего IPv6, включите эту галку. Роутер выдаст им адрес провайдера, и они смогут открывать сайты по IPv6. Трафик всё равно идёт через Forkop и прокси, а не напрямую в интернет. Пока галка выключена или Forkop остановлен, ничего не меняется: остаются прежние настройки роутера."
+
 msgid "DNS through proxy"
 msgstr "DNS через прокси"
 
@@ -3682,6 +3688,75 @@ msgstr "UDP-порт сервера Cloudflare. Обычно это 2408."
 
 msgid "Do not add the IPv6 address to the tunnel."
 msgstr "Не добавлять IPv6-адрес в туннель."
+
+msgid "Traffic obfuscation"
+msgstr "Обфускация трафика"
+
+msgid "Send extra packets before the WireGuard handshake, starting with one that looks like a DNS query. The handshake itself stays normal WireGuard, so Cloudflare still answers. Needs sing-box-extended. Without this, providers in Russia often block WARP."
+msgstr "Перед рукопожатием WireGuard уходят лишние пакеты, первый из них похож на DNS-запрос. Само рукопожатие остаётся обычным WireGuard, поэтому Cloudflare отвечает. Нужен sing-box-extended. Без этого провайдеры в России часто режут WARP."
+
+msgid "Obfuscation parameters"
+msgstr "Параметры обфускации"
+
+msgid "Generate parameters"
+msgstr "Сгенерировать параметры"
+
+msgid "How many junk packets to send."
+msgstr "Сколько мусорных пакетов отправить."
+
+msgid "Smallest junk packet, in bytes."
+msgstr "Наименьший мусорный пакет, в байтах."
+
+msgid "Largest junk packet, in bytes."
+msgstr "Наибольший мусорный пакет, в байтах."
+
+msgid "The first packet. Generated as a DNS query so the handshake is not a bare WireGuard packet."
+msgstr "Первый пакет. Создаётся как DNS-запрос, чтобы рукопожатие не было голым пакетом WireGuard."
+
+msgid "Optional. Another packet before the handshake."
+msgstr "Необязательно. Ещё один пакет перед рукопожатием."
+
+msgid "Extra bytes added to packets. A number or a range, for example 20-40."
+msgstr "Сколько байт добавить к пакетам. Число или диапазон, например 20-40."
+
+msgid "When to start a new handshake, in seconds. A number or a range."
+msgstr "Когда начинать новое рукопожатие, в секундах. Число или диапазон."
+
+msgid "How long to wait for a handshake answer, in seconds. A number or a range."
+msgstr "Сколько ждать ответ на рукопожатие, в секундах. Число или диапазон."
+
+msgid "When to drop the session, in seconds. A number or a range."
+msgstr "Когда сбрасывать сессию, в секундах. Число или диапазон."
+
+msgid "How long to wait for a keepalive answer, in seconds. A number or a range."
+msgstr "Сколько ждать ответ на keepalive, в секундах. Число или диапазон."
+
+msgid "How many handshake tries to make. A number or a range."
+msgstr "Сколько попыток рукопожатия сделать. Число или диапазон."
+
+msgid "Use a number or a range, for example 20-40"
+msgstr "Укажите число или диапазон, например 20-40"
+
+msgid "Obfuscation on"
+msgstr "Обфускация включена"
+
+msgid "Obfuscation needs sing-box-extended"
+msgstr "Обфускация не попала в конфиг: нужно sing-box-extended"
+
+msgid "The core version is not known yet. Obfuscation is written only by sing-box-extended."
+msgstr "Версия ядра ещё неизвестна. Обфускация записывается только в sing-box-extended."
+
+msgid "sing-box-extended will write these parameters into the config."
+msgstr "sing-box-extended запишет эти параметры в конфиг."
+
+msgid "This core is not sing-box-extended. Obfuscation will be saved but not written, and WARP will stay recognizable."
+msgstr "Это ядро не sing-box-extended. Обфускация сохранится, но в конфиг не попадёт, и WARP останется узнаваемым."
+
+msgid "Obfuscation on, no parameters"
+msgstr "Обфускация включена, параметров нет"
+
+msgid "Generate obfuscation parameters"
+msgstr "Сгенерируйте параметры обфускации"
 
 msgid "Get WARP"
 msgstr "Получить WARP"

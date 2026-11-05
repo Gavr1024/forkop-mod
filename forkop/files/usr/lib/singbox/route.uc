@@ -121,8 +121,8 @@ function resolve_rule_for_section(section, route_rule) {
     resolve_rule.server = runtime_constants.DNS_SERVER_TAG;
     if (sidecar) {
         // Ask the real DNS server, not FakeIP, and do not reuse a cached
-        // 198.18 answer. sing-box then connects to Xray by that IP.
-        resolve_rule.strategy = "ipv4_only";
+        // 198.18 answer. The address family comes from the DNS setting, the
+        // same as a sing-box section reached from Xray.
         resolve_rule.disable_cache = true;
     }
 

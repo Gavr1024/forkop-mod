@@ -177,8 +177,8 @@ function fullroute_sidecar_specs() {
         let name = as_string(section[".name"] || "");
         if (name == "")
             continue;
-        if (!section_has_fully_routed(section) && !section_is_dns_detour_target(name))
-            continue;
+        // Own entrance: Xray already restored the name from the fake address.
+        // The shared SOCKS inbound would only see that address and miss the section.
         let index = length(specs);
         push(specs, {
             name: name,

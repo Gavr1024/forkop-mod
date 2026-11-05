@@ -703,8 +703,8 @@ function base_config(settings, service_address, runtime_context) {
     runtime_context = object_or_empty(runtime_context);
     let inbounds = [];
     if (!engine.is_xray_primary()) {
-        push(inbounds, { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND_TAG, listen: runtime_constants.TPROXY_INBOUND_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true });
-        push(inbounds, { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND6_TAG, listen: runtime_constants.TPROXY_INBOUND6_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true });
+        push(inbounds, { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND_TAG, listen: runtime_constants.TPROXY_INBOUND_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true, udp_timeout: "3m" });
+        push(inbounds, { type: "tproxy", tag: runtime_constants.TPROXY_INBOUND6_TAG, listen: runtime_constants.TPROXY_INBOUND6_ADDRESS, listen_port: runtime_constants.TPROXY_INBOUND_PORT, tcp_fast_open: true, udp_fragment: true, udp_timeout: "3m" });
         push(inbounds, { type: "direct", tag: runtime_constants.DNS_INBOUND_TAG, listen: runtime_constants.DNS_INBOUND_ADDRESS, listen_port: runtime_constants.DNS_INBOUND_PORT });
         if (runtime_context.source_aware_dns)
             push(inbounds, { type: "direct", tag: runtime_constants.SOURCE_DNS_INBOUND_TAG, listen: runtime_constants.SOURCE_DNS_INBOUND_ADDRESS, listen_port: runtime_constants.SOURCE_DNS_INBOUND_PORT });
@@ -716,7 +716,8 @@ function base_config(settings, service_address, runtime_context) {
             listen: runtime_constants.XRAY_PLANE_MIXED_INBOUND_ADDRESS,
             listen_port: runtime_constants.XRAY_PLANE_MIXED_INBOUND_PORT,
             tcp_fast_open: true,
-            udp_fragment: true
+            udp_fragment: true,
+            udp_timeout: "3m"
         });
     }
     for (let inbound in dns_config.inbounds)
@@ -1779,7 +1780,8 @@ function add_mixed_proxy_for_section(config, section, service_address) {
         type: "mixed",
         tag: runtime_constants.inbound_tag(section[".name"] + "-mixed"),
         listen,
-        listen_port
+        listen_port,
+        udp_timeout: "3m"
     };
 
     if (bool_option(section, "mixed_proxy_auth_enabled", false)) {
@@ -1802,7 +1804,8 @@ function add_service_mixed_proxy_inbound(config, tag_name, listen_port, outbound
         type: "mixed",
         tag: tag_name,
         listen: runtime_constants.SERVICE_MIXED_INBOUND_ADDRESS,
-        listen_port
+        listen_port,
+        udp_timeout: "3m"
     });
     push(config.route.rules, {
         action: "route",
@@ -4866,6 +4869,48 @@ function add_connection_manual_links(config, state, section, taken, selector_tag
     }
 }
 
+function warp_amnezia_range(value) {
+    value = trim(as_string(value));
+    if (match(value, /^[0-9]+$/) != null)
+        return int(value, 10);
+    if (match(value, /^[0-9]+-[0-9]+$/) != null)
+        return value;
+    return null;
+}
+
+// Junk and a fake DNS packet before the handshake. Header fields (s1-s4, h1-h4)
+// are omitted: Cloudflare still speaks plain WireGuard.
+function warp_one_sided_amnezia(client) {
+    if (!bool_option(client, "amnezia_enabled", false))
+        return null;
+    let amnezia = {};
+    let set = false;
+    for (let key in [ "jc", "jmin", "jmax" ]) {
+        let value = trim(option(client, "amnezia_" + key, ""));
+        if (match(value, /^[0-9]+$/) != null) {
+            amnezia[key] = int(value, 10);
+            set = true;
+        }
+    }
+    for (let key in [ "i1", "i2", "i3", "i4", "i5" ]) {
+        let value = trim(option(client, "amnezia_" + key, ""));
+        if (value != "") {
+            amnezia[key] = value;
+            set = true;
+        }
+    }
+    for (let key in [ "content_padding_addition", "rekey_after_time", "rekey_timeout", "reject_after_time", "keepalive_timeout", "max_handshake_attempts" ]) {
+        let parsed = warp_amnezia_range(option(client, "amnezia_" + key, ""));
+        if (parsed == null)
+            continue;
+        amnezia[key] = parsed;
+        set = true;
+    }
+    if (!set)
+        return null;
+    return amnezia;
+}
+
 function warp_extended_endpoint(client, tag_name, host, port) {
     let device = trim(option(client, "device_id", ""));
     let token = trim(option(client, "access_token", ""));
@@ -4893,6 +4938,11 @@ function warp_extended_endpoint(client, tag_name, host, port) {
     let license = trim(option(client, "license", ""));
     if (license != "")
         endpoint.profile.license_key = license;
+    let amnezia = warp_one_sided_amnezia(client);
+    if (amnezia != null)
+        endpoint.amnezia = amnezia;
+    else if (bool_option(client, "amnezia_enabled", false))
+        warn("WARP '", tag_name, "': obfuscation is on, but there are no parameters. Use Generate parameters.\n");
     return endpoint;
 }
 
@@ -4943,14 +4993,18 @@ function add_warp_profiles(config, state, section, taken, selector_tags, urltest
                 keepalive: option(client, "keepalive", "25"),
                 allowedips: "0.0.0.0/0,::/0"
             }, tag_name);
+            if (bool_option(client, "amnezia_enabled", false))
+                warn("WARP '", label, "': obfuscation needs sing-box-extended and was not written\n");
         }
         if (!openvpn_apply_detour(config, section, taken, endpoint, label))
             continue;
-        if (bool_option(client, "ipv4_only", false))
-            endpoint.domain_resolver = {
-                server: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
-                strategy: "ipv4_only"
-            };
+        // The router often has no IPv6 of its own. prefer_ipv4 still looks up
+        // an IPv6 address for Cloudflare and the handshake then never answers.
+        // The checkbox only decides whether the tunnel itself gets an IPv6 address.
+        endpoint.domain_resolver = {
+            server: runtime_constants.BOOTSTRAP_DNS_SERVER_TAG,
+            strategy: "ipv4_only"
+        };
         if (as_string(endpoint.detour || "") != "") {
             delete endpoint.listen_port;
             if (extended && type(endpoint.profile) == "object")
@@ -6311,9 +6365,21 @@ function copy_dns_rule(rule) {
 }
 
 let routed_dns_owner = {};
+let routed_dns_owner_at = {};
+let section_place = {};
 
 function reset_routed_dns_owners() {
     routed_dns_owner = {};
+    routed_dns_owner_at = {};
+}
+
+function note_section_places(sections) {
+    section_place = {};
+    let index = 0;
+    for (let section in sections) {
+        section_place[as_string(section[".name"])] = index;
+        index++;
+    }
 }
 
 function dns_matcher_source(rule) {
@@ -6326,7 +6392,10 @@ function dns_matcher_source(rule) {
     return rule;
 }
 
-function remember_routed_dns_owner(rule, server) {
+function remember_routed_dns_owner(rule, server, section_name) {
+    let at = section_place[as_string(section_name)];
+    if (at == null)
+        at = 0;
     for (let key in [ "domain", "domain_suffix", "domain_keyword", "domain_regex" ]) {
         let values = rule[key];
         if (values == null)
@@ -6335,35 +6404,109 @@ function remember_routed_dns_owner(rule, server) {
             values = [ values ];
         for (let value in values) {
             let id = key + ":" + as_string(value);
-            if (routed_dns_owner[id] == null)
+            if (routed_dns_owner[id] == null) {
                 routed_dns_owner[id] = server;
+                routed_dns_owner_at[id] = at;
+            }
         }
     }
 }
 
-function covering_routed_dns_server(rule) {
-    if (type(rule) != "object" || rule.rule_set != null)
-        return "";
-    let server = "";
-    let found = false;
+function matcher_values(rule, key) {
+    let values = rule[key];
+    if (values == null)
+        return [];
+    if (type(values) != "array")
+        return [ values ];
+    return values;
+}
+
+function copy_rule(rule) {
+    let copy = {};
+    for (let key, value in rule)
+        copy[key] = value;
+    return copy;
+}
+
+function group_matchers_by_dns(rule, before_index) {
+    let groups = {};
+    let order = [];
     for (let key in [ "domain", "domain_suffix", "domain_keyword", "domain_regex" ]) {
-        let values = rule[key];
-        if (values == null)
-            continue;
-        if (type(values) != "array")
-            values = [ values ];
-        for (let value in values) {
-            found = true;
-            let owner = routed_dns_owner[key + ":" + as_string(value)];
+        for (let value in matcher_values(rule, key)) {
+            let id = key + ":" + as_string(value);
+            let owner = routed_dns_owner[id];
+            // A DNS section applies only to routing sections below it.
+            if (before_index != null) {
+                let at = routed_dns_owner_at[id];
+                if (at == null || at >= before_index)
+                    owner = null;
+            }
             if (owner == null || owner == "")
-                return "";
-            if (server == "")
-                server = owner;
-            else if (server != owner)
-                return "";
+                owner = runtime_constants.DNS_SERVER_TAG;
+            if (groups[owner] == null) {
+                groups[owner] = {};
+                push(order, owner);
+            }
+            if (groups[owner][key] == null)
+                groups[owner][key] = [];
+            push(groups[owner][key], value);
         }
     }
-    return found ? server : "";
+    let result = [];
+    for (let server in order)
+        push(result, { server: server, matchers: groups[server] });
+    return result;
+}
+
+function push_split_domain_resolves(target, resolve_rule, excluded, before_index) {
+    let groups = group_matchers_by_dns(resolve_rule, before_index);
+    let owned_keys = {};
+    for (let group in groups) {
+        if (group.server == runtime_constants.DNS_SERVER_TAG)
+            continue;
+        let rule = copy_rule(resolve_rule);
+        delete rule.domain;
+        delete rule.domain_suffix;
+        delete rule.domain_keyword;
+        delete rule.domain_regex;
+        delete rule.rule_set;
+        rule.server = group.server;
+        for (let key in group.matchers) {
+            rule[key] = group.matchers[key];
+            for (let value in group.matchers[key])
+                owned_keys[key + ":" + as_string(value)] = true;
+        }
+        push(target, apply_source_exclusions(rule, excluded));
+    }
+    let rest = copy_rule(resolve_rule);
+    rest.server = runtime_constants.DNS_SERVER_TAG;
+    let rest_has = rest.rule_set != null;
+    for (let key in [ "domain", "domain_suffix", "domain_keyword", "domain_regex" ]) {
+        let kept = [];
+        for (let value in matcher_values(rest, key)) {
+            if (!owned_keys[key + ":" + as_string(value)])
+                push(kept, value);
+        }
+        if (length(kept) > 0) {
+            rest[key] = kept;
+            rest_has = true;
+        }
+        else
+            delete rest[key];
+    }
+    if (rest_has)
+        push(target, apply_source_exclusions(rest, excluded));
+}
+
+function dns_action_server_tag(section_name) {
+    return runtime_constants.tag(section_name, "dns-server");
+}
+
+function dns_action_detour_tag(section) {
+    if (!bool_option(section, "dns_detour_enabled", false))
+        return "";
+    let target_section = option(section, "dns_detour_section", "");
+    return target_section == "" ? "" : outbound_tag(target_section);
 }
 
 function push_dns_route_resolve(config, section, dns_rule) {
@@ -6383,7 +6526,7 @@ function push_dns_route_resolve(config, section, dns_rule) {
     if (rule.domain == null && rule.domain_suffix == null && rule.domain_keyword == null &&
         rule.domain_regex == null && rule.rule_set == null)
         return;
-    remember_routed_dns_owner(rule, server);
+    remember_routed_dns_owner(rule, server, section[".name"]);
     push(config.route.rules, apply_source_exclusions(rule, section_excluded_source_ips(section)));
 }
 
@@ -6396,18 +6539,9 @@ function push_dns_action_answer(config, section, dns_rule, rewrite_ttl) {
         push_dns_matcher_rule(config, client_rule);
         push_dns_route_resolve(config, section, dns_rule);
     }
+    else if (dns_answer_is_route(section))
+        remember_routed_dns_owner(dns_matcher_source(dns_rule), dns_action_server_tag(section[".name"]), section[".name"]);
     push_dns_matcher_rule(config, dns_rule);
-}
-
-function dns_action_server_tag(section_name) {
-    return runtime_constants.tag(section_name, "dns-server");
-}
-
-function dns_action_detour_tag(section) {
-    if (!bool_option(section, "dns_detour_enabled", false))
-        return "";
-    let target_section = option(section, "dns_detour_section", "");
-    return target_section == "" ? "" : outbound_tag(target_section);
 }
 
 function add_dns_server_for_section(config, section) {
@@ -6670,10 +6804,9 @@ function add_combined_route_for_section(config, section) {
         if (type(resolve) == "object" && resolve.warning)
             warn(resolve.warning, "\n");
         else if (type(resolve) == "object" && resolve.rule) {
-            let owned = covering_routed_dns_server(route_rule);
-            if (owned != "")
-                resolve.rule.server = owned;
-            push(config.route.rules, apply_source_exclusions(resolve.rule, excluded));
+            if (resolve.rule.disable_cache)
+                resolve.rule.strategy = option(runtime_settings(), "dns_strategy", "prefer_ipv4");
+            push_split_domain_resolves(config.route.rules, resolve.rule, excluded, section_place[as_string(section[".name"])]);
         }
         push(config.route.rules, apply_source_exclusions(route_rule, excluded));
     }
@@ -6856,6 +6989,37 @@ function sidecar_inbound_exists(config, tag_name) {
     return false;
 }
 
+function push_door_resolves(extra, section, inbound) {
+    let strategy = option(runtime_settings(), "dns_strategy", "prefer_ipv4");
+    let lookup = {};
+    let domains = domain_conditions(section);
+    add_domain_array(lookup, "domain", domains.domain);
+    add_domain_array(lookup, "domain_suffix", domains.domain_suffix);
+    add_domain_array(lookup, "domain_keyword", domains.domain_keyword);
+    add_domain_array(lookup, "domain_regex", domains.domain_regex);
+    for (let group in group_matchers_by_dns(lookup, section_place[as_string(section[".name"])])) {
+        if (group.server == runtime_constants.DNS_SERVER_TAG)
+            continue;
+        let rule = {
+            action: "resolve",
+            inbound: inbound,
+            server: group.server,
+            strategy: strategy,
+            disable_cache: true
+        };
+        for (let key in group.matchers)
+            rule[key] = group.matchers[key];
+        push(extra, rule);
+    }
+    push(extra, {
+        action: "resolve",
+        inbound: inbound,
+        server: runtime_constants.DNS_SERVER_TAG,
+        strategy: strategy,
+        disable_cache: true
+    });
+}
+
 function ensure_dns_detour_sidecars(config, sections) {
     if (!engine.is_xray_primary())
         return;
@@ -6883,6 +7047,11 @@ function ensure_dns_detour_sidecars(config, sections) {
         };
         if (target.outbound)
             rule.outbound = target.outbound;
+        if (target.outbound != null && as_string(target.outbound) != "") {
+            // Names listed on a routing DNS section use that server. Any other
+            // name on this door still uses Forkop's main DNS.
+            push_door_resolves(extra, section, spec.inbound_tag);
+        }
         push(extra, rule);
     }
     insert_route_rules_after_system(config, extra);
@@ -6953,6 +7122,7 @@ function generate_config(output_path, service_address, mwan3_active, supports_xh
 
     let sections = enabled_sections(deferred_sections);
     reset_routed_dns_owners();
+    note_section_places(sections);
     let servers = engine.is_xray_primary() ? [] : enabled_servers();
     if (length(sections) == 0 && length(servers) == 0 && trim(as_string(deferred_sections)) == "")
         runtime_generate_unsupported("no enabled sections");

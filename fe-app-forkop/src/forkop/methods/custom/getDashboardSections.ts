@@ -447,12 +447,26 @@ function isUrlTestEnabled(section: Forkop.ConfigSection) {
   return getUrlTestIds(section).length > 0;
 }
 
+function hasClientProfiles(section: Forkop.ConfigSection) {
+  const profiles = section as Forkop.ConfigSection & {
+    warp_clients?: unknown[];
+    masque_clients?: unknown[];
+  };
+
+  return (
+    (Array.isArray(profiles.warp_clients) && profiles.warp_clients.length > 0) ||
+    (Array.isArray(profiles.masque_clients) &&
+      profiles.masque_clients.length > 0)
+  );
+}
+
 function shouldUseProxyGroup(section: Forkop.ConfigSection) {
   return (
     getManualProxyLinks(section).length > 0 ||
     hasSubscriptionSources(section) ||
     getConnectionInterfaces(section).length > 0 ||
     getJsonOutbounds(section).length > 0 ||
+    hasClientProfiles(section) ||
     isUrlTestEnabled(section) ||
     hasConfiguredPriorityList(section)
   );

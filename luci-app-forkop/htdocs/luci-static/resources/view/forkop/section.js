@@ -4958,6 +4958,90 @@ const WARP_SETTING_KEYS = [
   "account_type",
   "mtu",
   "keepalive",
+  "amnezia_enabled",
+  "amnezia_jc",
+  "amnezia_jmin",
+  "amnezia_jmax",
+  "amnezia_i1",
+  "amnezia_i2",
+  "amnezia_i3",
+  "amnezia_i4",
+  "amnezia_i5",
+  "amnezia_content_padding_addition",
+  "amnezia_rekey_after_time",
+  "amnezia_rekey_timeout",
+  "amnezia_reject_after_time",
+  "amnezia_keepalive_timeout",
+  "amnezia_max_handshake_attempts",
+];
+
+const WARP_AMNEZIA_FIELDS = [
+  ["amnezia_jc", "Jc", _("How many junk packets to send."), "count"],
+  ["amnezia_jmin", "Jmin", _("Smallest junk packet, in bytes."), "count"],
+  ["amnezia_jmax", "Jmax", _("Largest junk packet, in bytes."), "count"],
+  [
+    "amnezia_i1",
+    "I1",
+    _("The first packet. Generated as a DNS query so the handshake is not a bare WireGuard packet."),
+    "signature",
+  ],
+  ["amnezia_i2", "I2", _("Optional. Another packet before the handshake."), "signature"],
+  ["amnezia_i3", "I3", _("Optional. Another packet before the handshake."), "signature"],
+  ["amnezia_i4", "I4", _("Optional. Another packet before the handshake."), "signature"],
+  ["amnezia_i5", "I5", _("Optional. Another packet before the handshake."), "signature"],
+  [
+    "amnezia_content_padding_addition",
+    "ContentPaddingAddition",
+    _("Extra bytes added to packets. A number or a range, for example 20-40."),
+    "range",
+  ],
+  [
+    "amnezia_rekey_after_time",
+    "RekeyAfterTime",
+    _("When to start a new handshake, in seconds. A number or a range."),
+    "range",
+  ],
+  [
+    "amnezia_rekey_timeout",
+    "RekeyTimeout",
+    _("How long to wait for a handshake answer, in seconds. A number or a range."),
+    "range",
+  ],
+  [
+    "amnezia_reject_after_time",
+    "RejectAfterTime",
+    _("When to drop the session, in seconds. A number or a range."),
+    "range",
+  ],
+  [
+    "amnezia_keepalive_timeout",
+    "KeepaliveTimeout",
+    _("How long to wait for a keepalive answer, in seconds. A number or a range."),
+    "range",
+  ],
+  [
+    "amnezia_max_handshake_attempts",
+    "MaxHandshakeAttempts",
+    _("How many handshake tries to make. A number or a range."),
+    "range",
+  ],
+];
+
+const WARP_AMNEZIA_KEYS = WARP_AMNEZIA_FIELDS.map((field) => field[0]);
+
+const WARP_DNS_SIGNATURE_NAMES = [
+  "yandex.ru",
+  "vk.com",
+  "mail.ru",
+  "ok.ru",
+  "avito.ru",
+  "ozon.ru",
+  "google.com",
+  "apple.com",
+  "icloud.com",
+  "microsoft.com",
+  "wikipedia.org",
+  "github.com",
 ];
 
 function defaultWarpSettings() {
@@ -4979,6 +5063,21 @@ function defaultWarpSettings() {
     account_type: "",
     mtu: "1280",
     keepalive: "25",
+    amnezia_enabled: "0",
+    amnezia_jc: "",
+    amnezia_jmin: "",
+    amnezia_jmax: "",
+    amnezia_i1: "",
+    amnezia_i2: "",
+    amnezia_i3: "",
+    amnezia_i4: "",
+    amnezia_i5: "",
+    amnezia_content_padding_addition: "",
+    amnezia_rekey_after_time: "",
+    amnezia_rekey_timeout: "",
+    amnezia_reject_after_time: "",
+    amnezia_keepalive_timeout: "",
+    amnezia_max_handshake_attempts: "",
   };
 }
 
@@ -5016,10 +5115,72 @@ function warpStatusText(draft) {
     parts.push(`${_("Quota")}: ${quota}`);
   }
   parts.push(portText);
+  if (draft.amnezia_enabled === "1" || draft.amnezia_enabled === true) {
+    parts.push(
+      `${draft.amnezia_i1 || ""}`.trim()
+        ? _("Obfuscation on")
+        : _("Obfuscation on, no parameters"),
+    );
+  }
   if (!`${draft.access_token || ""}`.trim()) {
     parts.push(_("No device token. New address registers this profile again."));
   }
   return parts.join(". ");
+}
+
+function warpRandomInt(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function warpHexByte(value) {
+  return value.toString(16).padStart(2, "0");
+}
+
+function warpDnsQuerySignature() {
+  const name =
+    WARP_DNS_SIGNATURE_NAMES[
+      warpRandomInt(0, WARP_DNS_SIGNATURE_NAMES.length - 1)
+    ];
+  const labels = name
+    .split(".")
+    .map(
+      (label) =>
+        warpHexByte(label.length) +
+        [...label].map((char) => warpHexByte(char.charCodeAt(0))).join(""),
+    )
+    .join("");
+  return `<r 2><b 0x01000001000000000000${labels}0000010001>`;
+}
+
+function generateWarpObfuscation() {
+  const jmin = warpRandomInt(40, 89);
+  const padding = warpRandomInt(8, 24);
+  const rekey = warpRandomInt(100, 120);
+  const lastRekey = rekey + warpRandomInt(10, 40);
+  const reject = lastRekey + warpRandomInt(30, 60);
+  const retry = warpRandomInt(3, 6);
+  const keepalive = warpRandomInt(8, 12);
+  const attempts = warpRandomInt(15, 25);
+  return {
+    amnezia_jc: `${warpRandomInt(3, 6)}`,
+    amnezia_jmin: `${jmin}`,
+    amnezia_jmax: `${jmin + warpRandomInt(50, 250)}`,
+    amnezia_i1: warpDnsQuerySignature(),
+    amnezia_i2: "",
+    amnezia_i3: "",
+    amnezia_i4: "",
+    amnezia_i5: "",
+    amnezia_content_padding_addition: `${padding}-${padding + warpRandomInt(8, 40)}`,
+    amnezia_rekey_after_time: `${rekey}-${lastRekey}`,
+    amnezia_rekey_timeout: `${retry}-${retry + warpRandomInt(1, 4)}`,
+    amnezia_reject_after_time: `${reject}-${reject + warpRandomInt(30, 90)}`,
+    amnezia_keepalive_timeout: `${keepalive}-${keepalive + warpRandomInt(2, 8)}`,
+    amnezia_max_handshake_attempts: `${attempts}-${attempts + warpRandomInt(5, 25)}`,
+  };
+}
+
+function warpObfuscationOn(draft) {
+  return draft.amnezia_enabled === "1" || draft.amnezia_enabled === true;
 }
 
 function setWarpOption(itemSection, key, value) {
@@ -5033,13 +5194,118 @@ function setWarpOption(itemSection, key, value) {
   if (!node) {
     return;
   }
+  const text = value == null ? "" : `${value}`;
+  if (typeof node.setValue === "function") {
+    node.setValue(node.type === "checkbox" ? value : text);
+    return;
+  }
   if (node.type === "checkbox") {
     node.checked = value === "1" || value === true;
     return;
   }
-  if ("value" in node) {
-    node.value = value == null ? "" : `${value}`;
+  const input =
+    typeof node.querySelector === "function"
+      ? node.querySelector("input, textarea, select")
+      : null;
+  const target = input || node;
+  if (target && "value" in target) {
+    target.value = text;
   }
+}
+
+function warpProfileNames(parentId, option) {
+  const names = [];
+  getChildItemIds(parentId, "warp").forEach((id) => {
+    const name = `${uci.get(UCI_PACKAGE, id, "name") || ""}`.trim();
+    if (name) {
+      names.push(name);
+    }
+  });
+  const pending =
+    option && option.pendingChildSettings
+      ? option.pendingChildSettings[parentId]
+      : null;
+  if (pending) {
+    Object.keys(pending).forEach((key) => {
+      const name = `${(pending[key] && pending[key].name) || ""}`.trim();
+      if (name) {
+        names.push(name);
+      }
+    });
+  }
+  return names;
+}
+
+function warpSerialOf(name) {
+  const text = `${name || ""}`.trim();
+  const labeled = /^WARP\s+(\d+)\s*·\s*[0-9a-f]{4}$/i.exec(text);
+  if (labeled) {
+    return Number.parseInt(labeled[1], 10);
+  }
+  const plain = /^WARP\s+(\d+)$/.exec(text);
+  if (plain) {
+    return Number.parseInt(plain[1], 10);
+  }
+  return 0;
+}
+
+function nextWarpSerial(names, currentName) {
+  const own = warpSerialOf(currentName);
+  if (own > 0) {
+    return `${own}`;
+  }
+  let max = 0;
+  names.forEach((name) => {
+    const number = warpSerialOf(name);
+    if (number > max) {
+      max = number;
+    }
+  });
+  return `${max + 1}`;
+}
+
+function liveProxyCore(parentId) {
+  if (typeof document === "undefined" || !parentId) {
+    return null;
+  }
+  const node = document.getElementById(
+    `cbid.${UCI_PACKAGE}.${parentId}.proxy_core`,
+  );
+  if (!node || typeof node.querySelector !== "function") {
+    const fallback = liveWidgetValue("proxy_core", parentId);
+    return fallback == null ? null : `${fallback}`;
+  }
+  const selected = node.querySelector("li[data-value][selected]");
+  if (selected) {
+    return `${selected.getAttribute("data-value") || ""}`.trim();
+  }
+  const hidden = node.querySelector('input[type="hidden"]');
+  if (hidden) {
+    return `${hidden.value || ""}`.trim();
+  }
+  return liveWidgetValue("proxy_core", parentId);
+}
+
+function warpSectionUsesExtended(parentId) {
+  const version = `${singBoxInstalledVersion || ""}`.toLowerCase();
+  if (!version.includes("extended")) {
+    return false;
+  }
+  const live = liveProxyCore(parentId);
+  if (live != null) {
+    const core = `${live}`.trim().toLowerCase();
+    if (core === "xray" || core === "xray-core") {
+      return false;
+    }
+    if (core === "sing-box" || core === "singbox") {
+      return true;
+    }
+    return !savedRoutingEngineIsXray();
+  }
+  const section = (uci.sections(UCI_PACKAGE, "section") || []).find(
+    (item) => item && item[".name"] === parentId,
+  );
+  return sectionEffectiveProxyCore(section) === "sing-box";
 }
 
 function warpCascade(parentId) {
@@ -5120,6 +5386,43 @@ function addWarpItemOptions(itemSection, uiState) {
     }
     if (!`${uiState.draft.private_key || ""}`.trim()) {
       return _("Get WARP before saving");
+    }
+    const flag = (itemSection.children || []).find(
+      (child) => child && child.option === "amnezia_enabled",
+    );
+    const flagNode = flag && flag.getUIElement && flag.getUIElement("settings");
+    const obfuscation = flag
+      ? flagNode
+        ? flagNode.checked
+        : warpObfuscationOn(uiState.draft)
+      : false;
+    if (obfuscation) {
+      const readField = (key) => {
+        const field = (itemSection.children || []).find(
+          (child) => child && child.option === key,
+        );
+        const node = field && field.getUIElement && field.getUIElement("settings");
+        if (node && typeof node.getValue === "function") {
+          return `${node.getValue() || ""}`.trim();
+        }
+        if (node && "value" in node) {
+          return `${node.value || ""}`.trim();
+        }
+        return `${uiState.draft[key] || ""}`.trim();
+      };
+      const jc = readField("amnezia_jc");
+      const jmin = readField("amnezia_jmin");
+      const jmax = readField("amnezia_jmax");
+      const signature = readField("amnezia_i1");
+      if (
+        !/^[0-9]+$/.test(jc) ||
+        !/^[0-9]+$/.test(jmin) ||
+        !/^[0-9]+$/.test(jmax) ||
+        Number(jmin) > Number(jmax) ||
+        !signature
+      ) {
+        return _("Generate obfuscation parameters");
+      }
     }
     return true;
   };
@@ -5208,14 +5511,116 @@ function addWarpItemOptions(itemSection, uiState) {
     }
   };
 
-  option = itemSection.option(
-    form.Flag,
-    "ipv4_only",
-    _("IPv4 only"),
-    _("Do not add the IPv6 address to the tunnel."),
-  );
-  option.default = "0";
-  option.rmempty = true;
+  if (!warpSectionUsesExtended(uiState.parentId)) {
+    option = itemSection.option(
+      form.Flag,
+      "ipv4_only",
+      _("IPv4 only"),
+      _("Do not add the IPv6 address to the tunnel."),
+    );
+    option.default = "0";
+    option.rmempty = true;
+    option.onchange = function (_event, _section_id, value) {
+      uiState.draft.ipv4_only = value === "1" || value === true ? "1" : "0";
+    };
+  }
+
+  if (warpSectionUsesExtended(uiState.parentId)) {
+    option = itemSection.option(
+      form.Flag,
+      "amnezia_enabled",
+      _("Traffic obfuscation"),
+      _(
+        "Send extra packets before the WireGuard handshake, starting with one that looks like a DNS query. The handshake itself stays normal WireGuard, so Cloudflare still answers. Needs sing-box-extended. Without this, providers in Russia often block WARP.",
+      ),
+    );
+    option.default = "0";
+    option.rmempty = false;
+    option.onchange = function (_event, _section_id, value) {
+      uiState.draft.amnezia_enabled = value === "1" || value === true ? "1" : "0";
+      if (uiState.statusNode) {
+        uiState.statusNode.textContent = warpStatusText(uiState.draft);
+      }
+    };
+
+    option = itemSection.option(form.DummyValue, "_amnezia_core", _("Core"));
+    option.depends("amnezia_enabled", "1");
+    option.renderWidget = function () {
+      const version = `${singBoxInstalledVersion || ""}`.trim();
+      if (!version) {
+        return E(
+          "span",
+          {},
+          _("The core version is not known yet. Obfuscation is written only by sing-box-extended."),
+        );
+      }
+      if (version.toLowerCase().includes("extended")) {
+        return E(
+          "span",
+          {},
+          _("sing-box-extended will write these parameters into the config."),
+        );
+      }
+      return E(
+        "span",
+        { style: "color:#c0392b" },
+        _("This core is not sing-box-extended. Obfuscation will be saved but not written, and WARP will stay recognizable."),
+      );
+    };
+
+    option = itemSection.option(
+      form.DummyValue,
+      "_generate_amnezia",
+      _("Obfuscation parameters"),
+    );
+    option.depends("amnezia_enabled", "1");
+    option.renderWidget = function () {
+      return E(
+        "button",
+        {
+          class: "btn cbi-button cbi-button-action",
+          type: "button",
+          click: (event) => {
+            event.preventDefault();
+            const generated = generateWarpObfuscation();
+            Object.assign(uiState.draft, generated);
+            uiState.draft.amnezia_enabled = "1";
+            WARP_AMNEZIA_KEYS.forEach((key) => {
+              setWarpOption(itemSection, key, uiState.draft[key]);
+            });
+            if (uiState.statusNode) {
+              uiState.statusNode.textContent = warpStatusText(uiState.draft);
+            }
+          },
+        },
+        _("Generate parameters"),
+      );
+    };
+
+    WARP_AMNEZIA_FIELDS.forEach(([key, label, hint, kind]) => {
+      option = itemSection.option(form.Value, key, label, hint);
+      option.rmempty = true;
+      option.depends("amnezia_enabled", "1");
+      if (kind === "count") {
+        option.datatype = "uinteger";
+      }
+      if (kind === "range") {
+        option.validate = function (_itemId, value) {
+          const text = `${value || ""}`.trim();
+          if (!text || /^[0-9]+(-[0-9]+)?$/.test(text)) {
+            return true;
+          }
+          return _("Use a number or a range, for example 20-40");
+        };
+      }
+      option.onchange = function (_event, _section_id, value) {
+        uiState.draft[key] = `${value || ""}`.trim();
+        if (key === "amnezia_i1" && uiState.statusNode) {
+          uiState.statusNode.textContent = warpStatusText(uiState.draft);
+        }
+      };
+    });
+  }
 
   option = itemSection.option(form.DummyValue, "_actions", _("Actions"));
   option.renderWidget = function () {
@@ -5272,6 +5677,10 @@ function addWarpItemOptions(itemSection, uiState) {
             action: "register",
             license: licenseValue(),
             detour,
+            serial: nextWarpSerial(
+              warpProfileNames(parentId, uiState.warpOption),
+              uiState.draft.name,
+            ),
           }).then(
             (payload) => {
               lock(false);
@@ -5354,6 +5763,10 @@ function addWarpItemOptions(itemSection, uiState) {
             action: "register",
             license: licenseValue(),
             detour,
+            serial: nextWarpSerial(
+              warpProfileNames(parentId, uiState.warpOption),
+              uiState.draft.name,
+            ),
           }).then(
             (payload) => {
               applyProfile(payload, true);
@@ -5452,6 +5865,7 @@ function showWarpSettingsModal(section_id, itemValue, option, widget, itemNode, 
     draft: Object.assign({}, initialSettings),
     statusNode: null,
     parentId: context.parentSectionId || section_id,
+    warpOption: option,
     itemNode,
   };
   const data = { settings: Object.assign({}, initialSettings) };
@@ -5465,11 +5879,26 @@ function showWarpSettingsModal(section_id, itemValue, option, widget, itemNode, 
     uiState.draft.name ? `WARP WIREGUARD: ${uiState.draft.name}` : "WARP WIREGUARD",
     map,
     (nextSettings) => {
+      const extendedWarp = warpSectionUsesExtended(uiState.parentId);
       const merged = Object.assign({}, uiState.draft, {
         name: `${nextSettings.name || ""}`.trim(),
         license: `${nextSettings.license || ""}`.trim(),
         endpoint_port: `${nextSettings.endpoint_port || "2408"}`.trim(),
-        ipv4_only: nextSettings.ipv4_only === "1" || nextSettings.ipv4_only === true ? "1" : "0",
+      });
+      if (!extendedWarp) {
+        merged.ipv4_only =
+          nextSettings.ipv4_only === "1" || nextSettings.ipv4_only === true ? "1" : "0";
+      }
+      if (extendedWarp) {
+        merged.amnezia_enabled =
+          nextSettings.amnezia_enabled === "1" || nextSettings.amnezia_enabled === true
+            ? "1"
+            : "0";
+      }
+      WARP_AMNEZIA_KEYS.forEach((key) => {
+        if (nextSettings[key] != null) {
+          merged[key] = `${nextSettings[key]}`.trim();
+        }
       });
       if (existing) {
         const diff = changedSettings(initialSettings, merged, WARP_SETTING_KEYS);
@@ -10078,19 +10507,6 @@ function createSectionContent(section) {
     refreshSectionEngineFields(this, section_id);
     scheduleSharedCheckGroup(section_id);
   };
-
-  o = section.taboption("settings", form.DummyValue, "_dns_section_hint");
-  o.depends("action", "dns");
-  o.modalonly = true;
-  o.rmempty = false;
-  o.title = "";
-  o.cfgvalue = function () {
-    return _(
-      "Domains in this section get a real address, not a FakeIP. A section below cannot take their traffic: if the site name is not visible, it follows full routing or goes direct.",
-    );
-  };
-  o.write = function () {};
-  o.remove = function () {};
 
   o = section.taboption(
     "settings",

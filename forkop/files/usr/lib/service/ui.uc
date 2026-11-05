@@ -589,25 +589,34 @@ function latency_progress_value(completed, total, failed) {
     };
 }
 
-function proxy_list_total(tag) {
+function proxy_list_tags(tag) {
     let value = parse_json_or_null(tag);
+    let tags = [];
     if (type(value) != "array")
-        return 0;
+        return tags;
 
-    let total = 0;
     for (let proxy_tag in value) {
         if (type(proxy_tag) == "string" && proxy_tag != "")
-            total++;
+            push(tags, proxy_tag);
     }
 
-    return total;
+    return tags;
+}
+
+function proxy_list_total(tag) {
+    return length(proxy_list_tags(tag));
 }
 
 function initial_latency_progress(latency_type, tag) {
     if (as_string(latency_type) != "proxy_list")
         return null;
 
-    return latency_progress_value(0, proxy_list_total(tag), 0);
+    let tags = proxy_list_tags(tag);
+    let progress = latency_progress_value(0, length(tags), 0);
+    progress.current = "";
+    progress.done = [];
+    progress.order = tags;
+    return progress;
 }
 
 function running_latency_action_value(latency_type, section, tag, started_at) {
@@ -642,7 +651,7 @@ function latency_action_path_allowed(path) {
         substr(path, length(path) - length(suffix)) == suffix;
 }
 
-function update_latency_progress_state(path, completed, total, failed) {
+function update_latency_progress_state(path, completed, total, failed, current) {
     if (!latency_action_path_allowed(path))
         return false;
 
@@ -650,13 +659,40 @@ function update_latency_progress_state(path, completed, total, failed) {
     if (type(value) != "object" || value.kind != "latency" || value.running !== true)
         return false;
 
-    value.progress = latency_progress_value(completed, total, failed);
+    let previous = object_or_empty(value.progress);
+    let progress = latency_progress_value(completed, total, failed);
+    let done = [];
+    if (type(previous.done) == "array") {
+        for (let item in previous.done) {
+            item = as_string(item);
+            if (item != "")
+                push(done, item);
+        }
+    }
+    let previous_current = as_string(previous.current || "");
+    current = as_string(current);
+    if (previous_current != "" && previous_current != current) {
+        let known = false;
+        for (let item in done) {
+            if (item == previous_current)
+                known = true;
+        }
+        if (!known)
+            push(done, previous_current);
+    }
+    progress.current = current;
+    progress.done = done;
+    if (type(previous.order) == "array" && length(previous.order) > 0)
+        progress.order = previous.order;
+    else
+        progress.order = proxy_list_tags(value.tag);
+    value.progress = progress;
     value.updated_at = now_seconds();
     return write_state_file(path, value);
 }
 
-function update_latency_progress_state_mode(path, completed, total, failed) {
-    exit(update_latency_progress_state(path, completed, total, failed) ? 0 : 1);
+function update_latency_progress_state_mode(path, completed, total, failed, current) {
+    exit(update_latency_progress_state(path, completed, total, failed, current) ? 0 : 1);
 }
 
 function finished_action_state_value(path, success, message, exit_code, updated_at) {
@@ -1312,7 +1348,7 @@ function finish_service_action_mode(job_id_value, success, message, exit_code) {
     exit(finish_service_action(job_id_value, success, message, exit_code) ? 0 : 1);
 }
 
-function launch_worker(args) {
+function launch_worker(args, new_group) {
     let command_args = [ "ucode", "-L", LIB_DIR, UI_UC ];
     for (let arg in args)
         push(command_args, arg);
@@ -1349,6 +1385,7 @@ function launch_worker(args) {
         ZAPRET2_PROVIDER_NFQWS2_BIN,
         BYEDPI_BIN
     }) + " " +
+        (new_group ? "setsid " : "") +
         command_from_args(command_args) +
         " >/dev/null 2>&1 1000>&- & echo $!";
     return trim(command_output("sh -c " + shell_quote(command)));
@@ -1564,7 +1601,7 @@ function latency_worker(path, latency_type, tag, timeout, section) {
     else if (latency_probe_xray(section) && !latency_tag_is_singbox(tag)) {
         let cmd = [
             "ucode", "-L", LIB_DIR, LIB_DIR + "/xray/runtime.uc",
-            "latency-test", latency_type, tag, timeout
+            "latency-test", latency_type, tag, timeout, path
         ];
         if (as_string(latency_type) == "group")
             cmd = [
@@ -1582,6 +1619,9 @@ function latency_worker(path, latency_type, tag, timeout, section) {
         let method = latency_clash_method(latency_type).method;
         status = command_status(command_from_args([ BIN_PATH, "clash_api", method, tag, timeout, path ]) + " >/dev/null 2>&1");
     }
+    let current = object_or_empty(read_json_file(path));
+    if (current.running !== true)
+        return;
     if (status == 0)
         write_finished_action_state(path, true, "Latency test completed", status);
     else
@@ -1610,7 +1650,7 @@ function latency_test_async(latency_type, section, tag, requested_timeout) {
 
     let plan = latency_clash_method(latency_type);
     let timeout = as_string(requested_timeout) != "" ? as_string(requested_timeout) : plan.timeout;
-    let pid = launch_worker([ "latency-worker", path, latency_type, tag, timeout, section ]);
+    let pid = launch_worker([ "latency-worker", path, latency_type, tag, timeout, section ], true);
     if (pid == "" || !set_running_job_pid_file(path, pid)) {
         if (pid != "")
             command_success_from_args([ "kill", pid ]);
@@ -1619,6 +1659,30 @@ function latency_test_async(latency_type, section, tag, requested_timeout) {
     }
 
     action_start_response(true, id, "Latency test started");
+}
+
+function kill_process_group(pid) {
+    pid = trim(as_string(pid));
+    if (match(pid, /^[0-9]+$/) == null)
+        return;
+    command_success_from_args([ "kill", "-TERM", "-" + pid ]);
+    command_success_from_args([ "kill", "-TERM", pid ]);
+}
+
+function latency_test_cancel(job_id_value) {
+    let path = job_state_path_value(LATENCY_ACTION_DIR, job_id_value);
+    if (path == "" || fs.stat(path) == null) {
+        action_start_response(true, job_id_value, "Latency test already finished");
+        return;
+    }
+    let value = object_or_empty(read_json_file(path));
+    if (value.running !== true) {
+        action_start_response(true, job_id_value, "Latency test already finished");
+        return;
+    }
+    kill_process_group(value.pid);
+    write_finished_action_state(path, false, "Latency test cancelled", 0);
+    action_start_response(true, job_id_value, "Latency test cancelled");
 }
 
 function latency_test_status(job_id_value) {
@@ -1730,7 +1794,7 @@ else if (mode == "service-action-update-pid")
 else if (mode == "service-action-finish")
     finish_service_action_mode(ARGV[1], ARGV[2], ARGV[3], ARGV[4]);
 else if (mode == "latency-progress-state")
-    update_latency_progress_state_mode(ARGV[1], ARGV[2], ARGV[3], ARGV[4]);
+    update_latency_progress_state_mode(ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]);
 else if (mode == "service-action-finish-after-command")
     finish_service_action_after_command_mode(ARGV[1], ARGV[2], ARGV[3]);
 else if (mode == "service-action-wait-worker")
@@ -1747,6 +1811,8 @@ else if (mode == "latency-test-async")
     latency_test_async(ARGV[1], ARGV[2], ARGV[3], ARGV[4]);
 else if (mode == "latency-test-status")
     latency_test_status(ARGV[1]);
+else if (mode == "latency-test-cancel")
+    latency_test_cancel(ARGV[1]);
 else if (mode == "action-ack")
     action_ack(ARGV[1], ARGV[2]);
 else if (mode == "cleanup-action-dir-fixture")

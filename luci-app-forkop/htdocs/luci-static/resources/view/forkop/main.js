@@ -1213,7 +1213,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.14";
+var FORKOP_LUCI_APP_VERSION = "1.0.15";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -2272,6 +2272,20 @@ function renderSubscriptionUpdateAction(section, subscriptionUpdating, onUpdateS
     subscriptionUpdating ? [renderLoaderCircleIcon24(), _("Update subscriptions")] : _("Update subscriptions")
   );
 }
+function latencyProbeClass(progress, code) {
+  const tag = `${code || ""}`.trim();
+  const order = Array.isArray(progress?.order) ? progress.order : [];
+  if (!tag || !order.includes(tag)) {
+    return "";
+  }
+  if (`${progress?.current || ""}` === tag) {
+    return "fkp_dashboard-page__outbound-grid__item--probe-current";
+  }
+  if (Array.isArray(progress?.done) && progress.done.includes(tag)) {
+    return "";
+  }
+  return "fkp_dashboard-page__outbound-grid__item--probe-pending";
+}
 function getLatencyTestLabel(latencyProgress) {
   const total = Math.trunc(Number(latencyProgress?.total ?? 0));
   if (!Number.isFinite(total) || total <= 0) {
@@ -2360,7 +2374,8 @@ function renderDefaultState({
       outbound.selected ? "fkp_dashboard-page__outbound-grid__item--active" : "",
       canChooseOutbound ? "fkp_dashboard-page__outbound-grid__item--selectable" : "",
       section.withTagSelect && !canChooseOutbound ? "fkp_dashboard-page__outbound-grid__item--disabled" : "",
-      outboundSwitching ? "fkp_dashboard-page__outbound-grid__item--switching" : ""
+      outboundSwitching ? "fkp_dashboard-page__outbound-grid__item--switching" : "",
+      latencyProbeClass(latencyProgress, outbound.code)
     ].filter(Boolean).join(" ");
     const urlTestSelected = String(outbound.urlTestInfo?.selectedName || "").trim();
     const showUrlTestSelected = urlTestSelected !== "" && urlTestSelected !== String(outbound.displayName || "").trim();
@@ -2368,6 +2383,7 @@ function renderDefaultState({
       "div",
       {
         class: className,
+        "data-outbound-code": outbound.code || void 0,
         "aria-busy": outboundSwitching ? "true" : void 0,
         "aria-disabled": section.withTagSelect && !canChooseOutbound ? "true" : void 0,
         click: () => canChooseOutbound && onChooseOutbound(section.sectionName, section.code, outbound.code)
@@ -2986,6 +3002,7 @@ var Forkop;
     AvailableMethods2["SERVICE_ACTION_STATUS"] = "service_action_status";
     AvailableMethods2["LATENCY_TEST_ASYNC"] = "latency_test_async";
     AvailableMethods2["LATENCY_TEST_STATUS"] = "latency_test_status";
+    AvailableMethods2["LATENCY_TEST_CANCEL"] = "latency_test_cancel";
     AvailableMethods2["UI_ACTION_ACK"] = "ui_action_ack";
     AvailableMethods2["COMPONENT_ACTION_ASYNC"] = "component_action_async";
     AvailableMethods2["COMPONENT_ACTION_STATUS"] = "component_action_status";
@@ -3442,11 +3459,29 @@ var ForkopShellMethods = {
       data: parsedResponse
     };
   },
+  latencyTestCancel: async (jobId) => {
+    if (!jobId) {
+      return { success: true };
+    }
+    await executeShellCommand({
+      command: "/usr/bin/forkop",
+      args: [Forkop.AvailableMethods.LATENCY_TEST_CANCEL, jobId],
+      timeout: UI_ACTION_RPC_TIMEOUT_MS
+    });
+    return { success: true };
+  },
   waitLatencyTestJob: async (jobId, startedAt = Date.now()) => {
     const transientRpc = createTransientRpcGraceTracker(
       UI_ACTION_TRANSIENT_RPC_GRACE_MS
     );
     while (Date.now() - startedAt < LATENCY_TEST_TIMEOUT_MS) {
+      if (!dashboardMounted && !diagnosticMounted) {
+        await ForkopShellMethods.latencyTestCancel(jobId);
+        return {
+          success: false,
+          error: _("Operation timed out")
+        };
+      }
       await sleep(LATENCY_TEST_POLL_INTERVAL_MS);
       const response = await ForkopShellMethods.latencyTestStatus(jobId);
       if (!response.success) {
@@ -3461,6 +3496,7 @@ var ForkopShellMethods = {
       }
       return response;
     }
+    await ForkopShellMethods.latencyTestCancel(jobId);
     return {
       success: false,
       error: _("Operation timed out")
@@ -3915,8 +3951,11 @@ function getUrlTestIds(section) {
 function isUrlTestEnabled(section) {
   return getUrlTestIds(section).length > 0;
 }
+function hasClientProfiles(section) {
+  return Array.isArray(section?.warp_clients) && section.warp_clients.length > 0 || Array.isArray(section?.masque_clients) && section.masque_clients.length > 0;
+}
 function shouldUseProxyGroup(section) {
-  return getManualProxyLinks(section).length > 0 || hasSubscriptionSources(section) || getConnectionInterfaces(section).length > 0 || getJsonOutbounds(section).length > 0 || isUrlTestEnabled(section) || hasConfiguredPriorityList(section);
+  return getManualProxyLinks(section).length > 0 || hasSubscriptionSources(section) || getConnectionInterfaces(section).length > 0 || getJsonOutbounds(section).length > 0 || hasClientProfiles(section) || isUrlTestEnabled(section) || hasConfiguredPriorityList(section);
 }
 function getSectionProxyConfigType(section) {
   if (hasSubscriptionSources(section)) {
@@ -4782,8 +4821,29 @@ function openVpnProtocolLabel(client) {
   }
   return String(client?.network || "udp").toLowerCase() === "tcp" ? "TCP" : "UDP";
 }
+function warpObfuscationBadge(client) {
+  const enabled = client?.amnezia_enabled === "1" || client?.amnezia_enabled === 1 || client?.amnezia_enabled === true;
+  if (!enabled) {
+    return "";
+  }
+  const ready = `${client.amnezia_jc || ""}`.trim() && `${client.amnezia_i1 || ""}`.trim();
+  if (!ready) {
+    return _("Obfuscation on, no parameters");
+  }
+  const info = store?.get?.().diagnosticsSystemInfo || {};
+  const extended = Number(info.sing_box_extended) === 1 || `${info.sing_box_version || ""}`.includes("extended");
+  if (!extended) {
+    return _("Obfuscation needs sing-box-extended");
+  }
+  return _("Obfuscation on");
+}
 function tunnelProtocolLabel(section, code) {
   const text = String(code || "");
+  const warp = text.match(/-warp-(\d+)$/);
+  if (warp) {
+    const client = (section?.warp_clients || [])[Number(warp[1]) - 1];
+    return warpObfuscationBadge(client);
+  }
   const openconnect = text.match(/-openconnect-(\d+)$/);
   if (openconnect) {
     const client = (section?.openconnect_clients || [])[Number(openconnect[1]) - 1];
@@ -6733,10 +6793,19 @@ function normalizeLatencyProgress(progress) {
   const failedValue = Number(progress?.failed ?? 0);
   const completed = Number.isFinite(completedValue) ? Math.trunc(completedValue) : 0;
   const failed2 = Number.isFinite(failedValue) ? Math.trunc(failedValue) : 0;
+  const order = Array.isArray(progress?.order)
+    ? progress.order.map((item) => `${item || ""}`.trim()).filter(Boolean)
+    : [];
+  const done = Array.isArray(progress?.done)
+    ? progress.done.map((item) => `${item || ""}`.trim()).filter(Boolean)
+    : [];
   return {
     completed: Math.min(Math.max(0, completed), total),
     total,
-    failed: Math.max(0, failed2)
+    failed: Math.max(0, failed2),
+    current: `${progress?.current || ""}`.trim(),
+    done,
+    order
   };
 }
 function applyServiceState(uiState) {
@@ -8187,10 +8256,10 @@ function getInitialLatencyProgress(latencyType, tag) {
     if (!Array.isArray(tags)) {
       return void 0;
     }
-    const total = tags.filter(
+    const order = tags.filter(
       (item) => typeof item === "string" && item.length > 0
-    ).length;
-    return total > 0 ? { completed: 0, total, failed: 0 } : void 0;
+    );
+    return order.length > 0 ? { completed: 0, total: order.length, failed: 0, current: "", done: [], order } : void 0;
   } catch {
     return void 0;
   }
@@ -8956,6 +9025,24 @@ function findLatencyTestButton(container, sectionName) {
     )
   ).find((button) => button.dataset.latencySection === sectionName);
 }
+function paintLatencyProbeCards(container, sectionName, progress) {
+  const button = findLatencyTestButton(container, sectionName);
+  const sectionRoot = button?.closest(".fkp_dashboard-page__outbound-section");
+  if (!sectionRoot) {
+    return;
+  }
+  sectionRoot.querySelectorAll("[data-outbound-code]").forEach((card) => {
+    const code = card.getAttribute("data-outbound-code") || "";
+    card.classList.remove(
+      "fkp_dashboard-page__outbound-grid__item--probe-current",
+      "fkp_dashboard-page__outbound-grid__item--probe-pending"
+    );
+    const probeClass = latencyProbeClass(progress, code);
+    if (probeClass) {
+      card.classList.add(probeClass);
+    }
+  });
+}
 function updateLatencyProgressInline(sectionsWidget) {
   const container = document.getElementById("dashboard-sections-grid");
   if (!container) {
@@ -8978,6 +9065,11 @@ function updateLatencyProgressInline(sectionsWidget) {
     if (label.textContent !== text) {
       label.textContent = text;
     }
+    paintLatencyProbeCards(
+      container,
+      section.sectionName,
+      sectionsWidget.latencyProgressSections[section.sectionName]
+    );
   }
   return true;
 }
@@ -9337,6 +9429,11 @@ async function onPageMount() {
 function onPageUnmount() {
   dashboardMounted = false;
   dashboardMountId += 1;
+  const jobs = Array.from(followedLatencyJobs);
+  followedLatencyJobs.clear();
+  jobs.forEach((jobId) => {
+    void ForkopShellMethods.latencyTestCancel(jobId);
+  });
   stopDashboardDataUpdates();
   stopActionStateWatcher();
   sectionsRefreshQueued = false;
@@ -9811,6 +9908,13 @@ var styles = `
     border-color: var(--primary-color-high, dodgerblue);
 }
 
+.fkp_dashboard-page__outbound-grid__item--probe-pending {
+  opacity: 0.38;
+}
+.fkp_dashboard-page__outbound-grid__item--probe-current {
+  opacity: 1;
+  box-shadow: inset 0 0 0 2px #3d8bfd;
+}
 .fkp_dashboard-page__outbound-grid__item--active {
     border-color: var(--success-color-medium, green);
 }
@@ -12087,6 +12191,9 @@ async function runSectionsCheck() {
       if (section.withTagSelect && servers.length) {
         const results = [];
         for (const outbound of servers) {
+          if (!diagnosticMounted) {
+            return { state: "error", latency: _("Not responding") };
+          }
           const response = await ForkopShellMethods.getClashApiProxyLatency(
             outbound.code,
             section.latencyTestTimeout
@@ -12157,6 +12264,9 @@ async function runSectionsCheck() {
       if (openconnectServers.length) {
         const results = [];
         for (const outbound of openconnectServers) {
+          if (!diagnosticMounted) {
+            return { state: "error", latency: _("Not responding") };
+          }
           const response = await ForkopShellMethods.getClashApiProxyLatency(
             outbound.code,
             section.latencyTestTimeout
@@ -13459,6 +13569,9 @@ async function runChecks({ resume } = {}) {
     }
     const runners = getDiagnosticRunners(providerOptions);
     for (let index = nextRunnerIndex; index < runners.length; index += 1) {
+      if (!diagnosticMounted) {
+        break;
+      }
       const runner = runners[index];
       setDiagnosticCheckLoading(runner.code);
       persistDiagnosticRunProgress({

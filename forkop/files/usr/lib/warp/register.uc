@@ -332,18 +332,35 @@ function endpoint_host(peer) {
     return [ parts[0], endpoint_port(endpoint, parts[1]) ];
 }
 
-function warp_link(private_key, public_key, host, port, addresses, reserved, v4) {
+function warp_tail(device) {
+    let raw = replace(trim(as_string(device)), /-/g, "");
+    raw = replace(raw, /[^0-9A-Fa-f]/g, "");
+    if (length(raw) < 4)
+        return "";
+    return lc(substr(raw, 0, 4));
+}
+
+function warp_label(device, serial) {
+    serial = trim(as_string(serial));
+    if (match(serial, /^[0-9]+$/) == null || int(serial, 10) < 1)
+        serial = "1";
+    let tail = warp_tail(device);
+    if (tail == "")
+        return "WARP " + serial;
+    return "WARP " + serial + " · " + tail;
+}
+
+function warp_link(private_key, public_key, host, port, addresses, reserved, label) {
     let query = "privatekey=" + pct_b64(private_key) +
         "&publickey=" + pct_b64(public_key) +
         "&address=" + pct(addresses) +
         "&reserved=" + reserved +
         "&mtu=1280&keepalive=25";
-    let label = "WARP " + v4;
     let shown = index(host, ":") >= 0 ? "[" + host + "]" : host;
     return "warp://" + shown + ":" + port + "?" + query + "#" + pct(label);
 }
 
-function profile_from(keys, response, account, license) {
+function profile_from(keys, response, account, license, serial) {
     let config = type(response.config) == "object" ? response.config : {};
     let interface = type(config.interface) == "object" ? config.interface : {};
     let addresses = type(interface.addresses) == "object" ? interface.addresses : {};
@@ -361,10 +378,11 @@ function profile_from(keys, response, account, license) {
     let address = v4 + "/32";
     if (v6 != "")
         address += "," + v6 + "/128";
+    let label = warp_label(device, serial);
     let view = account_view(account);
     return {
         success: true,
-        name: "WARP " + v4,
+        name: label,
         private_key: keys.private_key,
         public_key: peer_key,
         address_v4: v4,
@@ -380,13 +398,13 @@ function profile_from(keys, response, account, license) {
         account_type: view.account_type,
         mtu: "1280",
         keepalive: "25",
-        link: warp_link(keys.private_key, peer_key, host_port[0], host_port[1], address, reserved, v4),
-        label: "WARP " + v4,
+        link: warp_link(keys.private_key, peer_key, host_port[0], host_port[1], address, reserved, label),
+        label,
         address: v4
     };
 }
 
-function register(license, detour) {
+function register(license, detour, serial) {
     system("mkdir -p /tmp/forkop >/dev/null 2>&1");
     let keys = keypair();
     if (keys == null)
@@ -437,7 +455,7 @@ function register(license, detour) {
     if (response == null)
         fail(license_failed ? "WARP+ license was rejected" : (trim(detour) != "" ? "Could not reach Cloudflare through the cascade" : "Could not reach Cloudflare"));
 
-    let profile = profile_from(keys, response, account, license);
+    let profile = profile_from(keys, response, account, license, serial);
     if (profile == null)
         fail("Cloudflare returned an incomplete WARP profile");
     write_json(profile);
@@ -525,7 +543,7 @@ function warp_account(raw) {
         fail("WARP request is invalid");
     let action = trim(as_string(request.action || ""));
     if (action == "register")
-        return register(request.license || "", request.detour || "");
+        return register(request.license || "", request.detour || "", request.serial || "");
     if (action == "license")
         return apply_license(request.device_id || "", request.access_token || "", request.license || "", request.detour || "");
     if (action == "status")

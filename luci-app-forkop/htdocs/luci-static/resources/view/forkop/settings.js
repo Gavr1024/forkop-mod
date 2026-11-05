@@ -789,6 +789,17 @@ function createSettingsContent(section, capabilities) {
 
   o = section.option(
     form.Flag,
+    "ipv6_lan_relay",
+    _("Share the provider IPv6"),
+    _(
+      "If devices on the local network have no IPv6 of their own, turn this on. The router gives them an address from the provider, and they can open sites over IPv6. Traffic still goes through Forkop and the proxy, not straight to the internet. While this is off or Forkop is stopped, nothing changes and the router's previous IPv6 settings stay.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+
+  o = section.option(
+    form.Flag,
     "dns_detour_enabled",
     _("DNS through proxy"),
     _("Route main DNS requests through the selected section."),

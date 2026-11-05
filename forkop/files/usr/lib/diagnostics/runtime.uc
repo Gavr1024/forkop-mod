@@ -2104,6 +2104,33 @@ function fullroute_probe_delay(tag, timeout_ms) {
     return probe_socks_delay(spec.port, timeout_ms);
 }
 
+function probe_timeout_seconds(value) {
+    let ms = int(value || 5000);
+    if (ms < 1000)
+        ms = 1000;
+    if (ms > 30000)
+        ms = 30000;
+    return int((ms + 999) / 1000) + 2;
+}
+
+function job_still_running(path) {
+    path = trim(as_string(path));
+    if (path == "")
+        return true;
+    let data = fs.readfile(path);
+    if (data == null)
+        return true;
+    try {
+        let value = json(data);
+        if (type(value) != "object" || value == null)
+            return true;
+        return value.running === true;
+    }
+    catch (e) {
+        return true;
+    }
+}
+
 function clash_proxy_document(base_url, auth, tag) {
     let args = [ "curl", "-s", base_url + "/proxies/" + clash_urlencode(tag) ];
     for (let item in auth)
@@ -2254,7 +2281,7 @@ function clash_api(action, arg1, arg2, arg3) {
         let progress_path = as_string(arg3);
         let total = length(proxy_tags);
         if (progress_path != "")
-            module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed ]);
+            module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed, "" ]);
 
         let proxy_types = clash_proxy_type_map(base_url, auth);
         let ordered_proxy_tags = [];
@@ -2266,17 +2293,19 @@ function clash_api(action, arg1, arg2, arg3) {
                 push(ordered_proxy_tags, proxy_tag);
 
         for (let proxy_tag in ordered_proxy_tags) {
+            if (!job_still_running(progress_path))
+                break;
+            if (progress_path != "")
+                module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed, proxy_tag ]);
             let openconnect_delay = openconnect_probe_delay(proxy_tag, arg2);
             if (openconnect_delay != null) {
                 remember_probe_delay(proxy_tag, openconnect_delay, true);
                 if (openconnect_delay <= 0)
                     failed++;
                 count++;
-                if (progress_path != "")
-                    module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed ]);
                 continue;
             }
-            let args = [ "curl", "-G", "-s", clash_latency_endpoint(base_url, proxy_tag, proxy_types[proxy_tag]) ];
+            let args = [ "curl", "-G", "-s", "--max-time", as_string(probe_timeout_seconds(arg2)), clash_latency_endpoint(base_url, proxy_tag, proxy_types[proxy_tag]) ];
             for (let item in auth) push(args, item);
             push(args, "--data-urlencode");
             push(args, "url=" + test_url);
@@ -2302,9 +2331,9 @@ function clash_api(action, arg1, arg2, arg3) {
                     failed++;
             }
             count++;
-            if (progress_path != "")
-                module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed ]);
         }
+        if (progress_path != "")
+            module_success(SERVICE_UI_UC, [ "latency-progress-state", progress_path, count, total, failed, "" ]);
         let result = status_capture([ "clash-proxy-latencies-result", count, failed ], null);
         if (result.output != "")
             print(result.output);
@@ -2325,7 +2354,40 @@ function clash_api(action, arg1, arg2, arg3) {
         }
         if (xray_only)
             return clash_json_error("timeout");
-        let args = [ "curl", "-G", "-s", base_url + "/group/" + clash_urlencode(arg1) + "/delay" ];
+        let doc = clash_proxy_document(base_url, auth, arg1);
+        let members = doc != null ? as_array(doc.all) : [];
+        if (length(members) > 0) {
+            let result = {};
+            let proxy_types = clash_proxy_type_map(base_url, auth);
+            for (let name in members) {
+                name = as_string(name);
+                if (name == "" || name == as_string(arg1))
+                    continue;
+                if (!job_still_running(arg3))
+                    break;
+                let args = [ "curl", "-G", "-s", "--max-time", as_string(probe_timeout_seconds(arg2)), clash_latency_endpoint(base_url, name, proxy_types[name]) ];
+                for (let item in auth) push(args, item);
+                push(args, "--data-urlencode");
+                push(args, "url=" + test_url);
+                push(args, "--data-urlencode");
+                push(args, "timeout=" + as_string(arg2 || "5000"));
+                let raw = command_output(command_from_args(args));
+                let delay = 0;
+                try {
+                    let parsed = json(raw);
+                    if (type(parsed) == "object" && parsed != null && parsed.message == null)
+                        delay = int(parsed.delay || 0);
+                }
+                catch (e) {
+                    delay = 0;
+                }
+                result[name] = delay;
+                remember_probe_delay(name, delay, true);
+            }
+            print(sprintf("%J\n", result));
+            return 0;
+        }
+        let args = [ "curl", "-G", "-s", "--max-time", as_string(probe_timeout_seconds(arg2)), base_url + "/group/" + clash_urlencode(arg1) + "/delay" ];
         for (let item in auth) push(args, item);
         push(args, "--data-urlencode");
         push(args, "url=" + test_url);

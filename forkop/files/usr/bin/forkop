@@ -134,6 +134,7 @@ function show_help() {
     print("    service_action_status   Get background service action status\n");
     print("    latency_test_async      Start a dashboard latency test in the background\n");
     print("    latency_test_status     Get background latency test status\n");
+    print("    latency_test_cancel     Stop a background latency test\n");
     print("    ui_action_ack           Acknowledge a finished UI action state\n");
     print("    generate_warp [license] [detour]\n");
     print("                            Register a Cloudflare WARP profile\n");
@@ -240,6 +241,7 @@ function command_spec(command) {
         service_action_status: [ "service/ui.uc", "service-action-status", 1 ],
         latency_test_async: [ "service/ui.uc", "latency-test-async", 4 ],
         latency_test_status: [ "service/ui.uc", "latency-test-status", 1 ],
+        latency_test_cancel: [ "service/ui.uc", "latency-test-cancel", 1 ],
         ui_action_ack: [ "service/ui.uc", "action-ack", 2 ],
         generate_reality_keypair: [ "server/service.uc", "generate-reality-keypair", 0 ],
         generate_warp: [ "warp/register.uc", "register", 2 ],
