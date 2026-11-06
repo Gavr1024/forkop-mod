@@ -716,6 +716,8 @@ bypass
 443,80,443-444
 [rule.text_rule.fully_routed_ips]
 192.168.1.10/32
+[rule.text_rule.excluded_source_ips]
+
 [rule.text_rule.community_subnet_lists]
 meta telegram discord
 [rule.text_rule.remote_subnet_lists]
@@ -735,6 +737,8 @@ proxy
 [rule.default_enabled.ports]
 53,853
 [rule.default_enabled.fully_routed_ips]
+
+[rule.default_enabled.excluded_source_ips]
 
 [rule.default_enabled.community_subnet_lists]
 cloudflare roblox
@@ -796,6 +800,8 @@ bypass
 443,80,443-444
 [rule.enabled.fully_routed_ips]
 192.168.1.10/32
+[rule.enabled.excluded_source_ips]
+
 [rule.enabled.community_subnet_lists]
 meta telegram discord
 [rule.enabled.remote_subnet_lists]

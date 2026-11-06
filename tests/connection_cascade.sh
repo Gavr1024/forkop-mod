@@ -16,6 +16,15 @@ fail() {
   exit 1
 }
 
+mkdir -p "$WORK_DIR/bin"
+cat >"$WORK_DIR/bin/sing-box" <<'EOF_SING_BOX'
+#!/bin/sh
+echo "sing-box version 1.12.25"
+exit 0
+EOF_SING_BOX
+chmod +x "$WORK_DIR/bin/sing-box"
+export PATH="$WORK_DIR/bin:$PATH"
+
 mkdir -p "$WORK_DIR/subscriptions" "$WORK_DIR/output.json.section-cache"
 
 cat >"$WORK_DIR/subscriptions/source-subscription-1.json" <<'JSON'
@@ -119,7 +128,7 @@ function assert(condition, message) {
         die(message + "\n");
 }
 
-assert(outbound("source-1-out").detour == "hop-out", "manual URL did not receive the section detour");
+assert(outbound("source-1-out").detour == null, "local SOCKS manual URL must not loop through the section detour");
 assert(outbound("nested-entry").detour == "nested-relay", "subscription detour was overwritten");
 assert(outbound("nested-relay").detour == "hop-out", "section detour was not appended to the subscription chain");
 assert(outbound("independent").detour == "hop-out", "independent subscription outbound did not receive the section detour");

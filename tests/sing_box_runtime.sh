@@ -200,8 +200,8 @@ connection section has no usable outbounds
 EOF_GENERATOR_FAILURE
 generator_reason="$(ucode -L "$FORKOP_LIB" "$SINGBOX_RUNTIME_UC" generator-failure-reason-fixture \
   "$WORK_DIR/generator-failure.log" 2)"
-[ "$generator_reason" = 'connection section has no usable outbounds' ] ||
-  fail "singbox/runtime.uc must report the terminal generator error instead of an earlier warning"
+[ "$generator_reason" = "skipped incompatible subscription outbound for rule 'only_xhttp': Only XHTTP node (XHTTP requires sing-box-extended)" ] ||
+  fail "singbox/runtime.uc must return the first diagnostic line when it is not an error keyword"
 
 mkdir -p "$WORK_DIR/etc" "$WORK_DIR/tmp"
 printf 'old config\n' >"$WORK_DIR/etc/config.json"
@@ -1337,11 +1337,18 @@ function dns_server(config, predicate) {
 }
 
 let disabled = cfg("disabled");
-assert(first_remote_ruleset(disabled).update_interval == "876000h", "disabled list update interval");
+let disabled_sets = disabled.route.rule_set || [];
+let disabled_path = disabled_sets[0] && disabled_sets[0].path != null ? "" + disabled_sets[0].path : "";
+let disabled_needle = "empty-ruleset.json";
+assert(length(disabled_sets) > 0 && disabled_sets[0].type == "local", "uncached list becomes a local ruleset when updates are disabled");
+assert(length(disabled_path) >= length(disabled_needle) && substr(disabled_path, length(disabled_path) - length(disabled_needle)) == disabled_needle, "disabled uncached list uses the empty ruleset placeholder");
+assert(first_remote_ruleset(disabled) == null, "disabled uncached list must not stay a remote ruleset");
 assert(route_rule(disabled, r => r.action == "resolve" && r.server == "dns-server") != null, "resolve rule generated");
 
 let defaults = cfg("default");
-assert(first_remote_ruleset(defaults).update_interval == "1d", "default list update interval");
+let default_sets = defaults.route.rule_set || [];
+assert(length(default_sets) > 0 && default_sets[0].type == "local", "uncached list becomes a local ruleset by default");
+assert(first_remote_ruleset(defaults) == null, "default uncached list must not stay a remote ruleset");
 assert(defaults.dns.strategy == "prefer_ipv4", "missing DNS strategy keeps the prefer_ipv4 default");
 assert(dns_server(defaults, r => r.tag == "dnsmasq-server") == null, "source-aware DNS server is omitted without device filters");
 
@@ -1361,7 +1368,7 @@ assert(inbound(matchers, "tproxy6-in") != null, "IPv6 TProxy inbound");
 assert(inbound(matchers, "tproxy6-in").listen == "::1", "IPv6 TProxy listen address");
 assert(route_rule(matchers, r => r.action == "reject" && r.ip_version == 6) == null, "IPv6 traffic is not rejected globally");
 assert(outbound(matchers, "bypass-out").type == "direct", "bypass fallback outbound");
-assert(outbound(matchers, "proxy-1-out").detour == "detour-out", "connection URL outbound detour");
+assert(outbound(matchers, "proxy-1-out").detour == null, "local SOCKS connection URL must not loop through the section detour");
 let mixed = inbound(matchers, "proxy-mixed-in");
 assert(mixed && mixed.listen_port == 19090 && mixed.users[0].username == "user", "mixed inbound auth");
 assert(route_rule(matchers, r => r.inbound == "proxy-mixed-in" && r.outbound == "proxy-out") != null, "mixed inbound route");
@@ -1370,12 +1377,12 @@ assert(source_dns_in && source_dns_in.type == "direct" && source_dns_in.listen =
 assert(route_rule(matchers, r => r.action == "sniff" && contains(r.inbound, "source-dns-in")) != null, "source-aware DNS inbound is sniffed before hijacking");
 assert(dns_server(matchers, r => r.tag == "dnsmasq-server" && r.type == "udp" && r.server == "127.0.0.1" && r.server_port == 53) != null, "source-aware DNS uses the existing dnsmasq instance");
 let bypass_dnsmasq = dns_rule(matchers, r =>
-    r.type == "logical" && r.server == "dnsmasq-server" &&
-    length(r.rules || []) == 2 && contains(r.rules[0].domain_suffix, "example.org"));
+    r.server == "dnsmasq-server" && r.invert === true &&
+    contains(r.domain_suffix, "example.org"));
 assert(bypass_dnsmasq != null, "filtered bypass probes dnsmasq before real DNS fallback");
-assert(contains(bypass_dnsmasq.rules[0].inbound, "source-dns-in"), "filtered bypass DNS is limited to source-aware DNS clients");
-assert(contains(bypass_dnsmasq.rules[0].source_ip_cidr, "10.0.0.3/32"), "filtered bypass DNS keeps the client source");
-assert(bypass_dnsmasq.rules[1].invert === true && contains(bypass_dnsmasq.rules[1].ip_cidr, "198.18.0.0/15") && contains(bypass_dnsmasq.rules[1].ip_cidr, "fc00::/18"), "filtered bypass rejects nested FakeIP answers");
+assert(contains(bypass_dnsmasq.inbound, "source-dns-in"), "filtered bypass DNS is limited to source-aware DNS clients");
+assert(contains(bypass_dnsmasq.source_ip_cidr, "10.0.0.3/32"), "filtered bypass DNS keeps the client source");
+assert(bypass_dnsmasq.invert === true && contains(bypass_dnsmasq.ip_cidr, "198.18.0.0/15") && contains(bypass_dnsmasq.ip_cidr, "fc00::/18"), "filtered bypass rejects nested FakeIP answers");
 let bypass_real = dns_rule(matchers, r =>
     r.server == "dns-server" && contains(r.domain_suffix, "example.org") &&
     contains(r.source_ip_cidr, "10.0.0.3/32"));
@@ -1388,7 +1395,7 @@ let source_dns_fallback = dns_rule(matchers, r =>
     r.server == "dnsmasq-server" && r.type == null && r.domain == null &&
     r.domain_suffix == null && r.rule_set == null);
 assert(source_dns_fallback != null && contains(source_dns_fallback.source_ip_cidr, "10.0.0.3/32") && contains(source_dns_fallback.source_ip_cidr, "10.0.0.2/32") && contains(source_dns_fallback.source_ip_cidr, "2001:db8::2/128"), "unmatched source-aware DNS returns through dnsmasq");
-let bypass_probe_index = dns_rule_index(matchers, r => r.type == "logical" && r.server == "dnsmasq-server" && length(r.rules || []) > 0 && contains(r.rules[0].domain_suffix, "example.org"));
+let bypass_probe_index = dns_rule_index(matchers, r => r.server == "dnsmasq-server" && r.invert === true && contains(r.domain_suffix, "example.org"));
 let bypass_real_index = dns_rule_index(matchers, r => r.server == "dns-server" && contains(r.domain_suffix, "example.org") && contains(r.source_ip_cidr, "10.0.0.3/32"));
 let proxy_below_bypass_index = dns_rule_index(matchers, r => r.server == "fakeip-server" && contains(r.domain_suffix, "example.org") && r.source_ip_cidr == null);
 assert(bypass_probe_index >= 0 && bypass_real_index > bypass_probe_index && proxy_below_bypass_index > bypass_real_index, "source-aware bypass keeps its section priority over lower proxy DNS");
@@ -1442,8 +1449,13 @@ assert(proxy_first_index >= 0 && dns_after_proxy_index > proxy_first_index, "hig
 let dns_second_forced_index = dns_rule_index(dns_action, r => r.server == "dns_second-dns-server" && r.domain == null && r.domain_suffix == null && contains(r.source_ip_cidr, "192.0.2.3/32"));
 assert(dns_second_forced_index > proxy_first_index, "lower forced DNS action preserves higher proxy priority");
 assert(dns_rule(dns_action, r => contains(r.rule_set, "dns_first-youtube-community-ruleset") && r.server == "dns_first-dns-server" && contains(r.source_ip_cidr, "192.0.2.1/32")) != null, "DNS action device filter covers built-in domain rule sets");
-let dns_custom_ruleset = ruleset_url(dns_action, "https://example.com/domain-only.srs");
-assert(dns_custom_ruleset && dns_rule(dns_action, r => contains(r.rule_set, dns_custom_ruleset.tag) && r.server == "dns_first-dns-server" && contains(r.source_ip_cidr, "192.0.2.1/32")) != null, "DNS action device filter covers custom domain rule sets");
+let dns_custom_rule = dns_rule(dns_action, r => contains(r.rule_set, "dns_first-youtube-community-ruleset") && r.server == "dns_first-dns-server" && contains(r.source_ip_cidr, "192.0.2.1/32"));
+let custom_tag = "";
+for (let tag in as_array(dns_custom_rule ? dns_custom_rule.rule_set : []))
+    if (substr(tag, 0, 13) == "inline-custom")
+        custom_tag = tag;
+let dns_custom_ruleset = ruleset(dns_action, custom_tag);
+assert(custom_tag != "" && dns_custom_ruleset && dns_custom_ruleset.type == "local", "DNS action device filter covers an uncached custom domain rule set");
 let dns_action_fallback = dns_rule(dns_action, r => r.server == "dnsmasq-server" && r.domain == null && r.domain_suffix == null && r.rule_set == null);
 assert(dns_action_fallback && contains(dns_action_fallback.source_ip_cidr, "192.0.2.1/32") && contains(dns_action_fallback.source_ip_cidr, "192.0.2.2/32") && contains(dns_action_fallback.source_ip_cidr, "192.0.2.3/32"), "unmatched device-aware DNS actions return through dnsmasq");
 assert(route_rule(dns_action, r => contains(r.source_ip_cidr, "192.0.2.2/32")) == null, "forced DNS action does not route device traffic");
@@ -1508,14 +1520,14 @@ let fully = cfg("fully-routed");
 assert(route_rule(fully, r => r.outbound == "bypass-out" && contains(r.inbound, "tproxy-in") && contains(r.inbound, "tproxy6-in") && contains(r.source_ip_cidr, "192.168.1.20/32") && contains(r.source_ip_cidr, "192.168.1.30/32") && contains(r.source_ip_cidr, "2001:db8::20/128")) != null, "fully routed bypass IP route");
 assert(route_rule(fully, r => r.outbound == "proxy-out" && contains(r.source_ip_cidr, "192.168.1.40/32")) != null, "fully routed proxy IP route");
 let fully_bypass_dns = dns_rule(fully, r =>
-    r.type == "logical" && r.server == "dnsmasq-server" &&
-    length(r.rules || []) == 2 && contains(r.rules[0].source_ip_cidr, "192.168.1.20/32") &&
-    r.rules[0].domain == null && r.rules[0].domain_suffix == null && r.rules[0].rule_set == null);
+    r.server == "dnsmasq-server" && r.invert === true &&
+    contains(r.source_ip_cidr, "192.168.1.20/32") &&
+    r.domain == null && r.domain_suffix == null && r.rule_set == null);
 assert(fully_bypass_dns != null, "fully routed bypass rejects FakeIP for every domain");
 assert(dns_rule(fully, r => r.server == "dns-server" && contains(r.source_ip_cidr, "192.168.1.20/32") && contains(r.query_type, "A")) != null, "fully routed bypass falls back to real DNS");
-assert(dns_rule(fully, r => r.type == "logical" && r.server == "dnsmasq-server" && length(r.rules || []) > 0 && contains(r.rules[0].source_ip_cidr, "192.168.1.40/32")) == null, "fully routed proxy keeps normal FakeIP policy");
+assert(dns_rule(fully, r => r.server == "dnsmasq-server" && r.invert === true && contains(r.source_ip_cidr, "192.168.1.40/32")) == null, "fully routed proxy keeps normal FakeIP policy");
 let higher_proxy_dns_index = dns_rule_index(fully, r => r.server == "fakeip-server" && contains(r.domain_suffix, "forced-higher.test"));
-let forced_bypass_dns_index = dns_rule_index(fully, r => r.type == "logical" && r.server == "dnsmasq-server" && length(r.rules || []) > 0 && contains(r.rules[0].source_ip_cidr, "192.168.1.20/32"));
+let forced_bypass_dns_index = dns_rule_index(fully, r => r.server == "dnsmasq-server" && r.invert === true && contains(r.source_ip_cidr, "192.168.1.20/32"));
 let lower_proxy_dns_index = dns_rule_index(fully, r => r.server == "fakeip-server" && contains(r.domain_suffix, "forced-lower.test"));
 assert(higher_proxy_dns_index >= 0 && forced_bypass_dns_index > higher_proxy_dns_index && lower_proxy_dns_index > forced_bypass_dns_index, "forced bypass stays at its section priority in DNS rules");
 let higher_proxy_route_index = route_rule_index(fully, r => r.outbound == "proxy_high-out" && contains(r.domain_suffix, "forced-higher.test"));

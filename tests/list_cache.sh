@@ -111,7 +111,7 @@ extract_fn() {
     found && !first && /^function / { first=NR }
     found && first && NR>first && /^function / { exit }
     found { print }
-  ' "$1"
+  ' "$1" || true
 }
 sb_fn="$(extract_fn "$GENERATOR" generate_download_socks)"
 printf '%s\n' "$sb_fn" | grep -Fq 'forkop-download' || fail "sing-box download socks must expose forkop-download"

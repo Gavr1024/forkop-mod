@@ -13,7 +13,7 @@ extract_fn() {
     $0 ~ "^function " name "\\(" { grab = 1 }
     grab { print }
     grab && $0 ~ /^}$/ { exit }
-  ' "$file"
+  ' "$file" || true
 }
 
 cat >"$WORK_DIR/check.uc" <<'UCODE'

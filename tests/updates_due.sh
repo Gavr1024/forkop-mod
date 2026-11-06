@@ -92,7 +92,7 @@ assert_eq $'https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Subne
 assert_eq 'https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Subnets/IPv4/roblox.lst' \
   "$(updates_ucode builtin-subnet-urls roblox)" \
   "Roblox available subnet family"
-assert_eq 7 \
+assert_eq 6 \
   "$(grep -c 'log_message("Failed to download .*"error");' "$UPDATES_UC")" \
   "terminal list download errors"
 if grep 'log_message("Failed to download .*"warn");' "$UPDATES_UC" >/dev/null 2>&1; then

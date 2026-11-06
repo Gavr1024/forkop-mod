@@ -18,6 +18,15 @@ fail() {
   exit 1
 }
 
+mkdir -p "$WORK_DIR/bin"
+cat >"$WORK_DIR/bin/sing-box" <<'EOF_SING_BOX'
+#!/bin/sh
+echo "sing-box version 1.12.25"
+exit 0
+EOF_SING_BOX
+chmod +x "$WORK_DIR/bin/sing-box"
+export PATH="$WORK_DIR/bin:$PATH"
+
 mkdir -p "$WORK_DIR/subscriptions"
 cat >"$WORK_DIR/subscriptions/proxy-subscription-1.json" <<'JSON'
 {
@@ -276,7 +285,7 @@ cat >"$WORK_DIR/xray-unsupported-flow.json" <<'JSON'
   "outbounds": [
     { "protocol": "vless", "tag": "proxy-bad", "settings": { "vnext": [ {
       "address": "bad.example.com", "port": 443, "users": [ {
-        "id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-vision-udp443"
+        "id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-direct"
       } ]
     } ] } },
     { "protocol": "socks", "tag": "proxy-good", "settings": {
@@ -296,7 +305,7 @@ let fs = require("fs");
 let outbounds = json(fs.readfile(ARGV[0])).outbounds || [];
 let good = false;
 for (let outbound in outbounds) {
-    if (outbound.flow == "xtls-rprx-vision-udp443" || outbound.tag == "proxy-bad")
+    if (outbound.flow == "xtls-rprx-direct" || outbound.tag == "proxy-bad")
         die("unsupported Xray VLESS flow was retained\n");
     if (outbound.type == "urltest")
         for (let tag in outbound.outbounds || [])

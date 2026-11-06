@@ -161,10 +161,15 @@ grep -Fq 'install_staged_file(tmp_cronet, "/usr/lib/libcronet.so", "0644")' "$AC
 if grep -Fq 'fs.rename(tmp_binary, "/usr/bin/sing-box")' "$ACTION_UC"; then
   fail "compressed sing-box installation must not rename directly across OpenWrt filesystems"
 fi
-grep -Fq 'let backup_on_tmpfs = previous_variant == "extended-compressed";' "$ACTION_UC" ||
-  fail "package sing-box installs must move compressed backups off overlay before opkg space checks"
-grep -Fq 'backup_binary = backup_on_tmpfs ? tmp_dir + "/sing-box.forkop-backup"' "$ACTION_UC" ||
-  fail "compressed sing-box backup must use tmpfs while installing a package variant"
+if grep -Fq 'backup_on_tmpfs' "$ACTION_UC"; then
+  fail "package sing-box installs must not park a compressed backup on tmpfs"
+fi
+grep -Fq 'Removing installed sing-box-extended before package replacement' "$ACTION_UC" ||
+  fail "package sing-box installs must remove the previous extended package before replacement"
+grep -Fq 'Removing sing-box-tiny before sing-box-extended package installation' "$ACTION_UC" ||
+  fail "package sing-box installs must remove sing-box-tiny before installation"
+grep -Fq 'Removing sing-box before sing-box-extended package installation' "$ACTION_UC" ||
+  fail "package sing-box installs must remove sing-box before installation"
 grep -Fq 'return move_file_portable(backup_binary, "/usr/bin/sing-box");' "$ACTION_UC" &&
   fail "portable sing-box restore must preserve executable permissions explicitly"
 grep -Fq 'if (!move_file_portable(backup_binary, "/usr/bin/sing-box"))' "$ACTION_UC" ||
@@ -186,6 +191,27 @@ cat >"$package_runtime_lib/core/uci.uc" <<'UCODE'
 function module_exports() {
   return {
     available: function() { return false; }
+  };
+}
+
+if (sourcepath(1) != null && sourcepath(1) != "")
+  return module_exports();
+UCODE
+cat >"$package_runtime_lib/core/engine.uc" <<'UCODE'
+function module_exports() {
+  return {
+    is_xray_primary: function() { return false; }
+  };
+}
+
+if (sourcepath(1) != null && sourcepath(1) != "")
+  return module_exports();
+UCODE
+mkdir -p "$package_runtime_lib/routing"
+cat >"$package_runtime_lib/routing/list_cache.uc" <<'UCODE'
+function module_exports() {
+  return {
+    download_proxy_address: function() { return ""; }
   };
 }
 
@@ -363,6 +389,25 @@ cp "$UPDATES_UC" "$fake_lib/components/updates.uc"
 printf 'return {};\n' >"$fake_lib/config/connections.uc"
 cp "$FORKOP_LIB/core/uci.uc" "$fake_lib/core/uci.uc"
 cp "$FORKOP_LIB/core/common.uc" "$fake_lib/core/common.uc"
+cat >"$fake_lib/core/engine.uc" <<'UCODE'
+function module_exports() {
+  return {
+    is_xray_primary: function() { return false; }
+  };
+}
+
+if (sourcepath(1) != null && sourcepath(1) != "")
+  return module_exports();
+UCODE
+mkdir -p "$fake_lib/routing"
+cat >"$fake_lib/routing/list_cache.uc" <<'UCODE'
+function module_exports() {
+  return {};
+}
+
+if (sourcepath(1) != null && sourcepath(1) != "")
+  return module_exports();
+UCODE
 cat >"$fake_lib/components/action.uc" <<'UCODE'
 #!/usr/bin/env ucode
 if ((ARGV[0] || "") == "component-action") {

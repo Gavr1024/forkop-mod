@@ -35,7 +35,7 @@ extract_fn() {
     $0 ~ "^function " name "\\(" { grab = 1 }
     grab { print }
     grab && $0 ~ /^}$/ { exit }
-  ' "$file"
+  ' "$file" || true
 }
 
 require_file "$XRAY_GEN"

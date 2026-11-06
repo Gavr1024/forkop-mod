@@ -18,6 +18,15 @@ fail() {
   exit 1
 }
 
+mkdir -p "$WORK_DIR/bin"
+cat >"$WORK_DIR/bin/sing-box" <<'EOF_SING_BOX'
+#!/bin/sh
+echo "sing-box version 1.12.25"
+exit 0
+EOF_SING_BOX
+chmod +x "$WORK_DIR/bin/sing-box"
+export PATH="$WORK_DIR/bin:$PATH"
+
 generate_config() {
   local fixture="$1"
   local output="$2"
