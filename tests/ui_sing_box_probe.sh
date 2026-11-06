@@ -111,7 +111,7 @@ FORKOP_TEST_SING_BOX_PROBE_MODE=slow ui_capabilities >/dev/null
   fail "failed sing-box probe must be cached during the retry cooldown"
 
 while IFS= read -r pid; do
-  if kill -0 "$pid" 2>/dev/null; then
+  if kill -0 "$pid" 2>/dev/null ; then
     fail "timed-out sing-box probe process $pid is still running"
   fi
 done <"$PROBE_PIDS"

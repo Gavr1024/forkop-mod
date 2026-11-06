@@ -61,7 +61,7 @@ assert_rejects() {
     fail "$label should be rejected"
   fi
 
-  printf '%s\n' "$output" | grep -Fq "$expected" ||
+  printf '%s\n' "$output" | grep -F "$expected" >/dev/null ||
     fail "$label: expected message containing '$expected', got '$output'"
 }
 
@@ -376,7 +376,7 @@ cat >"$WORK_DIR/select-first-live-latency.json" <<'JSON'
 JSON
 first_live="$(ucode -L "$FORKOP_LIB" "$PRIORITY_UC" select-fixture \
   "$WORK_DIR/select-first-live-group.json" "$WORK_DIR/select-first-live-latency.json" 0 1)"
-printf '%s\n' "$first_live" | grep -Fq '"tag": "b"' ||
+printf '%s\n' "$first_live" | grep -F '"tag": "b"' >/dev/null ||
   fail "priority selection should choose the first live outbound when pick_fastest=0"
 
 cat >"$WORK_DIR/select-fastest-group.json" <<'JSON'
@@ -393,7 +393,7 @@ cat >"$WORK_DIR/select-fastest-latency.json" <<'JSON'
 JSON
 fastest="$(ucode -L "$FORKOP_LIB" "$PRIORITY_UC" select-fixture \
   "$WORK_DIR/select-fastest-group.json" "$WORK_DIR/select-fastest-latency.json" 0 0)"
-printf '%s\n' "$fastest" | grep -Fq '"tag": "b"' ||
+printf '%s\n' "$fastest" | grep -F '"tag": "b"' >/dev/null ||
   fail "priority selection should choose the fastest live outbound when pick_fastest=1"
 
 cat >"$WORK_DIR/filter-modes.json" <<'JSON'
@@ -662,7 +662,7 @@ assert_rejects "priority level bad filter mode" "$WORK_DIR/bad-filter-mode.json"
 
 skip_dead="$(ucode -L "$FORKOP_LIB" "$PRIORITY_UC" select-fixture \
   "$WORK_DIR/select-first-live-group.json" "$WORK_DIR/select-fastest-latency.json" 0 1 a)"
-printf '%s\n' "$skip_dead" | grep -Fq '"tag": "b"' ||
+printf '%s\n' "$skip_dead" | grep -F '"tag": "b"' >/dev/null ||
   fail "replacement selection should skip the just-failed active outbound"
 
 cat >"$WORK_DIR/select-faster-current-latency.json" <<'JSON'
@@ -670,7 +670,7 @@ cat >"$WORK_DIR/select-faster-current-latency.json" <<'JSON'
 JSON
 same_level="$(ucode -L "$FORKOP_LIB" "$PRIORITY_UC" select-faster-fixture \
   "$WORK_DIR/select-fastest-group.json" "$WORK_DIR/select-faster-current-latency.json" 0 a)"
-printf '%s\n' "$same_level" | grep -Fq '"tag": "b"' ||
+printf '%s\n' "$same_level" | grep -F '"tag": "b"' >/dev/null ||
   fail "same-level switching should compare candidates with the active delay from the same pass"
 
 printf 'Priority failover checks passed\n'

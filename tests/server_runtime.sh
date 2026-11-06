@@ -64,10 +64,10 @@ export FORKOP_UCI_LOG_FILE="$LOG"
 export FORKOP_CONFIG_NAME="forkop"
 export FORKOP_SERVER_RUNTIME_UC="$SERVER_RUNTIME"
 
-if grep -E 'uci -q|command -v uci' "$SERVER_RUNTIME" >/dev/null; then
+if grep -E 'uci -q|command -v uci' "$SERVER_RUNTIME" >/dev/null ; then
   fail "server/service.uc must use ucode UCI access instead of shelling out to uci"
 fi
-if grep -F 'output("ucode "' "$SERVER_RUNTIME" >/dev/null; then
+if grep -F 'output("ucode "' "$SERVER_RUNTIME" >/dev/null ; then
   fail "server defaults must not spawn service.uc without the Forkop module path"
 fi
 

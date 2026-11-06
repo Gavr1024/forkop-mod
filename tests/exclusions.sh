@@ -57,10 +57,10 @@ fi
 
 if command -v ucode >/dev/null 2>&1; then
   parsed="$(ucode -L "$ROOT_DIR/forkop/files/usr/lib" "$DNS_APPLY" parse-excluded-upstreams '/example.com/1.1.1.1 127.0.0.42 9.9.9.9#53 [2606:4700:4700::1111]')"
-  printf '%s\n' "$parsed" | grep -qx '1.1.1.1' || fail "parser dropped the saved IPv4 DNS"
-  printf '%s\n' "$parsed" | grep -qx '9.9.9.9' || fail "parser dropped a port-qualified DNS address"
-  printf '%s\n' "$parsed" | grep -qx '2606:4700:4700::1111' || fail "parser dropped an IPv6 DNS address"
-  if printf '%s\n' "$parsed" | grep -q '127.0.0.42'; then
+  printf '%s\n' "$parsed" | grep -x '1.1.1.1' >/dev/null || fail "parser dropped the saved IPv4 DNS"
+  printf '%s\n' "$parsed" | grep -x '9.9.9.9' >/dev/null || fail "parser dropped a port-qualified DNS address"
+  printf '%s\n' "$parsed" | grep -x '2606:4700:4700::1111' >/dev/null || fail "parser dropped an IPv6 DNS address"
+  if printf '%s\n' "$parsed" | grep '127.0.0.42' >/dev/null ; then
     fail "parser kept the engine DNS address"
   fi
 fi

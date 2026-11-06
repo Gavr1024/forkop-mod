@@ -257,7 +257,7 @@ assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\ti
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\tjump\tpriority_output_rules' "runtime priority output jump"
 assert_contains "$NFT_LOG" $'nft\tinsert\trule\tinet\tForkopTable\tmangle\tudp\tdport\t123\treturn' "runtime ntp exclusion"
 assert_contains "$NFT_LOG" $'nft\tinsert\trule\tinet\tForkopTable\tmangle_output\tudp\tdport\t123\treturn' "runtime output ntp exclusion"
-if grep -Fq $'output_redirect' "$NFT_LOG" || grep -Fq $'dns_redirect_output' "$NFT_LOG"; then
+if grep -F $'output_redirect' "$NFT_LOG" >/dev/null || grep -Fq $'dns_redirect_output' "$NFT_LOG"; then
   fail "OUTPUT redirect chain must not exist when router traffic intercept is off"
 fi
 
@@ -271,7 +271,7 @@ assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\
 if grep -Fq $'network' "$NFT_LOG"; then
   fail "router output intercept must not mention inbound network field"
 fi
-if grep -Fq $'0.0.0.0:1604' "$NFT_LOG" || grep -Fq $'redirect6-in' "$NFT_LOG"; then
+if grep -F $'0.0.0.0:1604' "$NFT_LOG" >/dev/null || grep -Fq $'redirect6-in' "$NFT_LOG"; then
   fail "router output intercept must not bind 0.0.0.0:1604 or add an IPv6 redirect inbound"
 fi
 
@@ -591,7 +591,7 @@ unscoped_json="$WORK_DIR/unscoped-json-ports.txt"
 scoped_json="$WORK_DIR/scoped-json-ports.txt"
 nft_ucode nft-add-json-ruleset-subnets-for-section-fixture "$WORK_DIR/populate-fixture.json" ports_only "$json_ruleset" "fixture json ports" ForkopTable forkop_subnets forkop_ip_ports "$unscoped_json" "$scoped_json" 4
 assert_contains "$NFT_LOG" $'198.51.100.220 . 53,198.51.100.220 . 5353,198.51.100.220 . 853' "json ruleset scoped import"
-if grep -Fq '198.51.100.221' "$NFT_LOG" || grep -Fq '198.51.100.222' "$NFT_LOG"; then
+if grep -F '198.51.100.221' "$NFT_LOG" >/dev/null || grep -Fq '198.51.100.222' "$NFT_LOG"; then
   fail "json ruleset section ports should intersect rule-owned port filters"
 fi
 
@@ -627,7 +627,7 @@ assert_contains "$NFT_LOG" $'nft\tadd\telement\tinet\tForkopTable\tforkop_rule_i
 assert_contains "$NFT_LOG" $'nft\tadd\telement\tinet\tForkopTable\tforkop_rule_inline_no_ports_fully_sources\t{ 192.168.1.21/32 }' "populate bypass fully routed source set"
 assert_contains "$NFT_LOG" $'nft\tadd\telement\tinet\tForkopTable\tforkop_dns_sources\t{ 192.168.1.21/32,192.168.1.22/32,192.168.1.54/32,192.168.1.53/32 }' "populate source-aware DNS IPv4 sources"
 assert_contains "$NFT_LOG" $'nft\tadd\telement\tinet\tForkopTable\tforkop_dns_sources6\t{ 2001:db8::21/128,2001:db8::22/128 }' "populate source-aware DNS IPv6 sources"
-if grep -F $'ForkopTable\tforkop_dns_sources\t' "$NFT_LOG" | grep -Fq '192.168.1.60/32'; then
+if grep -F $'ForkopTable\tforkop_dns_sources\t' "$NFT_LOG" | grep -F '192.168.1.60/32' >/dev/null ; then
   fail "IP-only source filter should not intercept DNS"
 fi
 if grep -Fq $'nft\tinsert\trule' "$NFT_LOG"; then
@@ -642,7 +642,7 @@ fi
 if grep -Fq $'nft\tadd\telement\tinet\tForkopTable\tforkop_rule_ports_with_domain_ports\t{ 8443 }' "$NFT_LOG"; then
   fail "ports with destination matchers should not populate global port set"
 fi
-if grep -Fq '192.0.2.53' "$NFT_LOG" || grep -Fq 'forkop_rule_dns_only' "$NFT_LOG"; then
+if grep -F '192.0.2.53' "$NFT_LOG" >/dev/null || grep -Fq 'forkop_rule_dns_only' "$NFT_LOG"; then
   fail "DNS action should only populate the shared source-aware DNS set"
 fi
 cat >"$WORK_DIR/signature-fixture.json" <<'JSON'

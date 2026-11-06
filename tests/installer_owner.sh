@@ -60,7 +60,7 @@ grep -Fq 'run_with_deadline "$METADATA_TIMEOUT_SECONDS" wget -T "$CONNECT_TIMEOU
   fail "installer wget metadata requests must have portable connect and total timeouts"
 grep -Fq 'run_with_deadline "$DOWNLOAD_TIMEOUT_SECONDS" wget -T "$CONNECT_TIMEOUT_SECONDS" -q -O' "$INSTALLER" ||
   fail "installer wget downloads must have portable connect and total timeouts"
-if grep -n -E 'wget.*[[:space:]]-t([[:space:]]|$)' "$INSTALLER" >/dev/null; then
+if grep -n -E 'wget.*[[:space:]]-t([[:space:]]|$)' "$INSTALLER" >/dev/null ; then
   fail "installer wget commands must not use the unsupported OpenWrt -t option"
 fi
 eval "$(sed -n '/^run_with_deadline()/,/^}/p' "$INSTALLER")"
@@ -84,7 +84,7 @@ if run_with_deadline 1 sh -c '
   fail "installer deadline watchdog must fail a stubborn process tree"
 fi
 [ -s "$deadline_child_pid" ] || fail "deadline process-tree fixture did not record its child"
-if kill -0 "$(cat "$deadline_child_pid")" 2>/dev/null; then
+if kill -0 "$(cat "$deadline_child_pid")" 2>/dev/null ; then
   fail "installer deadline watchdog left a descendant running"
 fi
 grep -Fq 'curl --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$METADATA_TIMEOUT_SECONDS"' "$INSTALLER" ||
@@ -92,12 +92,12 @@ grep -Fq 'curl --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$METADAT
 grep -Fq 'curl --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$DOWNLOAD_TIMEOUT_SECONDS"' "$INSTALLER" ||
   fail "installer curl downloads must have connect and total timeouts"
 
-if grep -n -E '(^|[;&|[:space:]])uci[[:space:]]+-q|command_exists[[:space:]]+uci|/usr/bin/uci' "$INSTALLER" >/dev/null; then
+if grep -n -E '(^|[;&|[:space:]])uci[[:space:]]+-q|command_exists[[:space:]]+uci|/usr/bin/uci' "$INSTALLER" >/dev/null ; then
   fail "install.sh must not own UCI reads/writes through shell"
 fi
 
 shell_sing_box_owner_symbols='REQUIRED_SING_BOX_VERSION|SING_BOX_EXTENDED_|SING_BOX_MANAGED_SERVICE_MARKER|remove_old_sing_box_if_needed|install_managed_sing_box_service_script|remove_managed_sing_box_service_script|disable_sing_box_service_config|prepare_sing_box_service_disabled|prepare_sing_box_package_service_install|stop_forkop_for_sing_box_install|pkg_install_sing_box_variant|pkg_install_name_downgrade|pkg_remove_sing_box_conflict|resolve_sing_box_extended_release|install_sing_box_extended_(package|binary)|restore_sing_box_after_failed|move_file_to_backup|validate_extended_sing_box_binary|archive-member-path|sing-box-extended-arch-suffix|sing-box-extended-asset-url|sing-box-extended-package-asset-url'
-if grep -n -E "$shell_sing_box_owner_symbols" "$INSTALLER" >/dev/null; then
+if grep -n -E "$shell_sing_box_owner_symbols" "$INSTALLER" >/dev/null ; then
   fail "install.sh must not contain shell sing-box install/runtime ownership"
 fi
 
@@ -118,7 +118,7 @@ grep -Fq 'singbox extended (если нужен xhttp)' "$INSTALLER" ||
   fail "extended sing-box choice must explain that it is needed for xhttp"
 grep -Fq 'Русский пакет интерфейса будет установлен автоматически.' "$INSTALLER" ||
   fail "Russian LuCI language must enable the Russian interface package without a prompt"
-if grep -n -E 'installer_text (sing_box_tiny|sing_box_extended_compressed)' "$INSTALLER" >/dev/null; then
+if grep -n -E 'installer_text (sing_box_tiny|sing_box_extended_compressed)' "$INSTALLER" >/dev/null ; then
   fail "fresh sing-box build choice must contain only stable and extended"
 fi
 
@@ -191,13 +191,13 @@ grep -Fq 'if ! pkg_is_installed "$LEGACY_BACKEND_PACKAGE"; then' "$detect_legacy
 grep -Fq 'legacy_config_present=0' "$detect_legacy_block" ||
   fail "legacy detection must track a readable config-only legacy installation"
 
-printf '%s\n' '{"tag_name":"0.0.1"}' | ucode "$helper" release-tag | grep -Fxq '0.0.1' ||
+printf '%s\n' '{"tag_name":"0.0.1"}' | ucode "$helper" release-tag | grep -Fx '0.0.1' >/dev/null ||
   fail "embedded helper release-tag mode must parse release JSON"
 release_json='{"tag_name":"0.0.1","assets":[{"name":"forkop_0.0.1.ipk","browser_download_url":"https://example.com/forkop.ipk"}]}'
-printf '%s' "$release_json" | ucode "$helper" release-asset-url backend ipk | grep -Fxq 'https://example.com/forkop.ipk' ||
+printf '%s' "$release_json" | ucode "$helper" release-asset-url backend ipk | grep -Fx 'https://example.com/forkop.ipk' >/dev/null ||
   fail "embedded helper must resolve the exact three-part Forkop package name"
 if printf '%s' '{"tag_name":"0.0.1","assets":[{"name":"forkop_0.0.1_all.ipk","browser_download_url":"https://example.com/old.ipk"}]}' |
-  ucode "$helper" release-asset-url backend ipk | grep -q .; then
+  ucode "$helper" release-asset-url backend ipk | grep . >/dev/null ; then
   fail "embedded helper must reject package names outside the Forkop release format"
 fi
 
@@ -324,12 +324,12 @@ if [ -e "$WORK_DIR/start.retry" ] || [ -e "$WORK_DIR/start-retry.pid" ]; then
 fi
 wait "$RETRY_PID" 2>/dev/null || true
 RETRY_PID=""
-if kill -0 "$ORPHAN_PROBE_PID" 2>/dev/null; then
+if kill -0 "$ORPHAN_PROBE_PID" 2>/dev/null ; then
   fail "installer cleanup left an orphaned init.d probe running"
 fi
 ORPHAN_PROBE_PID=""
 while IFS= read -r pid; do
-  if kill -0 "$pid" 2>/dev/null; then
+  if kill -0 "$pid" 2>/dev/null ; then
     fail "installer cleanup left a timed-out service process running: $pid"
   fi
 done < "$HANG_PID_LOG"
@@ -590,7 +590,7 @@ FORKOP_WAS_RUNNING=1 \
 FORKOP_INSTALLER_INIT_LOG="$WORK_DIR/init.log" \
   ucode "$helper" installer-post-install
 
-if compgen -G "$WORK_DIR/luci-indexcache*" >/dev/null; then
+if compgen -G "$WORK_DIR/luci-indexcache*" >/dev/null ; then
   fail "installer post-install must clear LuCI caches through ucode owner"
 fi
 grep -Fxq 'enable' "$WORK_DIR/init.log" ||

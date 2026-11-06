@@ -139,7 +139,7 @@ assert_eq "8" \
 if state_ucode process-age-seconds-fixture 786162159 786161359 >/dev/null 2>&1; then
   fail "process age must reject a current tick value older than the process"
 fi
-if sed -n '/^function process_age_seconds(pid) {$/,/^}$/p' "$STATE_UC" | grep -Fq '/proc/uptime'; then
+if sed -n '/^function process_age_seconds(pid) {$/,/^}$/p' "$STATE_UC" | grep -F '/proc/uptime' >/dev/null ; then
   fail "process age must not mix process start ticks with virtualized /proc/uptime"
 fi
 

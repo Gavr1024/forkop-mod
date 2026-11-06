@@ -238,7 +238,7 @@ JS
       validate-runtime-fixture "$normalized" '{}' 2>/dev/null)"; then
     fail "validator accepted $fixture"
   fi
-  printf '%s\n' "$output" | grep -Fq "$expected" ||
+  printf '%s\n' "$output" | grep -F "$expected" >/dev/null ||
     fail "validator message for $fixture does not contain: $expected"
 }
 

@@ -136,7 +136,7 @@ export SB_DNS_INBOUND_ADDRESS="127.0.0.42"
 export FORKOP_DNSMASQ_HTTPS_CONF="$WORK_DIR/forkop-filter-rr.conf"
 export FORKOP_DNSMASQ_FILTER_RR="1"
 
-if grep -E 'uci -q|command -v uci' "$APPLY" >/dev/null; then
+if grep -E 'uci -q|command -v uci' "$APPLY" >/dev/null ; then
   fail "dns/apply.uc must use ucode UCI access instead of shelling out to uci"
 fi
 

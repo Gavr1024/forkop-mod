@@ -114,14 +114,14 @@ extract_fn() {
   ' "$1" || true
 }
 sb_fn="$(extract_fn "$GENERATOR" generate_download_socks)"
-printf '%s\n' "$sb_fn" | grep -Fq 'forkop-download' || fail "sing-box download socks must expose forkop-download"
-printf '%s\n' "$sb_fn" | grep -Fq 'tproxy' && fail "sing-box download socks must not open TPROXY"
-printf '%s\n' "$sb_fn" | grep -Fq 'strip_download_routing_marks' || fail "sing-box download socks must drop routing marks"
+printf '%s\n' "$sb_fn" | grep -F 'forkop-download' >/dev/null || fail "sing-box download socks must expose forkop-download"
+printf '%s\n' "$sb_fn" | grep -F 'tproxy' >/dev/null && fail "sing-box download socks must not open TPROXY"
+printf '%s\n' "$sb_fn" | grep -F 'strip_download_routing_marks' >/dev/null || fail "sing-box download socks must drop routing marks"
 xray_fn="$(extract_fn "$ROOT_DIR/forkop/files/usr/lib/xray/generator.uc" generate_download_socks)"
-printf '%s\n' "$xray_fn" | grep -Fq 'apply_primary_plane' && fail "xray download socks must not build the routing plane"
-printf '%s\n' "$xray_fn" | grep -Fq 'strip_download_marks' || fail "xray download socks must drop packet marks"
-printf '%s\n' "$xray_fn" | grep -Fq 'download_bootstrap_addresses' || fail "xray download socks must resolve names through bootstrap DNS"
-printf '%s\n' "$sb_fn" | grep -Fq 'download_bootstrap_servers' || fail "sing-box download socks must resolve names through bootstrap DNS"
+printf '%s\n' "$xray_fn" | grep -F 'apply_primary_plane' >/dev/null && fail "xray download socks must not build the routing plane"
+printf '%s\n' "$xray_fn" | grep -F 'strip_download_marks' >/dev/null || fail "xray download socks must drop packet marks"
+printf '%s\n' "$xray_fn" | grep -F 'download_bootstrap_addresses' >/dev/null || fail "xray download socks must resolve names through bootstrap DNS"
+printf '%s\n' "$sb_fn" | grep -F 'download_bootstrap_servers' >/dev/null || fail "sing-box download socks must resolve names through bootstrap DNS"
 require_text "$CACHE_UC" "/etc/forkop/list-cache"
 require_text "$CACHE_UC" '"/sing-box"'
 require_text "$CACHE_UC" "gzip_file"
@@ -130,10 +130,10 @@ require_text "$CACHE_UC" "/tmp/forkop-stage"
 require_text "$CACHE_UC" "lists_proxy_address"
 require_text "$CACHE_UC" "download_proxy_address"
 require_text "$CACHE_UC" "socks5h://"
-if grep -A6 'function cache_path_for_url' "$CACHE_UC" | grep -Fq 'is_xray_primary'; then
+if grep -A6 'function cache_path_for_url' "$CACHE_UC" | grep -F 'is_xray_primary' >/dev/null ; then
   fail "srs files must live in sing-box/ for both engines"
 fi
-if grep -A8 'function usable_local_path' "$CACHE_UC" | grep -Fq 'is_xray_primary'; then
+if grep -A8 'function usable_local_path' "$CACHE_UC" | grep -F 'is_xray_primary' >/dev/null ; then
   fail "root srs copies must move into sing-box/ even when Xray is active"
 fi
 require_text "$CACHE_UC" "discard_cache_copy"

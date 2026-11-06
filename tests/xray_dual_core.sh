@@ -108,7 +108,7 @@ require_contains "$FORKOP_LIB/xray/runtime.uc" 'function section_is_connection' 
   "URLTest worker must skip bypass/block/dns sections"
 require_contains "$FORKOP_LIB/xray/runtime.uc" 'section.proxy_core' \
   "URLTest worker must read proxy_core from the UCI object, not connections.proxy_core"
-if awk '/^function section_core_name/,/^}/' "$FORKOP_LIB/xray/runtime.uc" | grep -Fq 'connections.proxy_core'; then
+if awk '/^function section_core_name/,/^}/' "$FORKOP_LIB/xray/runtime.uc" | grep -F 'connections.proxy_core' >/dev/null ; then
   fail "section_core_name must not call connections.proxy_core (LHS is not a function on some ucode builds)"
 fi
 require_contains "$FORKOP_LIB/xray/runtime.uc" 'urltest_step' \

@@ -24,7 +24,7 @@ assert_rejects() {
     fail "$label should be rejected"
   fi
 
-  printf '%s\n' "$output" | grep -Fq "$expected" ||
+  printf '%s\n' "$output" | grep -F "$expected" >/dev/null ||
     fail "$label: expected message containing '$expected', got '$output'"
 }
 

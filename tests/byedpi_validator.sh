@@ -49,7 +49,7 @@ assert_json_field "$invalid_json" valid false
 assert_json_field "$invalid_json" needle --port
 
 validator_output="$WORK_DIR/byedpi-validator.out"
-if ucode -- "$VALIDATOR" validate '--transparent' >"$validator_output" 2>/dev/null; then
+if ucode -- "$VALIDATOR" validate '--transparent' >"$validator_output" 2>/dev/null ; then
   fail "controlled transparent mode should be rejected"
 fi
 grep -q 'Transparent proxy mode is incompatible' "$validator_output" ||

@@ -40,7 +40,7 @@ if grep -R -n -E "$runtime_state_shell_symbols" "$FORKOP_BIN" "$FORKOP_INIT" "$R
   fail "runtime_state.sh symbols must not remain in shell"
 fi
 
-if grep -Fq 'acquire_reload_lock' "$FORKOP_INIT" || grep -Fq 'release_reload_lock' "$FORKOP_INIT"; then
+if grep -F 'acquire_reload_lock' "$FORKOP_INIT" >/dev/null || grep -Fq 'release_reload_lock' "$FORKOP_INIT"; then
   fail "init.d must not own reload lock decisions"
 fi
 

@@ -142,12 +142,12 @@ cat >"$WORK_DIR/alive-recovery.json" <<'JSON'
 JSON
 
 selected="$(ucode -L "$FORKOP_LIB" "$FAILOVER" select-fixture "$WORK_DIR/select-state.json" "$WORK_DIR/alive-failover.json" main 0)"
-printf '%s' "$selected" | grep -Eq '"index"[[:space:]]*:[[:space:]]*1' || fail "dead active DNS must select the first live server below"
-printf '%s' "$selected" | grep -Eq '"reason"[[:space:]]*:[[:space:]]*"active_dead"' || fail "failover reason"
+printf '%s' "$selected" | grep -E '"index"[[:space:]]*:[[:space:]]*1' >/dev/null || fail "dead active DNS must select the first live server below"
+printf '%s' "$selected" | grep -E '"reason"[[:space:]]*:[[:space:]]*"active_dead"' >/dev/null || fail "failover reason"
 
 selected="$(ucode -L "$FORKOP_LIB" "$FAILOVER" select-fixture "$WORK_DIR/select-state.json" "$WORK_DIR/alive-recovery.json" bootstrap 1)"
-printf '%s' "$selected" | grep -Eq '"index"[[:space:]]*:[[:space:]]*0' || fail "recovery must return to the highest live priority"
-printf '%s' "$selected" | grep -Eq '"reason"[[:space:]]*:[[:space:]]*"recovery"' || fail "recovery reason"
+printf '%s' "$selected" | grep -E '"index"[[:space:]]*:[[:space:]]*0' >/dev/null || fail "recovery must return to the highest live priority"
+printf '%s' "$selected" | grep -E '"reason"[[:space:]]*:[[:space:]]*"recovery"' >/dev/null || fail "recovery reason"
 
 cat >"$WORK_DIR/verify-previous.json" <<'JSON'
 { "main_index": 0, "bootstrap_index": 0, "bootstrap_servers": [ "a", "b" ] }
@@ -157,7 +157,7 @@ cat >"$WORK_DIR/verify-bootstrap.json" <<'JSON'
 JSON
 
 verification="$(ucode -L "$FORKOP_LIB" "$FAILOVER" verification-plan-fixture "$WORK_DIR/verify-previous.json" "$WORK_DIR/verify-bootstrap.json")"
-printf '%s' "$verification" | grep -Eq '"main"[[:space:]]*:[[:space:]]*false' || fail "bootstrap-only switch must not require a dead main DNS to recover"
-printf '%s' "$verification" | grep -Eq '"bootstrap"[[:space:]]*:[[:space:]]*true' || fail "bootstrap-only switch must verify the selected bootstrap DNS"
+printf '%s' "$verification" | grep -E '"main"[[:space:]]*:[[:space:]]*false' >/dev/null || fail "bootstrap-only switch must not require a dead main DNS to recover"
+printf '%s' "$verification" | grep -E '"bootstrap"[[:space:]]*:[[:space:]]*true' >/dev/null || fail "bootstrap-only switch must verify the selected bootstrap DNS"
 
 printf 'DNS failover checks passed\n'

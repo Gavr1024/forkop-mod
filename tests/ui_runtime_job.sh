@@ -63,10 +63,10 @@ grep -Fq '"forkop-stably-running"' "$UI_UC" ||
   fail "UI Forkop status must use stable runtime state to avoid crash-loop flicker"
 grep -Fq '"sing-box-service-stable"' "$UI_UC" ||
   fail "UI sing-box status must use stable runtime state to avoid crash-loop flicker"
-if sed -n '/^function ensure_dir(/,/^}/p' "$UI_UC" | grep -Fq 'mkdir", "-p'; then
+if sed -n '/^function ensure_dir(/,/^}/p' "$UI_UC" | grep -F 'mkdir", "-p' >/dev/null ; then
   fail "UI state refresh must not spawn mkdir for existing directories"
 fi
-if sed -n '/^function cleanup_dir(/,/^}/p' "$UI_UC" | grep -Fq '"find"'; then
+if sed -n '/^function cleanup_dir(/,/^}/p' "$UI_UC" | grep -F '"find"' >/dev/null ; then
   fail "UI state refresh must clean action files without spawning find"
 fi
 grep -Fq 'run_pending_reload_after_service_action(action, success)' "$UI_UC" ||

@@ -55,7 +55,7 @@ assert_rejects() {
     fail "$label should be rejected"
   fi
 
-  printf '%s\n' "$output" | grep -Fq "$expected" ||
+  printf '%s\n' "$output" | grep -F "$expected" >/dev/null ||
     fail "$label: expected message containing '$expected', got '$output'"
 }
 
@@ -452,7 +452,7 @@ JSON
 if output="$(FORKOP_LIB="$FORKOP_LIB" ucode -L "$FORKOP_LIB" "$VALIDATOR" validate-runtime-fixture "$WORK_DIR/bad-byedpi.json" "$provider_context" 2>/dev/null)"; then
   fail "bad byedpi should be rejected"
 fi
-printf '%s\n' "$output" | grep -Fq "ByeDPI listen address and port are assigned" ||
+printf '%s\n' "$output" | grep -F "ByeDPI listen address and port are assigned" >/dev/null ||
   fail "bad byedpi: unexpected message '$output'"
 
 runtime_lib="$WORK_DIR/runtime-lib"
@@ -508,7 +508,7 @@ if output="$(env \
   ucode -L "$runtime_lib" "$VALIDATOR" validate-runtime-fixture "$WORK_DIR/bad-byedpi-runtime-state.json" "{}" 2>/dev/null)"; then
   fail "executable byedpi provider should enable strategy validation"
 fi
-printf '%s\n' "$output" | grep -Fq "ByeDPI listen address and port are assigned" ||
+printf '%s\n' "$output" | grep -F "ByeDPI listen address and port are assigned" >/dev/null ||
   fail "executable byedpi provider: unexpected message '$output'"
 
 printf 'config validator runtime checks passed\n'

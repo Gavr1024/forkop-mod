@@ -38,11 +38,11 @@ grep -Fq '#!/bin/sh' "$LUCI_UCI_DEFAULTS" ||
   fail "LuCI uci-defaults must remain a shell script because OpenWrt default_postinst runs it through shell"
 grep -Fq '/usr/bin/forkop luci_postinst' "$LUCI_UCI_DEFAULTS" ||
   fail "LuCI uci-defaults must delegate cache/rpcd handling to ucode"
-if grep -E 'rm -f /var/luci-indexcache|rm -f /tmp/luci-indexcache|logger -t "forkop"' "$LUCI_UCI_DEFAULTS" >/dev/null; then
+if grep -E 'rm -f /var/luci-indexcache|rm -f /tmp/luci-indexcache|logger -t "forkop"' "$LUCI_UCI_DEFAULTS" >/dev/null ; then
   fail "LuCI uci-defaults must not own cache/logger shell logic"
 fi
 
-if grep -n -E 'grep -q "105 forkop"|sed -i "/105 forkop|forkop_dont_touch_dhcp=.*uci|cp /etc/config/forkop|rm -f /tmp/luci-indexcache|killall -HUP rpcd' "$FORKOP_MAKEFILE" "$BUILD_SCRIPT" >/dev/null; then
+if grep -n -E 'grep -q "105 forkop"|sed -i "/105 forkop|forkop_dont_touch_dhcp=.*uci|cp /etc/config/forkop|rm -f /tmp/luci-indexcache|killall -HUP rpcd' "$FORKOP_MAKEFILE" "$BUILD_SCRIPT" >/dev/null ; then
   fail "package scripts must not keep backend/LuCI lifecycle business logic in shell"
 fi
 grep -Fq '#!/usr/bin/ucode' "$FORKOP_MAKEFILE" ||
@@ -107,7 +107,7 @@ grep -Fxq 'stop-with-route-table' "$WORK_DIR/stop-order.log" ||
 touch "$WORK_DIR/luci-indexcache.one" "$WORK_DIR/luci-indexcache.two"
 FORKOP_PACKAGE_TEST_MODE=1 FORKOP_LUCI_CACHE_GLOBS="$WORK_DIR/luci-indexcache*" \
   ucode -L "$FORKOP_LIB" "$PACKAGE_UC" luci-postinst
-if compgen -G "$WORK_DIR/luci-indexcache*" >/dev/null; then
+if compgen -G "$WORK_DIR/luci-indexcache*" >/dev/null ; then
   fail "luci-postinst must remove LuCI index cache files"
 fi
 

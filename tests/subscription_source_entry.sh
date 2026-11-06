@@ -43,7 +43,7 @@ assert_rejects() {
   if output="$(ucode "$PARSER" parse-source-entry-tsv "$entry" 2>/dev/null)"; then
     fail "entry should be rejected: $entry"
   fi
-  printf '%s\n' "$output" | grep -q "$expected" || fail "expected reject message containing $expected"
+  printf '%s\n' "$output" | grep "$expected" >/dev/null || fail "expected reject message containing $expected"
 }
 
 assert_tsv ' https://example.com/sub.txt ' 'https://example.com/sub.txt' ''

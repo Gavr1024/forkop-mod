@@ -174,12 +174,12 @@ case "$start_plan" in
   *"INITD_BIN_OK='1'"* ) ;;
   *) fail "start-plan must expose executable binary state" ;;
 esac
-if printf '%s\n' "$start_plan" | grep -Fq 'INITD_BADWAN_NETDEV'; then
+if printf '%s\n' "$start_plan" | grep -F 'INITD_BADWAN_NETDEV' >/dev/null ; then
   fail "start-plan must not emit the unused Bad WAN netdev plan"
 fi
 
 start_plan_triggered="$(initd_ucode start-plan-fixture triggered 0 1 "wan vpn0" 123 1)"
-if printf '%s\n' "$start_plan_triggered" | grep -Fq 'INITD_BADWAN_NETDEV'; then
+if printf '%s\n' "$start_plan_triggered" | grep -F 'INITD_BADWAN_NETDEV' >/dev/null ; then
   fail "triggered start must not emit the unused Bad WAN netdev plan"
 fi
 
@@ -287,7 +287,7 @@ fi
 if grep -E -n '(^|[[:space:]])config_(load|get|get_bool|set)[[:space:]]' "$INITD" >/dev/null 2>&1; then
   fail "init.d must not read UCI directly"
 fi
-if grep -Fq 'FORKOP_STATE_UC' "$INITD" || grep -Fq 'FORKOP_UI_UC' "$INITD" || grep -Fq 'FORKOP_STATUS_UC' "$INITD"; then
+if grep -F 'FORKOP_STATE_UC' "$INITD" >/dev/null || grep -Fq 'FORKOP_UI_UC' "$INITD" || grep -Fq 'FORKOP_STATUS_UC' "$INITD"; then
   fail "init.d must not orchestrate state/UI/status modules directly"
 fi
 if grep -Fq 'procd_set_param command "$FORKOP_BIN" start' "$INITD"; then

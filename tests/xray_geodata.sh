@@ -56,69 +56,69 @@ grep -Fq 'XRAY_LIST_CACHE_DIR' "$CONST" ||
   fail "converted lists must cache under /etc/forkop/list-cache/xray"
 pass "asset paths point at itdoginfo geosite.dat"
 
-extract_fn "$GEO" "community_matchers" | grep -Fq 'resolve_community_ext_tag' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'resolve_community_ext_tag' >/dev/null ||
   fail "ext:allow-domains.dat must be emitted only when the tag exists in the dat"
-extract_fn "$GEO" "parse_dat_matcher" | grep -Fq 'geosite:' ||
+extract_fn "$GEO" "parse_dat_matcher" | grep -F 'geosite:' >/dev/null ||
   fail "dat_matcher_usable must validate geosite: codes against geosite.dat"
-extract_fn "$GEO" "parse_dat_matcher" | grep -Fq 'geoip:' ||
+extract_fn "$GEO" "parse_dat_matcher" | grep -F 'geoip:' >/dev/null ||
   fail "dat_matcher_usable must validate geoip: codes against geoip.dat"
-extract_fn "$GEO" "parse_dat_matcher" | grep -Fq 'ext:' ||
+extract_fn "$GEO" "parse_dat_matcher" | grep -F 'ext:' >/dev/null ||
   fail "dat_matcher_usable must validate ext:file:code for every community/custom list"
-extract_fn "$GEO" "dat_matcher_usable" | grep -Fq 'itdog_ext_matcher_ok' ||
+extract_fn "$GEO" "dat_matcher_usable" | grep -F 'itdog_ext_matcher_ok' >/dev/null ||
   fail "ext:allow-domains.dat must require a real itdog dat, not a v2fly file with substring 'block'"
-extract_fn "$GEN" "fake_dns_domain_usable" | grep -Fq 'dat_matcher_usable' ||
+extract_fn "$GEN" "fake_dns_domain_usable" | grep -F 'dat_matcher_usable' >/dev/null ||
   fail "FakeDNS must use the global dat matcher filter"
-extract_fn "$GEN" "usable_xray_matchers" | grep -Fq 'dat_matcher_usable' ||
+extract_fn "$GEN" "usable_xray_matchers" | grep -F 'dat_matcher_usable' >/dev/null ||
   fail "routing domain/ip matchers must use the global dat matcher filter"
-extract_fn "$GEN" "generate_config" | grep -Fq 'sanitize_generated_config' ||
+extract_fn "$GEN" "generate_config" | grep -F 'sanitize_generated_config' >/dev/null ||
   fail "generated Xray JSON must be sanitized before write/test"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'community_subnet_ips' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'community_subnet_ips' >/dev/null ||
   fail "itdog IP lists (discord/telegram) must stay RAW CIDRs, not geosite"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'community_lst_readable' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'community_lst_readable' >/dev/null ||
   fail "itdog RAW .lst remains a fallback when allow-domains.dat is missing"
-extract_fn "$GEO" "community_lst_path" | grep -Fq 'cache_dir() + "/" + rel' ||
+extract_fn "$GEO" "community_lst_path" | grep -F 'cache_dir() + "/" + rel' >/dev/null ||
   fail "domain lists must keep Categories/ and Services/ so they do not overwrite subnet files"
-extract_fn "$GEO" "subnet_relpaths" | grep -Fq 'Subnets/IPv6/' ||
+extract_fn "$GEO" "subnet_relpaths" | grep -F 'Subnets/IPv6/' >/dev/null ||
   fail "IPv6 subnet lists must stay in their own directory"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'dat_matcher_usable' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'dat_matcher_usable' >/dev/null ||
   fail "community geosite:/ext: fallback must use the global tag check"
-extract_fn "$GEO" "stage_geosite_dat_inner" | grep -Fq 'looks_like_itdog_dat' ||
+extract_fn "$GEO" "stage_geosite_dat_inner" | grep -F 'looks_like_itdog_dat' >/dev/null ||
   fail "itdoginfo geosite.dat must not be staged as v2fly geosite.dat"
-extract_fn "$GEO" "salvage_itdog_dat" | grep -Fq 'allow-domains.dat' ||
+extract_fn "$GEO" "salvage_itdog_dat" | grep -F 'allow-domains.dat' >/dev/null ||
   fail "itdoginfo geosite.dat at /etc/xray must become allow-domains.dat"
-extract_fn "$GEO" "decompile_srs" | grep -Fq 'MAX_DECOMPILE_BYTES' ||
+extract_fn "$GEO" "decompile_srs" | grep -F 'MAX_DECOMPILE_BYTES' >/dev/null ||
   fail "oversized .srs (russia-inside) must skip decompile instead of hanging start"
-extract_fn "$GEO" "decompile_srs" | grep -Fq 'rule-set' ||
+extract_fn "$GEO" "decompile_srs" | grep -F 'rule-set' >/dev/null ||
   fail "decompile_srs must call sing-box rule-set decompile"
-extract_fn "$GEO" "decompile_srs" | grep -Fq 'timeout' ||
+extract_fn "$GEO" "decompile_srs" | grep -F 'timeout' >/dev/null ||
   fail "decompile_srs must be bounded by timeout(1)"
-extract_fn "$GEO" "decompile_srs" | grep -Fq 'MAX_DECOMPILE_BYTES' ||
+extract_fn "$GEO" "decompile_srs" | grep -F 'MAX_DECOMPILE_BYTES' >/dev/null ||
   fail "oversized .srs must skip decompile and stay on the sidecar"
-extract_fn "$GEO" "ingest_rule_object" | grep -Fq 'full:' ||
+extract_fn "$GEO" "ingest_rule_object" | grep -F 'full:' >/dev/null ||
   fail "decompiled domain entries must become Xray full: matchers"
-extract_fn "$GEO" "ingest_rule_object" | grep -Fq 'keyword:' ||
+extract_fn "$GEO" "ingest_rule_object" | grep -F 'keyword:' >/dev/null ||
   fail "decompiled domain_keyword must become Xray keyword: matchers"
-extract_fn "$GEO" "community_ext_candidates" | grep -Fq 'replace(name, "_", "-")' ||
+extract_fn "$GEO" "community_ext_candidates" | grep -F 'replace(name, "_", "-")' >/dev/null ||
   fail "google_ai / google_play must become google-ai / google-play geosite tags"
 pass "itdoginfo country and service lists use geosite.dat tags"
 
-extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'needed_references' ||
+extract_fn "$GEO" "ensure_from_uci" | grep -F 'needed_references' >/dev/null ||
   fail "ensure_from_uci must also convert custom rule_set / domain_ip_lists"
-extract_fn "$GEO" "needed_references" | grep -Fq 'rule_sets_with_subnets' ||
+extract_fn "$GEO" "needed_references" | grep -F 'rule_sets_with_subnets' >/dev/null ||
   fail "subnet rule-sets must be converted, not only domain rule-sets"
-extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'is_xray_primary' ||
+extract_fn "$GEO" "ensure_from_uci" | grep -F 'is_xray_primary' >/dev/null ||
   fail "conversion must run only when Xray owns the plane"
-if extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'fetch_url_quick'; then
+if extract_fn "$GEO" "ensure_from_uci" | grep -F 'fetch_url_quick' >/dev/null ; then
   fail "start must not probe GitHub for geosite.dat; use cache then list-update"
 fi
-extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'from cache' ||
+extract_fn "$GEO" "ensure_from_uci" | grep -F 'from cache' >/dev/null ||
   fail "init-config must convert from cache, not download_to_file (45s x 3)"
-if extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'decompile_srs'; then
+if extract_fn "$GEO" "ensure_from_uci" | grep -F 'decompile_srs' >/dev/null ; then
   fail "ensure_from_uci must not decompile community .srs during start"
 fi
 grep -Fq 'ensure_from_uci' "$RT" ||
   fail "runtime init-config must fetch converted lists before generate-config"
-extract_fn "$RT" "init_config" | grep -Fq 'continuing without converted lists' ||
+extract_fn "$RT" "init_config" | grep -F 'continuing without converted lists' >/dev/null ||
   fail "list conversion errors must not abort Xray start"
 grep -Fq 'timeout' "$RT" ||
   fail "xray -test must be bounded so a bad config cannot hang forkop start"
@@ -130,108 +130,108 @@ grep -Fq 'socks5h://' "$ROOT_DIR/forkop/files/usr/lib/routing/list_cache.uc" ||
   fail "Xray list downloads must use socks5h so DNS also goes through the section"
 grep -Fq 'XRAY_LOCATION_ASSET' "$RT" ||
   fail "managed xray init must export XRAY_LOCATION_ASSET so ext: dat resolves"
-extract_fn "$RT" "check_config" | grep -Fq 'XRAY_LOCATION_ASSET' ||
+extract_fn "$RT" "check_config" | grep -F 'XRAY_LOCATION_ASSET' >/dev/null ||
   fail "xray -test must set XRAY_LOCATION_ASSET or it looks for /usr/bin/geosite.dat"
-extract_fn "$GEO" "stage_geosite_dat_inner" | grep -Fq 'geosite.dat' ||
+extract_fn "$GEO" "stage_geosite_dat_inner" | grep -F 'geosite.dat' >/dev/null ||
   fail "geosite.dat from v2ray/etc must be staged into /usr/share/xray"
-extract_fn "$GEN" "fake_dns_domain_usable" | grep -Fq 'dat_matcher_usable' ||
+extract_fn "$GEN" "fake_dns_domain_usable" | grep -F 'dat_matcher_usable' >/dev/null ||
   fail "FakeDNS must not emit geosite:/ext: matchers when the code is missing from dat"
 pass "init and list-update pull converted lists"
 
-extract_fn "$GEO" "restore_flash_dat" | grep -Fq 'allow-domains.dat' ||
+extract_fn "$GEO" "restore_flash_dat" | grep -F 'allow-domains.dat' >/dev/null ||
   fail "Xray DAT must restore allow-domains.dat from flash cache on start"
-extract_fn "$GEO" "persist_dat_to_flash" | grep -Fq 'persist_enabled' ||
+extract_fn "$GEO" "persist_dat_to_flash" | grep -F 'persist_enabled' >/dev/null ||
   fail "DAT must not be copied to flash when persist_lists_locally is off"
-extract_fn "$GEO" "persist_dat_to_flash" | grep -Fq 'gzip_file' ||
+extract_fn "$GEO" "persist_dat_to_flash" | grep -F 'gzip_file' >/dev/null ||
   fail "DAT flash cache must be gzip, not a second full copy"
 grep -Fq 'const GEODATA_RAM_DIR = "/tmp/forkop-geodata"' "$GEO" ||
   fail "v2fly geosite download must land in /tmp, not on the flash cache"
-extract_fn "$GEO" "fetch_v2fly_geosite" | grep -Fq 'download_scratch' ||
+extract_fn "$GEO" "fetch_v2fly_geosite" | grep -F 'download_scratch' >/dev/null ||
   fail "v2fly geosite must be fetched through the tmp scratch path"
-extract_fn "$GEO" "forget_v2fly_scratch" | grep -Fq 'v2fly-geosite.dat' ||
+extract_fn "$GEO" "forget_v2fly_scratch" | grep -F 'v2fly-geosite.dat' >/dev/null ||
   fail "leftover v2fly-geosite.dat must be removed from flash after the gzip cache exists"
-extract_fn "$GEO" "restore_flash_dat" | grep -Fq 'persist_enabled' ||
+extract_fn "$GEO" "restore_flash_dat" | grep -F 'persist_enabled' >/dev/null ||
   fail "flash DAT restore must honour persist_lists_locally"
-extract_fn "$UPD" "list_update_if_missing" | grep -Fq 'persist_enabled' ||
+extract_fn "$UPD" "list_update_if_missing" | grep -F 'persist_enabled' >/dev/null ||
   fail "start must download lists every boot when persist_lists_locally is off"
-extract_fn "$GEO" "assets_present_for_uci" | grep -Fq 'allow_domains_dat_present' ||
+extract_fn "$GEO" "assets_present_for_uci" | grep -F 'allow_domains_dat_present' >/dev/null ||
   fail "start must force list-update when required DAT is missing"
-extract_fn "$GEO" "assets_present_for_uci" | grep -Fq 'community_subnets_ready' ||
+extract_fn "$GEO" "assets_present_for_uci" | grep -F 'community_subnets_ready' >/dev/null ||
   fail "start must treat a community list without its subnet file as missing"
-extract_fn "$GEO" "community_subnet_ips" | grep -Fq 'readable_cache_file' ||
+extract_fn "$GEO" "community_subnet_ips" | grep -F 'readable_cache_file' >/dev/null ||
   fail "subnet lists must be unpacked from the saved gzip after reboot"
-extract_fn "$GEO" "community_lst_readable" | grep -Fq 'readable_cache_file' ||
+extract_fn "$GEO" "community_lst_readable" | grep -F 'readable_cache_file' >/dev/null ||
   fail "domain lists must be unpacked from the saved gzip after reboot"
-extract_fn "$LIST_CACHE" "module_exports" | grep -Fq 'ensure_cached_alias' ||
+extract_fn "$LIST_CACHE" "module_exports" | grep -F 'ensure_cached_alias' >/dev/null ||
   fail "list cache must export the reboot restore helper"
-extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'subnet file was not downloaded' ||
+extract_fn "$GEO" "ensure_from_uci" | grep -F 'subnet file was not downloaded' >/dev/null ||
   fail "list conversion must not accept a community list that has domains but no subnets"
-extract_fn "$GEO" "ensure_from_uci" | grep -Fq 'return ok' ||
+extract_fn "$GEO" "ensure_from_uci" | grep -F 'return ok' >/dev/null ||
   fail "list conversion must report a failed subnet download"
 grep -Fq 'remember_subnet_file' "$UPD" ||
   fail "list-update must store built-in subnet files for Xray routing"
-extract_fn "$GEO" "restore_flash_dat" | grep -Fq 'persist_dat_to_flash' ||
+extract_fn "$GEO" "restore_flash_dat" | grep -F 'persist_dat_to_flash' >/dev/null ||
   fail "existing DAT in /usr/share/xray must be copied onto flash cache"
 grep -Fq 'list-update-if-missing' "$ROOT_DIR/forkop/files/usr/lib/service/lifecycle.uc" ||
   fail "start must not download lists every boot; use list-update-if-missing"
 grep -Fq '/etc/forkop/list-update.timestamp' "$UPD" ||
   fail "list-update timestamp must live on flash so reboot does not re-download"
-extract_fn "$UPD" "list_update_if_missing" | grep -Fq 'list_update_if_due' ||
+extract_fn "$UPD" "list_update_if_missing" | grep -F 'list_update_if_due' >/dev/null ||
   fail "start must download lists only when the configured interval has elapsed"
-extract_fn "$UPD" "list_update_if_missing" | grep -Fq 'selected_lists_ready' ||
+extract_fn "$UPD" "list_update_if_missing" | grep -F 'selected_lists_ready' >/dev/null ||
   fail "start must download selected lists and subnets when the cache is empty"
-extract_fn "$UPD" "list_update" | grep -Fq 'skip reload' ||
+extract_fn "$UPD" "list_update" | grep -F 'skip reload' >/dev/null ||
   fail "list-update must not reload Xray when config.json did not change"
 
-extract_fn "$GEN" "section_converted_lists" | grep -Fq 'community_matchers' ||
+extract_fn "$GEN" "section_converted_lists" | grep -F 'community_matchers' >/dev/null ||
   fail "generator must consume converted community lists"
-extract_fn "$GEN" "section_domain_matchers" | grep -Fq 'section_converted_lists' ||
+extract_fn "$GEN" "section_domain_matchers" | grep -F 'section_converted_lists' >/dev/null ||
   fail "TPROXY domain rules must include converted lists"
-extract_fn "$GEN" "section_ip_matchers" | grep -Fq 'section_converted_lists' ||
+extract_fn "$GEN" "section_ip_matchers" | grep -F 'section_converted_lists' >/dev/null ||
   fail "TPROXY IP rules must include converted CIDRs from lists"
-extract_fn "$GEN" "section_has_unmapped_domain_list" | grep -Fq 'unmapped' ||
+extract_fn "$GEN" "section_has_unmapped_domain_list" | grep -F 'unmapped' >/dev/null ||
   fail "FakeDNS stays broad only when a list failed to convert"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'native_xray_list_name' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'native_xray_list_name' >/dev/null ||
   fail "ads/supercell/github must not decompile .srs on the Xray plane"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'ext:adlist.dat:' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'ext:adlist.dat:' >/dev/null ||
   fail "hagezi must use adlist.dat on the Xray plane"
-extract_fn "$GEO" "community_matchers" | grep -Fq 'supercell_json_path' ||
+extract_fn "$GEO" "community_matchers" | grep -F 'supercell_json_path' >/dev/null ||
   fail "supercell must use supercell.json on the Xray plane"
-extract_fn "$GEO" "lst_to_matchers" | grep -Fq 'domain:' ||
+extract_fn "$GEO" "lst_to_matchers" | grep -F 'domain:' >/dev/null ||
   fail "RAW lst domains must be emitted as Xray domain: suffix matchers"
-extract_fn "$NFT_APPLY" "write_xray_dnsmasq_nftset_conf" | grep -Fq 'sets.resolved' ||
+extract_fn "$NFT_APPLY" "write_xray_dnsmasq_nftset_conf" | grep -F 'sets.resolved' >/dev/null ||
   fail "dnsmasq nftset must fill a plain address set; interval sets reject host inserts"
-extract_fn "$NFT_APPLY" "nft_create_ipv4_host_set" | grep -Fq 'type ipv4_addr' ||
+extract_fn "$NFT_APPLY" "nft_create_ipv4_host_set" | grep -F 'type ipv4_addr' >/dev/null ||
   fail "resolved domain addresses need a non-interval nft set"
-extract_fn "$NFT_APPLY" "section_has_unresolved_domain_lists" | grep -Fq 'community_lists' ||
+extract_fn "$NFT_APPLY" "section_has_unresolved_domain_lists" | grep -F 'community_lists' >/dev/null ||
   fail "built-in lists such as Youtube must pull LAN traffic into Xray"
-extract_fn "$NFT_APPLY" "xray_list_catch_all_needed" | grep -Fq 'is_xray_primary' ||
+extract_fn "$NFT_APPLY" "xray_list_catch_all_needed" | grep -F 'is_xray_primary' >/dev/null ||
   fail "list catch-all is only for the Xray plane"
-extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'xray_list_catch_all_needed' ||
+extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -F 'xray_list_catch_all_needed' >/dev/null ||
   fail "runtime nft must install the list catch-all"
-extract_fn "$NFT_APPLY" "xray_disable_quic_needed" | grep -Fq 'disable_quic' ||
+extract_fn "$NFT_APPLY" "xray_disable_quic_needed" | grep -F 'disable_quic' >/dev/null ||
   fail "Disable QUIC checkbox must be honored on the Xray plane"
-extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -Fq 'xray_disable_quic_needed' ||
+extract_fn "$NFT_APPLY" "nft_create_runtime_base" | grep -F 'xray_disable_quic_needed' >/dev/null ||
   fail "Xray runtime nft must reject UDP/443 when Disable QUIC is on"
-extract_fn "$NFT_APPLY" "section_has_xray_domain_nft" | grep -Fq 'community_lists' ||
+extract_fn "$NFT_APPLY" "section_has_xray_domain_nft" | grep -F 'community_lists' >/dev/null ||
   fail "community list nftset lines must have matching forkop_rule_*_subnets sets"
-extract_fn "$NFT_APPLY" "section_list_nftset_domains" | grep -Fq 'catch' ||
+extract_fn "$NFT_APPLY" "section_list_nftset_domains" | grep -F 'catch' >/dev/null ||
   fail "missing xray.geodata must not abort nft rebuild"
-extract_fn "$NFT_APPLY" "section_list_nftset_domains" | grep -Fq 'section_domain_ip_list_parsed' ||
+extract_fn "$NFT_APPLY" "section_list_nftset_domains" | grep -F 'section_domain_ip_list_parsed' >/dev/null ||
   fail "custom domain/IP lists must be written to dnsmasq nftset"
-extract_fn "$NFT_APPLY" "section_domain_ip_list_parsed" | grep -Fq 'domain_ip_lists' ||
+extract_fn "$NFT_APPLY" "section_domain_ip_list_parsed" | grep -F 'domain_ip_lists' >/dev/null ||
   fail "custom domain/IP lists must be read from the section field"
-extract_fn "$GEO" "plain_list_parsed" | grep -Fq 'list_file_matchers' ||
+extract_fn "$GEO" "plain_list_parsed" | grep -F 'list_file_matchers' >/dev/null ||
   fail "custom lists must use the same parser as Xray routing rules"
-extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -Fq 'section_domain_ip_list_parsed' ||
+extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -F 'section_domain_ip_list_parsed' >/dev/null ||
   fail "custom list subnets must be loaded into nft on start, not only during list-update"
-extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -Fq 'nft_restore_cached_community_subnets' ||
+extract_fn "$NFT_APPLY" "nft_populate_runtime_set_for_section" | grep -F 'nft_restore_cached_community_subnets' >/dev/null ||
   fail "nft rebuild must restore cached community subnets so a reload cannot drop them"
-extract_fn "$NFT_APPLY" "nft_add_elements_resilient" | grep -Fq 'overlap' ||
+extract_fn "$NFT_APPLY" "nft_add_elements_resilient" | grep -F 'overlap' >/dev/null ||
   fail "overlapping nft set elements must be inserted one by one instead of failing the batch"
-extract_fn "$GEO" "subnet_cache_path" | grep -Fq '/etc/forkop/list-cache/' ||
+extract_fn "$GEO" "subnet_cache_path" | grep -F '/etc/forkop/list-cache/' >/dev/null ||
   fail "shared subnet lists must live in /etc/forkop/list-cache/Subnets"
-extract_fn "$GEO" "ensure_shared_subnets" | grep -Fq 'subnet_cache_path' ||
+extract_fn "$GEO" "ensure_shared_subnets" | grep -F 'subnet_cache_path' >/dev/null ||
   fail "both engines must download shared subnet lists"
 grep -Fq 'ensure_shared_subnets' "$UPD" ||
   fail "the dashboard download must fetch shared subnet lists"
