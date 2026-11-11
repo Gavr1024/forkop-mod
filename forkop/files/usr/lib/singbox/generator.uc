@@ -16,6 +16,7 @@ let source_rulesets = require("routing.rulesets");
 let list_cache = require("routing.list_cache");
 let rule_config = require("config.rule");
 let connections = require("config.connections");
+let device_route = require("service.device_route");
 let core_ip = require("core.ip");
 let hostresolve = require("core.hostresolve");
 let engine = require("core.engine");
@@ -6682,6 +6683,8 @@ function add_port_matchers(rule, section) {
 
 function add_fully_routed_ips_rules(config, section) {
     let source_ip_cidr = list_option(section, "fully_routed_ips");
+    for (let extra in device_route.ips_for(section[".name"]))
+        push(source_ip_cidr, extra);
     if (length(source_ip_cidr) == 0)
         return;
 
@@ -6897,6 +6900,39 @@ function add_route_for_section(config, section) {
         add_dns_action_rules_for_section(config, section);
     else
         add_combined_route_for_section(config, section);
+}
+
+function prepend_temporary_device_rules(config) {
+    let items = [];
+    try {
+        items = device_route.list_routes().items;
+    }
+    catch (e) {
+        return;
+    }
+    if (type(items) != "array" || length(items) == 0)
+        return;
+    if (type(config.route) != "object" || type(config.route.rules) != "array")
+        return;
+    let head = [];
+    for (let item in items) {
+        let ip = as_string(item.ip);
+        let source = index(ip, ":") >= 0 ? ip + "/128" : ip + "/32";
+        let rule = {
+            inbound: tproxy_inbound_matcher(),
+            source_ip_cidr: [ source ]
+        };
+        if (item.action == "block")
+            rule.action = "reject";
+        else {
+            rule.action = "route";
+            rule.outbound = item.action == "bypass" ? runtime_constants.BYPASS_OUTBOUND_TAG : outbound_tag(item.section);
+        }
+        push(head, rule);
+    }
+    for (let rule in config.route.rules)
+        push(head, rule);
+    config.route.rules = head;
 }
 
 function add_service_route_rules(config, sections) {
@@ -7156,6 +7192,7 @@ function generate_config(output_path, service_address, mwan3_active, supports_xh
     write_openconnect_probe_ports(config);
     strip_internal_fields(config);
     strip_redirect_inbound_network(config);
+    prepend_temporary_device_rules(config);
     if (!write_json_file(output_path, config)) {
         warn("failed to write ", output_path, "\n");
         exit(1);

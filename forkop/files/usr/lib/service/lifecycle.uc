@@ -670,7 +670,7 @@ function release_start_subscription_update_lock() {
 }
 
 function nft_rebuild_runtime() {
-    return module_status(NFT_UC, [
+    let status = module_status(NFT_UC, [
         "nft-rebuild-runtime-from-uci",
         RT_TABLE_NAME,
         NFT_TABLE_NAME,
@@ -699,6 +699,9 @@ function nft_rebuild_runtime() {
         SB_FAKEIP_INET6_RANGE,
         SB_TPROXY_INBOUND6_ADDRESS
     ]);
+    if (status == 0)
+        command_success_from_args([ "sh", LIB_DIR + "/nft/flow_offload.sh" ]);
+    return status;
 }
 
 function nft_populate_runtime_sets() {

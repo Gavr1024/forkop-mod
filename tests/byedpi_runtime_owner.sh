@@ -52,6 +52,10 @@ grep -Fq 'mode == "status"' "$BYEDPI_RUNTIME_UC" ||
   fail "providers/byedpi/runtime.uc must own ByeDPI status"
 grep -Fq 'mode == "check"' "$BYEDPI_RUNTIME_UC" ||
   fail "providers/byedpi/runtime.uc must own ByeDPI check"
+grep -Fq '/sys/fs/cgroup/forkopbyedpi/cgroup.procs' "$BYEDPI_RUNTIME_UC" ||
+  fail "ByeDPI must move ciadpi into its egress cgroup"
+grep -Fq 'mount -t cgroup -o net_cls' "$BYEDPI_RUNTIME_UC" ||
+  fail "ByeDPI must mount net_cls so the existing egress rule can see it"
 
 cat >"$WORK_DIR/apk" <<'SH'
 #!/usr/bin/env sh

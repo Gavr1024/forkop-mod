@@ -16,7 +16,7 @@ function shell_quote(value) {
 function constants_map() {
     let c = {};
 
-    c.FORKOP_VERSION = env("FORKOP_VERSION", "1.0.15");
+    c.FORKOP_VERSION = env("FORKOP_VERSION", "1.0.16");
     c.FORKOP_CONFIG_NAME = env("FORKOP_CONFIG_NAME", "forkop");
     c.FORKOP_CONFIG = env("FORKOP_CONFIG", "/etc/config/" + c.FORKOP_CONFIG_NAME);
     c.FORKOP_BIN = env("FORKOP_BIN", "/usr/bin/forkop");
@@ -50,6 +50,7 @@ function constants_map() {
     c.NFT_INTERFACE_SET_NAME = env("NFT_INTERFACE_SET_NAME", "forkop_interfaces");
     c.NFT_FAKEIP_MARK = env("NFT_FAKEIP_MARK", "0x04000000");
     c.NFT_OUTBOUND_MARK = env("NFT_OUTBOUND_MARK", "0x08000000");
+    c.BYEDPI_EGRESS_MARK = env("BYEDPI_EGRESS_MARK", "0x10000000");
 
     c.SB_REQUIRED_VERSION = env("SB_REQUIRED_VERSION", "1.12.0");
     c.SB_MANAGED_SERVICE_MARKER = env("SB_MANAGED_SERVICE_MARKER", "Forkop managed sing-box service for binary variants");

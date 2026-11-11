@@ -255,7 +255,12 @@ function supervisor_command(port, raw_opt, child_pidfile) {
         push(args, word);
 
     return "ulimit -n " + shell_quote(BYEDPI_OPEN_FILES_LIMIT) + " >/dev/null 2>&1 || true; " +
-        command_from_args(args) + " & child=$!; echo $child > " + shell_quote(child_pidfile) + "; wait $child; rc=$?; rm -f " + shell_quote(child_pidfile) + "; exit $rc";
+        command_from_args(args) + " & child=$!; echo $child > " + shell_quote(child_pidfile) + "; " +
+        "if [ -f /sys/fs/cgroup/cgroup.controllers ]; then mkdir -p /sys/fs/cgroup/forkopbyedpi >/dev/null 2>&1; echo $child > /sys/fs/cgroup/forkopbyedpi/cgroup.procs 2>/dev/null || echo \"ciadpi cgroup move failed\" >&2; fi; " +
+        "if [ ! -f /sys/fs/cgroup/net_cls/cgroup.procs ] && [ ! -f /sys/fs/cgroup/net_cls/tasks ]; then mkdir -p /sys/fs/cgroup/net_cls >/dev/null 2>&1; mount -t cgroup -o net_cls net_cls /sys/fs/cgroup/net_cls >/dev/null 2>&1 || echo \"ciadpi net_cls mount failed\" >&2; fi; " +
+        "mkdir -p /sys/fs/cgroup/net_cls/forkopbyedpi >/dev/null 2>&1; echo 0x10000000 > /sys/fs/cgroup/net_cls/forkopbyedpi/net_cls.classid 2>/dev/null || echo \"ciadpi classid failed\" >&2; " +
+        "echo $child > /sys/fs/cgroup/net_cls/forkopbyedpi/cgroup.procs 2>/dev/null || echo $child > /sys/fs/cgroup/net_cls/forkopbyedpi/tasks 2>/dev/null || echo \"ciadpi net_cls move failed\" >&2; " +
+        "wait $child; rc=$?; rm -f " + shell_quote(child_pidfile) + "; exit $rc";
 }
 
 function supervisor(section, port, raw_opt, child_pidfile) {

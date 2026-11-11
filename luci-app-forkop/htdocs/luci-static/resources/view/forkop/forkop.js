@@ -4,6 +4,7 @@
 "require baseclass";
 "require uci";
 "require ui";
+"require fs";
 "require dom";
 "require view.forkop.main as main";
 
@@ -35,6 +36,152 @@
 "require view.forkop.slots as slots";
 
 const UCI_PACKAGE = main.FORKOP_UCI_PACKAGE;
+
+const sectionListWarnings = {};
+let sectionListWarningRequest = null;
+
+function listWarningText(entry) {
+  if (!entry) {
+    return "";
+  }
+  const missing = Array.isArray(entry.missing)
+    ? entry.missing.filter((name) => name)
+    : [];
+  const empty = Array.isArray(entry.empty)
+    ? entry.empty.filter((name) => name)
+    : [];
+  const parts = [];
+  if (missing.length) {
+    parts.push(_("List has not downloaded: %s").format(missing.join(", ")));
+  }
+  if (empty.length) {
+    parts.push(_("List file is empty: %s").format(empty.join(", ")));
+  }
+  return parts.join(". ");
+}
+
+function speedLimitNumber(section_id, key) {
+  const raw = `${uci.get(UCI_PACKAGE, section_id, key) || ""}`.trim();
+  if (!/^[0-9]+$/.test(raw)) {
+    return 0;
+  }
+  const value = Number(raw);
+  if (value < 1 || value > 10000) {
+    return 0;
+  }
+  return value;
+}
+
+function sectionSpeedText(section_id) {
+  const action = `${uci.get(UCI_PACKAGE, section_id, "action") || ""}`;
+  if (
+    ![
+      "connection",
+      "proxy",
+      "outbound",
+      "vpn",
+      "zapret",
+      "zapret2",
+      "byedpi",
+    ].includes(action)
+  ) {
+    return "";
+  }
+  const downOwn = speedLimitNumber(section_id, "speed_limit_down_mbit");
+  const upOwn = speedLimitNumber(section_id, "speed_limit_up_mbit");
+  let down = downOwn;
+  let up = upOwn;
+  if (!downOwn && !upOwn) {
+    const legacy = speedLimitNumber(section_id, "speed_limit_mbit");
+    if (!legacy) {
+      return "";
+    }
+    down = legacy;
+    up = legacy;
+  }
+  const none = _("no limit");
+  const unit = _("Mbit/s");
+  const downText = down ? down + " " + unit : none;
+  const upText = up ? up + " " + unit : none;
+  return _("Limit: download %s, upload %s").format(downText, upText);
+}
+
+function rememberSectionListWarnings(payload) {
+  Object.keys(sectionListWarnings).forEach((key) => {
+    delete sectionListWarnings[key];
+  });
+  const rows =
+    payload && Array.isArray(payload.section_warnings)
+      ? payload.section_warnings
+      : [];
+  rows.forEach((row) => {
+    if (row && row.section) {
+      sectionListWarnings[row.section] = row;
+    }
+  });
+}
+
+function applySectionListWarnings(root) {
+  const scope =
+    root && typeof root.querySelectorAll === "function" ? root : document;
+  scope.querySelectorAll("tr[data-section-id]").forEach((row) => {
+    const sectionId = row.getAttribute("data-section-id");
+    const cell = row.querySelector("td.cbi-section-table-titles");
+    if (!cell || !sectionId) {
+      return;
+    }
+    cell.querySelectorAll(".fkp-section-speed, .fkp-section-list-warn").forEach((node) => {
+      node.remove();
+    });
+    const speed = sectionSpeedText(sectionId);
+    if (speed) {
+      cell.appendChild(
+        E(
+          "div",
+          {
+            class: "fkp-section-speed",
+            style:
+              "display:block;margin-top:0.15rem;font-size:0.85em;font-weight:400;white-space:normal;opacity:0.85;",
+          },
+          speed,
+        ),
+      );
+    }
+    const text = listWarningText(sectionListWarnings[sectionId]);
+    cell.appendChild(
+      E(
+        "div",
+        {
+          class: "fkp-section-list-warn",
+          "data-fkp-list-warn": sectionId,
+          style: `display:${text ? "block" : "none"};margin-top:0.15rem;color:#8a6d1d;font-size:0.85em;font-weight:400;white-space:normal;`,
+        },
+        text,
+      ),
+    );
+  });
+}
+
+function loadSectionListWarnings() {
+  if (sectionListWarningRequest) {
+    return sectionListWarningRequest;
+  }
+  sectionListWarningRequest = fs
+    .exec("/usr/bin/forkop", ["list_cache_status"])
+    .then((result) => {
+      const stdout = result && result.stdout ? String(result.stdout) : "";
+      try {
+        rememberSectionListWarnings(JSON.parse(stdout));
+      } catch (_error) {
+        rememberSectionListWarnings(null);
+      }
+      applySectionListWarnings(document);
+    })
+    .catch(() => {
+      rememberSectionListWarnings(null);
+    });
+  return sectionListWarningRequest;
+}
 
 function renderSectionAdd(sectionRef, extra_class) {
   const el = form.GridSection.prototype.renderSectionAdd.apply(sectionRef, [
@@ -95,12 +242,57 @@ function configureGridSection(sectionRef, type, title, addTitle) {
 
   if (type === "section") {
     sectionRef.renderRowActions = function (section_id) {
-      return form.TableSection.prototype.renderRowActions.call(
+      const td = form.TableSection.prototype.renderRowActions.call(
         this,
         section_id,
         getRuleEditButtonText(),
       );
+      const actions = td.querySelector("div") || td;
+      const copyLabel = "Копировать";
+      const button = E(
+        "button",
+        {
+          class: "btn cbi-button cbi-button-action",
+          title: _(
+            "Make a second section with the same lists, DNS and devices",
+          ),
+          click: ui.createHandlerFn(
+            this,
+            function (id, ev) {
+              if (ev && typeof ev.preventDefault === "function") {
+                ev.preventDefault();
+              }
+              section.cloneRoutingSection(id);
+              return this.map && typeof this.map.reset === "function"
+                ? this.map.reset()
+                : null;
+            },
+            section_id,
+          ),
+          disabled: this.map.readonly || null,
+        },
+        copyLabel,
+      );
+      const removeButton = actions.querySelector(".cbi-button-remove");
+      if (removeButton) {
+        actions.insertBefore(button, removeButton);
+      } else {
+        actions.appendChild(button);
+      }
+      return td;
     };
+    const previousRender = sectionRef.render;
+    sectionRef.render = function () {
+      const rendered = previousRender.apply(this, arguments);
+      return Promise.resolve(rendered).then((node) => {
+        applySectionListWarnings(node);
+        return loadSectionListWarnings().then(() => {
+          applySectionListWarnings(node);
+          return node;
+        });
+      });
+    };
+    loadSectionListWarnings();
   }
 }
 

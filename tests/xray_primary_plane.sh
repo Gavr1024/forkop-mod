@@ -123,9 +123,19 @@ extract_fn "$XRAY_GEN" "add_section" | grep -F 'least_load_settings' >/dev/null 
 extract_fn "$XRAY_GEN" "add_section" | grep -F 'strategy_needs_observatory' >/dev/null ||
   fail "least ping and least load must probe servers before choosing one"
 extract_fn "$XRAY_GEN" "apply_balancer_fallbacks" | grep -F 'fallbackTag' >/dev/null ||
-  fail "fallback must be one outbound from another section, not another balancer"
+  fail "fallback must be written onto the section balancer"
+extract_fn "$XRAY_GEN" "ensure_balancer_loopback" | grep -F 'protocol: "loopback"' >/dev/null ||
+  fail "a fallback balancer must be reached through a loopback outbound"
+awk '
+  /^function prepend_routing_rule\(/ { p = NR }
+  /^function ensure_balancer_loopback\(/ { a = NR }
+  END { if (p == 0 || a == 0 || p > a) exit 1 }
+' "$XRAY_GEN" ||
+  fail "ucode binds names at definition time; prepend_routing_rule must be defined before the loopback helper"
 extract_fn "$XRAY_GEN" "section_fallback_request" | grep -F 'xray_fallback_target' >/dev/null ||
   fail "fallback server must be read from xray_fallback_target"
+extract_fn "$XRAY_GEN" "add_section" | grep -F 'strategy == "leastPing" || strategy == "leastLoad"' >/dev/null ||
+  fail "fallback server must be ignored unless the strategy probes servers"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -F 'protocol == "hysteria"' >/dev/null ||
   fail "Hysteria2 QUIC outbounds must not get TCP domainStrategy sockopt"
 extract_fn "$XRAY_OUT" "convert_hysteria2" | grep -F 'udphop' >/dev/null ||

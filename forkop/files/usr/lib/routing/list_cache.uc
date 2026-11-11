@@ -508,6 +508,28 @@ function collect_selected_lists(sections) {
     return items;
 }
 
+function section_list_items(section) {
+    let items = [];
+    section = object_or_empty(section);
+    for (let name in connections.community_lists(section))
+        push(items, community_item(name));
+    for (let reference in connections.rule_sets(section))
+        push(items, custom_reference_item(reference, "rule_set"));
+    for (let reference in connections.rule_sets_with_subnets(section))
+        push(items, custom_reference_item(reference, "rule_set"));
+    for (let reference in connections.whitespace_list_value(section, "domain_ip_lists"))
+        push(items, custom_reference_item(reference, "domain_ip_list"));
+    for (let reference in connections.whitespace_list_value(section, "remote_domain_lists"))
+        push(items, custom_reference_item(reference, "remote_domain_list"));
+    for (let reference in connections.whitespace_list_value(section, "remote_subnet_lists"))
+        push(items, custom_reference_item(reference, "remote_subnet_list"));
+    for (let reference in connections.whitespace_list_value(section, "local_domain_lists"))
+        push(items, custom_reference_item(reference, "local_domain_list"));
+    for (let reference in connections.whitespace_list_value(section, "local_subnet_lists"))
+        push(items, custom_reference_item(reference, "local_subnet_list"));
+    return items;
+}
+
 function collect_selected_lists_from_uci() {
     return collect_selected_lists(uci_core.section_objects(CONFIG_NAME, "section"));
 }
@@ -869,7 +891,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.15",
+        "-A", "forkop-list-cache/1.0.16",
         "-o", output_path,
         "--url", as_string(url)
     ];
@@ -1535,6 +1557,166 @@ function preview_selected(id) {
     return preview_page(prepared.token, 1);
 }
 
+function flash_bytes(path) {
+    path = as_string(path);
+    if (path == "" || file_stat(path) == null)
+        path = "/etc";
+    if (file_stat(path) == null)
+        path = "/";
+    let data = capture_command("df -Pk " + shell_quote(path));
+    let available = 0;
+    let total = 0;
+    for (let line in split(as_string(data), "\n")) {
+        let parts = split(trim_string(line), /[ \t]+/);
+        if (length(parts) < 4 || parts[0] == "Filesystem")
+            continue;
+        total = int(parts[1]) * 1024;
+        available = int(parts[3]) * 1024;
+    }
+    return { available, total };
+}
+
+function directory_bytes(path) {
+    path = as_string(path);
+    if (path == "" || file_stat(path) == null)
+        return 0;
+    let names = fs.lsdir(path);
+    if (type(names) != "array")
+        return file_size(path);
+    let total = 0;
+    for (let name in names) {
+        name = as_string(name);
+        if (name == "." || name == "..")
+            continue;
+        total += directory_bytes(path + "/" + name);
+    }
+    return total;
+}
+
+function cache_file_base(name) {
+    name = as_string(name);
+    if (match(name, /\.gz\.size$/) != null)
+        return substr(name, 0, length(name) - 8);
+    if (match(name, /\.gz$/) != null)
+        return substr(name, 0, length(name) - 3);
+    return name;
+}
+
+function selected_keep_names(selected) {
+    let keep = { "manifest.json": true };
+    for (let item in array_or_empty(selected))
+        keep[cache_basename(item.url)] = true;
+    return keep;
+}
+
+function selected_community_names(selected) {
+    let names = {};
+    for (let item in array_or_empty(selected)) {
+        if (as_string(object_or_empty(item).kind) != "community")
+            continue;
+        let name = as_string(item.name);
+        if (name != "")
+            names[name] = true;
+    }
+    return names;
+}
+
+function itdog_dat_needed(names) {
+    for (let name in object_or_empty(names)) {
+        if (name != "ads_hagezi_pro" && name != "supercell" && name != "github")
+            return true;
+    }
+    return false;
+}
+
+function srs_name_unused(name, keep) {
+    name = as_string(name);
+    if (name == "." || name == ".." || name == "manifest.json")
+        return false;
+    if (name == "xray" || name == "sing-box" || name == "Subnets")
+        return false;
+    let base = cache_file_base(name);
+    if (keep[base] || keep[name])
+        return false;
+    return match(name, /\.tmp$/) != null || match(name, /\.(srs|json)(\.gz|\.gz\.size)?$/) != null;
+}
+
+function subnet_service_from_filename(name) {
+    let base = cache_file_base(name);
+    if (match(base, /\.lst$/) != null)
+        return substr(base, 0, length(base) - 4);
+    return "";
+}
+
+function xray_cache_file_needed(name, names) {
+    let base = cache_file_base(name);
+    names = object_or_empty(names);
+    if (base == "allow-domains.dat")
+        return itdog_dat_needed(names);
+    if (base == "adlist.dat")
+        return names["ads_hagezi_pro"] == true;
+    if (base == "supercell.json")
+        return names["supercell"] == true;
+    if (base == "v2fly-geosite.dat" || base == "geosite.dat" || base == "github.list")
+        return names["github"] == true;
+    return true;
+}
+
+function push_unused_files(paths, dir, predicate) {
+    let names = fs.lsdir(dir);
+    if (type(names) != "array")
+        return;
+    for (let name in names) {
+        name = as_string(name);
+        if (name == "." || name == "..")
+            continue;
+        let path = as_string(dir) + "/" + name;
+        if (type(fs.lsdir(path)) == "array")
+            continue;
+        if (predicate(name))
+            push(paths, path);
+    }
+}
+
+function unused_cache_paths(selected) {
+    if (type(selected) != "array")
+        selected = collect_selected_lists_from_uci();
+    let keep = selected_keep_names(selected);
+    let communities = selected_community_names(selected);
+    let subnets = community_subnet_names();
+    let paths = [];
+    push_unused_files(paths, LIST_CACHE_DIR, function(name) {
+        return srs_name_unused(name, keep);
+    });
+    push_unused_files(paths, singbox_cache_dir(), function(name) {
+        return srs_name_unused(name, keep);
+    });
+    for (let dir in [
+        LIST_CACHE_DIR + "/Subnets/IPv4",
+        LIST_CACHE_DIR + "/Subnets/IPv6",
+        LIST_CACHE_DIR + "/xray/Subnets/IPv4",
+        LIST_CACHE_DIR + "/xray/Subnets/IPv6"
+    ]) {
+        push_unused_files(paths, dir, function(name) {
+            let service = subnet_service_from_filename(name);
+            if (service == "" || subnets[service] != true)
+                return false;
+            return communities[service] != true;
+        });
+    }
+    push_unused_files(paths, LIST_CACHE_DIR + "/xray", function(name) {
+        return !xray_cache_file_needed(name, communities);
+    });
+    return paths;
+}
+
+function paths_bytes(paths) {
+    let total = 0;
+    for (let path in array_or_empty(paths))
+        total += file_size(path);
+    return total;
+}
+
 function decorate_item(item) {
     item = object_or_empty(item);
     let size = stored_list_size(item.path);
@@ -1555,6 +1737,40 @@ function decorate_item(item) {
     };
 }
 
+function section_list_warnings() {
+    let warnings = [];
+    for (let section in uci_core.section_objects(CONFIG_NAME, "section")) {
+        section = object_or_empty(section);
+        let name = option(section, ".name", "");
+        if (name == "")
+            continue;
+        let missing = [];
+        let empty = [];
+        let seen = {};
+        for (let item in section_list_items(section)) {
+            if (type(item) != "object")
+                continue;
+            let label = as_string(item.name);
+            if (label == "" || seen[label])
+                continue;
+            seen[label] = true;
+            let status = item_status(item);
+            if (status == "missing")
+                push(missing, label);
+            else if (status == "absent")
+                push(empty, label);
+        }
+        if (length(missing) == 0 && length(empty) == 0)
+            continue;
+        push(warnings, {
+            section: name,
+            missing: missing,
+            empty: empty
+        });
+    }
+    return warnings;
+}
+
 function status_object() {
     let settings = settings_section();
     let selected = collect_selected_lists_from_uci();
@@ -1562,6 +1778,8 @@ function status_object() {
     for (let item in selected)
         push(items, decorate_item(item));
 
+    let flash = flash_bytes(LIST_CACHE_DIR);
+    let unused = unused_cache_paths(selected);
     return {
         version: int(LIST_CACHE_FORMAT),
         enabled: persist_enabled(settings) ? true : false,
@@ -1571,7 +1789,12 @@ function status_object() {
         updated_at: int(object_or_empty(read_manifest()).updated_at || 0),
         count: length(items),
         cached: length(filter(items, function(item) { return item.status == "cached"; })),
-        items
+        cache_bytes: directory_bytes(LIST_CACHE_DIR),
+        unused_bytes: paths_bytes(unused),
+        flash_free: flash.available,
+        flash_total: flash.total,
+        items,
+        section_warnings: section_list_warnings()
     };
 }
 
@@ -1616,6 +1839,18 @@ function prune_unselected(selected) {
 
     prune_cached_names(LIST_CACHE_DIR, keep, true);
     prune_cached_names(singbox_cache_dir(), keep, false);
+}
+
+function prune_unused(selected) {
+    if (type(selected) != "array")
+        selected = collect_selected_lists_from_uci();
+    let paths = unused_cache_paths(selected);
+    let freed = paths_bytes(paths);
+    for (let path in paths) {
+        try { fs.unlink(path); } catch (e) { }
+    }
+    prune_unselected(selected);
+    return { ok: true, freed, removed: length(paths) };
 }
 
 function persist_selected_lists(settings, proxy_address, refresh) {
@@ -1731,7 +1966,10 @@ function module_exports() {
         xray_socks_proxy_url,
         curl_proxy_spec,
         status_object,
-        print_status_json
+        section_list_warnings,
+        print_status_json,
+        prune_unused,
+        unused_cache_paths
     };
 }
 
@@ -1742,6 +1980,8 @@ let mode = ARGV[0] || "";
 
 if (mode == "status-json")
     print_status_json();
+else if (mode == "section-warnings")
+    print(sprintf("%J", section_list_warnings()), "\n");
 else if (mode == "persist") {
     let result = persist_selected_lists();
     stop_download_socks();
@@ -1753,7 +1993,12 @@ else if (mode == "cache-path")
     print(cache_path_for_url(ARGV[1] || ""), "\n");
 else if (mode == "ensure-download-section")
     exit(ensure_download_section_up() ? 0 : 1);
+else if (mode == "prune") {
+    let result = prune_unused();
+    print(sprintf("%J", result), "\n");
+    exit(result.ok ? 0 : 1);
+}
 else {
-    warn("Usage: routing/list_cache.uc <status-json|persist|cache-path|ensure-download-section> ...\n");
+    warn("Usage: routing/list_cache.uc <status-json|section-warnings|persist|cache-path|ensure-download-section|prune> ...\n");
     exit(1);
 }

@@ -1213,7 +1213,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.15";
+var FORKOP_LUCI_APP_VERSION = "1.0.16";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";

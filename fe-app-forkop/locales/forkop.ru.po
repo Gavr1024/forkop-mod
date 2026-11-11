@@ -506,6 +506,264 @@ msgstr "Скопировано"
 msgid "Copy"
 msgstr "Копировать"
 
+msgid "Pause a device"
+msgstr "Пауза устройства"
+
+msgid "While paused, this device goes around the proxy. Its sections stay unchanged."
+msgstr "Пока пауза включена, устройство идёт мимо прокси. Секции не меняются."
+
+msgid "Temporary full routing"
+msgstr "Временная полная маршрутизация"
+
+msgid "For the chosen time, all traffic from this device goes through the selected section. The section settings stay unchanged."
+msgstr "На выбранное время весь трафик устройства идёт через выбранную секцию. Настройки секции не меняются."
+
+msgid "Choose a section"
+msgstr "Выберите секцию"
+
+msgid "Could not route this device"
+msgstr "Не удалось направить это устройство"
+
+msgid "The device is listed, but the tunnel was not switched, so a higher section can still take the traffic."
+msgstr "Устройство записано, но туннель не переключился, поэтому секция выше всё ещё может забирать трафик."
+
+msgid "No device is temporarily routed."
+msgstr "Нет устройств с временной маршрутизацией."
+
+msgid "Device %s is sent through section %s for a limited time, including %s, and goes %s. The section settings stay unchanged."
+msgstr "Устройство %s на время направлено в секцию %s, включая %s, и идёт %s. Настройки секции не меняются."
+
+msgid "Device name or IP"
+msgstr "Имя устройства или IP"
+
+msgid "5 minutes"
+msgstr "5 минут"
+
+msgid "15 minutes"
+msgstr "15 минут"
+
+msgid "30 minutes"
+msgstr "30 минут"
+
+msgid "1 hour"
+msgstr "1 час"
+
+msgid "2 hours"
+msgstr "2 часа"
+
+msgid "4 hours"
+msgstr "4 часа"
+
+msgid "8 hours"
+msgstr "8 часов"
+
+msgid "Until I turn it off"
+msgstr "Пока сам не сниму"
+
+msgid "Enter a device name or IP"
+msgstr "Введите имя устройства или IP"
+
+msgid "No such device"
+msgstr "Такого устройства нет"
+
+msgid "Could not pause this device"
+msgstr "Не удалось поставить паузу"
+
+msgid "Pause"
+msgstr "Пауза"
+
+msgid "No device is paused."
+msgstr "Сейчас ни одно устройство не на паузе."
+
+msgid "until you turn it off"
+msgstr "пока не снимете"
+
+msgid "until %s"
+msgstr "до %s"
+
+msgid "Resume"
+msgstr "Снять паузу"
+
+msgid "Where a site goes"
+msgstr "Куда попадёт сайт"
+
+msgid "Uses the saved sections, from top to bottom, and the lists already on the router."
+msgstr "Смотрит сохранённые секции сверху вниз и списки, которые уже лежат на роутере."
+
+msgid "Enter a site, for example youtube.com"
+msgstr "Введите сайт, например youtube.com"
+
+msgid "Any device"
+msgstr "Любое устройство"
+
+msgid "Device %s goes to section %s, including %s, and is sent %s. This is full routing, so the site list does not matter."
+msgstr "Устройство %s идёт в секцию %s, включая %s, и отправляется %s. Это полная маршрутизация, список сайтов не важен."
+
+msgid "DNS section %s answers every name for this device with %s."
+msgstr "Секция DNS %s отвечает на все имена этого устройства через %s."
+
+msgid "For %s, DNS section %s answers every name, including %s, with a real address from %s. The connection bypasses the sections below."
+msgstr "Для %s секция DNS %s отвечает на все имена, включая %s, настоящим адресом с %s. Соединение проходит мимо секций ниже."
+
+msgid "For %s, DNS section %s answers %s with a real address from %s. The connection bypasses the sections below."
+msgstr "Для %s секция DNS %s отвечает на %s настоящим адресом с %s. Соединение проходит мимо секций ниже."
+
+msgid "For %s, DNS section %s answers every name, including %s, with a stand-in address from %s. No section below takes the connection, so it goes directly."
+msgstr "Для %s секция DNS %s отвечает на все имена, включая %s, подставным адресом с %s. Ниже ни одна секция соединение не забирает, оно идёт напрямую."
+
+msgid "For %s, DNS section %s gives %s a stand-in address and resolves the name with %s. No section below takes the connection, so it goes directly."
+msgstr "Для %s секция DNS %s отдаёт для %s подставной адрес и узнаёт имя через %s. Ниже ни одна секция соединение не забирает, оно идёт напрямую."
+
+msgid "For %s, no section takes %s. It goes outside the rules."
+msgstr "Для %s ни одна секция не забирает %s. Он идёт мимо правил."
+
+msgid "For %s, section %s is higher than the others, but %s. Until that is fixed, the result is unknown."
+msgstr "Для %s секция %s выше остальных, но %s. Пока это не исправлено, ответ неизвестен."
+
+msgid "For %s, section %s takes %s because of %s and sends it %s."
+msgstr "Для %s секция %s забирает %s из-за %s и отправляет %s."
+
+msgid "Check"
+msgstr "Проверить"
+
+msgid "Checking…"
+msgstr "Проверяю…"
+
+msgid "Could not check this site"
+msgstr "Не удалось проверить этот сайт"
+
+msgid "the exact domain"
+msgstr "точного домена"
+
+msgid "the suffix %s"
+msgstr "суффикса %s"
+
+msgid "the keyword %s"
+msgstr "ключевого слова %s"
+
+msgid "a regular expression"
+msgstr "регулярного выражения"
+
+msgid "the list %s"
+msgstr "списка %s"
+
+msgid "the list %s is not downloaded"
+msgstr "список %s ещё не скачан"
+
+msgid "the list %s is too large to check"
+msgstr "список %s слишком большой для проверки"
+
+msgid "directly"
+msgstr "напрямую"
+
+msgid "blocked"
+msgstr "в блокировку"
+
+msgid "through bypass"
+msgstr "в обход"
+
+msgid "through the proxy"
+msgstr "в прокси"
+
+msgid "No section takes %s. It goes outside the rules."
+msgstr "Ни одна секция не забирает %s. Сайт пойдёт мимо правил."
+
+msgid "Section %s is higher than the others, but %s. Until that is fixed, the result is unknown."
+msgstr "Секция %s стоит выше остальных, но %s. Пока так, сказать нельзя."
+
+msgid "Section %s takes %s because of %s and sends it %s."
+msgstr "Секция %s заберёт %s из‑за %s и отправит его %s."
+
+msgid "This match is only for devices selected in that section."
+msgstr "Это только для устройств, выбранных в этой секции."
+
+msgid "Other devices go to %s because of %s."
+msgstr "Остальные устройства идут в %s из‑за %s."
+
+msgid "DNS section %s answers %s with a real address from %s. The connection bypasses the sections below."
+msgstr "Секция DNS %s отвечает на %s настоящим адресом с %s. Соединение идёт мимо секций ниже."
+
+msgid "The tunnel resolves the name with DNS section %s, server %s."
+msgstr "Имя для тоннеля узнаёт DNS секции %s, сервер %s."
+
+msgid "Devices selected in DNS section %s resolve the name with %s. Other devices use the usual DNS."
+msgstr "Устройства, выбранные в секции DNS %s, узнают имя через %s. Остальные используют обычный DNS."
+
+msgid "Queries to that server go through section %s."
+msgstr "Запросы к этому серверу идут через секцию %s."
+
+msgid "DNS section %s gives %s a stand-in address and resolves the name with %s. No section below takes the connection, so it goes directly."
+msgstr "Секция DNS %s даёт %s подставной адрес и узнаёт имя через %s. Нижняя секция соединение не забирает, поэтому оно идёт напрямую."
+
+msgid "Other devices go to %s because of %s and are sent %s."
+msgstr "Остальные устройства идут в %s из‑за %s и отправляются %s."
+
+msgid "its DNS server"
+msgstr "свой DNS-сервер"
+
+msgid "Device %s still goes to section %s, including this site, and is sent %s."
+msgstr "Устройство %s всё равно идёт в секцию %s, включая этот сайт, и отправляется %s."
+
+msgid "Subnet %s still goes to section %s, including this site, and is sent %s."
+msgstr "Подсеть %s всё равно идёт в секцию %s, включая этот сайт, и отправляется %s."
+
+msgid "Devices %s still go to section %s, including this site, and are sent %s."
+msgstr "Устройства %s всё равно идут в секцию %s, включая этот сайт, и отправляются %s."
+
+msgid "Copy section"
+msgstr "Копировать"
+
+msgid "Speed limit"
+msgstr "Лимит скорости"
+
+msgid "Download rate"
+msgstr "Загрузка"
+
+msgid "Upload rate"
+msgstr "Отдача"
+
+msgid "Download limit"
+msgstr "Лимит загрузки"
+
+msgid "Upload limit"
+msgstr "Лимит отдачи"
+
+msgid "Download is megabits per second toward the devices. Upload is megabits per second from the devices to the internet. Extra traffic is dropped. Empty means no limit. Local traffic is not limited. The limit applies to addresses, ports and fully routed devices. A section that only has domain lists does not limit traffic. While either limit is set, this section skips flow offload and the rest of the traffic still uses it."
+msgstr "Загрузка — мегабит в секунду к устройствам. Отдача — мегабит в секунду от устройств в интернет. Лишнее отбрасывается. Пусто — без лимита. Обмен внутри локальной сети не ограничивается. Ограничение цепляется к адресам, портам и полной маршрутизации. Секция из одних списков доменов трафик не режет. Пока задано хотя бы одно ограничение, эта секция идёт без ускорения потока, остальной трафик ускоряется."
+
+msgid "Megabits per second from the devices to the internet. Extra traffic is dropped. Empty means no limit."
+msgstr "Мегабит в секунду от устройств в интернет. Лишнее отбрасывается. Пусто — без лимита."
+
+msgid "Megabits per second for this section. Extra traffic that it matches by device, address or port is dropped. Upload and download share the ceiling. Empty means no limit."
+msgstr "Мегабит в секунду для этой секции. Лишний трафик в интернет, который она узнаёт по устройству, адресу или порту, отбрасывается. Отдача и загрузка делят один потолок. Обмен внутри локальной сети не ограничивается. Пусто — без лимита. Ускорение потока можно не выключать: эта секция идёт без него, остальной трафик ускоряется."
+
+msgid "No limit"
+msgstr "Без лимита"
+
+msgid "List has not downloaded: %s"
+msgstr "Список не скачался: %s"
+
+msgid "List file is empty: %s"
+msgstr "Файл списка пустой: %s"
+
+msgid "Limit: download %s, upload %s"
+msgstr "Ограничение: загрузка %s, отдача %s"
+
+msgid "Mbit/s"
+msgstr "Мбит/с"
+
+msgid "no limit"
+msgstr "без лимита"
+
+msgid "Use a whole number from 1 to 10000, or leave empty"
+msgstr "Целое число от 1 до 10000 или пусто"
+
+msgid "Copy of %s"
+msgstr "Копия %s"
+
+msgid "Make a second section with the same lists, DNS and devices"
+msgstr "Сделать вторую такую же секцию: списки, DNS и устройства те же"
+
 msgid "Copy proxy link"
 msgstr "Скопировать ссылку прокси"
 
@@ -778,6 +1036,27 @@ msgstr "Скачивать компоненты через секцию"
 
 msgid "Download lists now"
 msgstr "Скачать списки сейчас"
+
+msgid "Delete unused"
+msgstr "Удалить неиспользуемое"
+
+msgid "Removing unused lists…"
+msgstr "Удаляю неиспользуемые списки…"
+
+msgid "Unused lists removed"
+msgstr "Неиспользуемые списки удалены"
+
+msgid "Could not remove unused lists"
+msgstr "Не удалось удалить неиспользуемые списки"
+
+msgid "Cache"
+msgstr "Кэш"
+
+msgid "Unused"
+msgstr "Не используется"
+
+msgid "Free on flash"
+msgstr "Свободно на флешке"
 
 msgid "Download lists through"
 msgstr "Скачивать списки через"
@@ -2798,8 +3077,11 @@ msgstr "Детали Least ping"
 msgid "Least load details"
 msgstr "Детали Least load"
 
-msgid "One server from another section, used when the rest are dead."
-msgstr "Один сервер из другой секции, если остальные не отвечают."
+msgid "One server or the balancer of another Xray section, used when the rest are dead. Only Xray sections can be selected. Available only with Least ping and Least load."
+msgstr "Один сервер или балансировщик другой секции Xray, если остальные не отвечают. Можно выбрать только секции Xray. Только для Least ping и Least load."
+
+msgid "Section balancer"
+msgstr "Балансировщик секции"
 
 msgid "Slowest accepted probe, such as 1s or 500ms."
 msgstr "Самая медленная допустимая проверка, например 1s или 500ms."

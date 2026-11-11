@@ -238,6 +238,13 @@ assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tmangle\t{ type 
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tpriority_rules\t{ }' "runtime priority chain"
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tpriority_output_rules\t{ }' "runtime priority output chain"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_output_rules\tmeta\tmark\t!=\t0\treturn' "runtime priority output preserves provider marks"
+assert_contains "$NFT_LOG" $'nft\tadd\tset\tinet\tForkopTable\tforkop_paused\t{ type ipv4_addr; }' "runtime paused device set"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tdns_redirect\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_paused\treturn' "paused device skips DNS redirect"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_paused\tcounter\treturn' "paused device skips proxy marking"
+assert_line_before "$NFT_LOG" \
+  $'nft\tadd\trule\tinet\tForkopTable\tdns_redirect\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_paused\treturn' \
+  $'nft\tadd\trule\tinet\tForkopTable\tdns_redirect\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_dns_sources\tudp\tdport\t53\tcounter\tredirect\tto\t:1603' \
+  "device pause is checked before DNS redirect"
 assert_contains "$NFT_LOG" $'nft\tadd\tset\tinet\tForkopTable\tforkop_dns_sources\t{ type ipv4_addr; flags interval; auto-merge; }' "runtime source-aware DNS IPv4 set"
 assert_contains "$NFT_LOG" $'nft\tadd\tset\tinet\tForkopTable\tforkop_dns_sources6\t{ type ipv6_addr; flags interval; auto-merge; }' "runtime source-aware DNS IPv6 set"
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tdns_redirect\t{ type nat hook prerouting priority -101; policy accept; }' "runtime source-aware DNS redirect chain"
@@ -257,6 +264,9 @@ assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\ti
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\tjump\tpriority_output_rules' "runtime priority output jump"
 assert_contains "$NFT_LOG" $'nft\tinsert\trule\tinet\tForkopTable\tmangle\tudp\tdport\t123\treturn' "runtime ntp exclusion"
 assert_contains "$NFT_LOG" $'nft\tinsert\trule\tinet\tForkopTable\tmangle_output\tudp\tdport\t123\treturn' "runtime output ntp exclusion"
+assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tbyedpi_egress\t{ type filter hook output priority -200; policy accept; }' "ByeDPI egress chain"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tbyedpi_egress\tsocket\tcgroupv2\tlevel\t1\tforkopbyedpi\tmeta\tmark\tset\t0x10000000\tcounter' "ByeDPI cgroup packets are marked"
+assert_contains "$NFT_LOG" $'nft\tinsert\trule\tinet\tForkopTable\tmangle_output\tmeta\tcgroup\t0x10000000\tmeta\tmark\tset\t0x10000000\tcounter\treturn' "ByeDPI classid packets are released"
 if grep -F $'output_redirect' "$NFT_LOG" >/dev/null || grep -Fq $'dns_redirect_output' "$NFT_LOG"; then
   fail "OUTPUT redirect chain must not exist when router traffic intercept is off"
 fi
@@ -267,6 +277,7 @@ assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\toutput_redirect
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tl4proto\ticmp\treturn' "router output intercept skips ICMP"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\ttcp\tdport\t53\treturn' "router output intercept skips DNS"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tmark\t0x00200000\treturn' "router output intercept skips outbound mark"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tmark\t&\t0x10000000\t==\t0x10000000\tcounter\treturn' "router output intercept skips ByeDPI egress mark"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tl4proto\ttcp\tcounter\tredirect\tto\t:1604' "router output intercept redirects TCP"
 if grep -Fq $'network' "$NFT_LOG"; then
   fail "router output intercept must not mention inbound network field"
@@ -355,7 +366,8 @@ cat >"$WORK_DIR/priority-rules.json" <<'JSON'
       "enabled": "1",
       "action": "proxy",
       "ip_cidr": [ "0.0.0.0/0" ],
-      "fully_routed_ips": [ "192.168.1.20/32", "2001:db8::20/128" ]
+      "fully_routed_ips": [ "192.168.1.20/32", "2001:db8::20/128" ],
+      "speed_limit_mbit": "10"
     },
     {
       ".name": "port_bypass",
@@ -363,6 +375,15 @@ cat >"$WORK_DIR/priority-rules.json" <<'JSON'
       "enabled": "1",
       "action": "bypass",
       "ports": [ "8443" ]
+    },
+    {
+      ".name": "capped",
+      ".type": "section",
+      "enabled": "1",
+      "action": "proxy",
+      "ip_cidr": [ "203.0.113.0/24" ],
+      "speed_limit_down_mbit": "20",
+      "speed_limit_up_mbit": "5"
     }
   ]
 }
@@ -375,18 +396,70 @@ assert_contains "$NFT_LOG" $'nft\tadd\tset\tinet\tForkopTable\tforkop_rule_wide_
 assert_contains "$NFT_LOG" $'nft\tadd\tset\tinet\tForkopTable\tforkop_rule_bypass_first_fully_sources\t{ type ipv4_addr; flags interval; auto-merge; }' "bypass fully routed source set"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_bypass_first_fully_sources\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t!=\t198.18.0.0/15\tcounter\taccept' "bypass fully routed real IP fast path"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip6\tsaddr\t@forkop_rule_bypass_first_fully_sources6\tip6\tdaddr\t!=\t@localv6\tip6\tdaddr\t!=\tfc00::/18\tcounter\taccept' "bypass fully routed6 real IP fast path"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_wide_proxy_fully_sources\tip\tdaddr\t!=\t@localv4\tmeta\tl4proto\ttcp\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "proxy fully routed capture path"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_wide_proxy_fully_sources\tip\tdaddr\t!=\t@localv4\tmeta\tl4proto\ttcp\tcounter\tjump\tforkop_lim_wide_proxy_up' "proxy fully routed upload enters the upload limit"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_wide_proxy_fully_sources\tip\tdaddr\t!=\t@localv4\tmeta\tl4proto\ttcp\tct\tmark\tset\t1741\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "proxy fully routed capture path"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_bypass_first_subnets\tcounter\taccept' "bypass priority accept rule"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_subnets\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "proxy priority capture rule"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_subnets\tcounter\tjump\tforkop_lim_wide_proxy_up' "proxy priority upload enters the upload limit"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_subnets\tct\tmark\tset\t1741\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "proxy priority capture rule"
+assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_wide_proxy_up\t{ }' "legacy limit still builds an upload chain"
+assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_wide_proxy_down\t{ }' "legacy limit still builds a download chain"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_wide_proxy_up\tlimit\trate\tover\t1250 kbytes/second\tburst\t1250 kbytes\tdrop' "legacy upload ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_wide_proxy_down\tlimit\trate\tover\t1250 kbytes/second\tburst\t1250 kbytes\tdrop' "legacy download ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_capped_up\t{ }' "upload speed chain"
+assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_capped_down\t{ }' "download speed chain"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_capped_up\tlimit\trate\tover\t625 kbytes/second\tburst\t625 kbytes\tdrop' "upload ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_capped_down\tlimit\trate\tover\t2500 kbytes/second\tburst\t2500 kbytes\tdrop' "download ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_capped_subnets\tcounter\tjump\tforkop_lim_capped_up' "section speed upload rule"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_capped_subnets\tct\tmark\tset\t1264\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "section speed capture rule"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_post\toifname\t@forkop_interfaces\tct\tmark\t1264\tip\tsaddr\t!=\t@localv4\tcounter\tjump\tforkop_lim_capped_down' "section speed reply rule"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_post\toifname\t@forkop_interfaces\tip\tsaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_fully_sources\tcounter\tjump\tforkop_lim_wide_proxy_down' "fully routed download uses its own limit"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\ttcp\tdport\t@forkop_rule_port_bypass_ports\tcounter\taccept' "port-only bypass priority rule"
 assert_line_before "$NFT_LOG" \
   $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_bypass_first_subnets\tcounter\taccept' \
-  $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_subnets\tmeta\tmark\tset\t0x00100000\tcounter\taccept' \
+  $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_subnets\tcounter\tjump\tforkop_lim_wide_proxy_up' \
   "bypass priority order"
 assert_line_before "$NFT_LOG" \
   $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_bypass_first_fully_sources\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t!=\t198.18.0.0/15\tcounter\taccept' \
-  $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_wide_proxy_fully_sources\tip\tdaddr\t!=\t@localv4\tmeta\tl4proto\ttcp\tmeta\tmark\tset\t0x00100000\tcounter\taccept' \
+  $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tsaddr\t@forkop_rule_wide_proxy_fully_sources\tip\tdaddr\t!=\t@localv4\tmeta\tl4proto\ttcp\tcounter\tjump\tforkop_lim_wide_proxy_up' \
   "fully routed section order"
+
+cat >"$WORK_DIR/split-speed.json" <<'JSON'
+{
+  "section": [
+    {
+      ".name": "down_only",
+      ".type": "section",
+      "enabled": "1",
+      "action": "proxy",
+      "ip_cidr": [ "203.0.113.9" ],
+      "speed_limit_down_mbit": "8"
+    },
+    {
+      ".name": "up_only",
+      ".type": "section",
+      "enabled": "1",
+      "action": "proxy",
+      "ip_cidr": [ "203.0.113.10" ],
+      "speed_limit_up_mbit": "3"
+    }
+  ]
+}
+JSON
+
+: > "$NFT_LOG"
+nft_ucode nft-add-section-priority-rules-fixture "$WORK_DIR/split-speed.json" ForkopTable forkop_interfaces localv4 localv6 0x00100000
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_down_only_down\tlimit\trate\tover\t1000 kbytes/second\tburst\t1000 kbytes\tdrop' "download-only ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_down_only_subnets\tct\tmark\tset\t400\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "download-only still marks the connection"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_post\toifname\t@forkop_interfaces\tct\tmark\t400\tip\tsaddr\t!=\t@localv4\tcounter\tjump\tforkop_lim_down_only_down' "download-only reply rule"
+if grep -Fq 'forkop_lim_down_only_up' "$NFT_LOG"; then
+  fail "download-only section must not build an upload chain"
+fi
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_up_only_up\tlimit\trate\tover\t375 kbytes/second\tburst\t375 kbytes\tdrop' "upload-only ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_up_only_subnets\tcounter\tjump\tforkop_lim_up_only_up' "upload-only forward rule"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_up_only_subnets\tct\tmark\tset\t121\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "upload-only still marks the connection"
+if grep -Fq 'forkop_lim_up_only_down' "$NFT_LOG"; then
+  fail "upload-only section must not build a download chain"
+fi
 
 : > "$IP_LOG"
 : > "$LOGGER_LOG"

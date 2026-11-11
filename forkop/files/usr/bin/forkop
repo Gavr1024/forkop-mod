@@ -70,6 +70,7 @@ function show_help() {
     print("    list_cache_show_close <token>\n");
     print("                            Delete a list preview from memory\n");
     print("    list_cache_persist      Download selected lists to flash cache\n");
+    print("    list_cache_prune        Delete cached lists that are no longer selected\n");
     print("    slot_status             Show config slot status as JSON\n");
     print("    slot_save <online|offline>\n");
     print("                            Save current config into a slot\n");
@@ -147,6 +148,16 @@ function show_help() {
     print("    component_updates_if_due Check installed components for updates when due\n");
     print("    component_update_check_cache Get cached component update check results\n");
     print("    check_dns_available     Check DNS server availability\n");
+    print("    lookup_domain <domain> [device-ip]\n");
+    print("                            Show which saved section matches a site for one device\n");
+    print("    pause_device_list       Show devices temporarily sent around the proxy\n");
+    print("    pause_device_add <ip> <minutes> [label]\n");
+    print("                            Pause a device; 0 minutes means until cleared\n");
+    print("    pause_device_clear <ip> Remove a device pause\n");
+    print("    route_device_list       Show devices temporarily sent through a section\n");
+    print("    route_device_add <ip> <minutes> <section> [label]\n");
+    print("                            Send one device through a section without saving it there\n");
+    print("    route_device_clear <ip> Remove a temporary full route\n");
     print("    global_check            Run global system check\n");
     print("    validate_nfqws_strategy_json\n");
     print("                            Validate an NFQWS strategy and print JSON result\n");
@@ -183,6 +194,7 @@ function command_spec(command) {
         list_cache_show_page: [ "components/updates.uc", "list-cache-show-page", 3 ],
         list_cache_show_close: [ "components/updates.uc", "list-cache-show-close", 1 ],
         list_cache_persist: [ "components/updates.uc", "list-cache-persist", 0 ],
+        list_cache_prune: [ "components/updates.uc", "list-cache-prune", 0 ],
         slot_status: [ "config/slots.uc", "status-json", 0 ],
         slot_save: [ "config/slots.uc", "save", 1 ],
         slot_apply: [ "config/slots.uc", "apply", 1 ],
@@ -253,6 +265,15 @@ function command_spec(command) {
         component_updates_if_due: [ "components/updates.uc", "component-updates-if-due", 0 ],
         component_update_check_cache: [ "components/updates.uc", "component-update-check-cache", 0 ],
         check_dns_available: [ "diagnostics/runtime.uc", "check-dns-available", 0 ],
+        lookup_domain: [ "diagnostics/domain_lookup.uc", "lookup", 2 ],
+        pause_device_list: [ "service/device_pause.uc", "list", 0 ],
+        pause_device_add: [ "service/device_pause.uc", "add", 3 ],
+        pause_device_clear: [ "service/device_pause.uc", "clear", 1 ],
+        pause_device_expire: [ "service/device_pause.uc", "expire-if", 2 ],
+        route_device_list: [ "service/device_route.uc", "list", 0 ],
+        route_device_add: [ "service/device_route.uc", "add", 4 ],
+        route_device_clear: [ "service/device_route.uc", "clear", 1 ],
+        route_device_expire: [ "service/device_route.uc", "expire-if", 2 ],
         global_check: [ "diagnostics/runtime.uc", "global-check", 2 ],
         validate_nfqws_strategy_json: [ "diagnostics/runtime.uc", "validate-nfqws-strategy-json", 1 ],
         validate_nfqws2_strategy_json: [ "diagnostics/runtime.uc", "validate-nfqws2-strategy-json", 1 ],

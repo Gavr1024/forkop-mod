@@ -202,6 +202,11 @@ function ensureSharedCheckStyles() {
   text-align: left !important;
   overflow: visible !important;
 }
+.fkp-shared-check > .cbi-value:has(.cbi-dropdown-open),
+.fkp-shared-check > .cbi-value:has(.cbi-dropdown[open]) {
+  position: relative !important;
+  z-index: 40 !important;
+}
 .fkp-shared-check > .fkp-shared-check__head > .cbi-value-title {
   font-size: 1.15rem;
   line-height: 1.3;
@@ -296,6 +301,7 @@ function sharedCheckNodes(sectionId) {
     urltest: pick("urltest"),
     strategy: pick("strategy"),
     hints: pickList("hint"),
+    fallback: pick("fallback"),
     probes: pickList("probe"),
   };
 }
@@ -452,6 +458,7 @@ function mountSharedCheckGroupNow(sectionId) {
     return true;
   }
   const hints = group.hints;
+  const fallback = group.fallback;
   const probes = group.probes;
   const anchor = strategy && strategy.parentNode ? strategy : null;
   if (!anchor) {
@@ -512,7 +519,7 @@ function mountSharedCheckGroupNow(sectionId) {
     box.classList.remove("fkp-shared-check--off");
   }
 
-  const rows = [head, strategy].concat(hints, probes).filter((node) => node && node.parentNode);
+  const rows = [head, strategy].concat(hints, [fallback], probes).filter((node) => node && node.parentNode);
   rows.forEach((node) => {
     node.querySelectorAll("label[for]").forEach((label) => {
       label.removeAttribute("for");
@@ -822,12 +829,26 @@ function xrayFallbackTargetChoices(sectionId) {
         return xrayNodeChoices(section);
       });
     }),
-  ).then((groups) =>
-    groups
-      .flat()
-      .filter((item) => item.value && item.label)
-      .sort((left, right) => left.label.localeCompare(right.label)),
-  );
+  ).then((groups) => {
+    const choices = [];
+    sections.forEach((section) => {
+      const name = getUciSectionName(section);
+      const label = getUciSectionLabel(section);
+      if (!name) {
+        return;
+      }
+      choices.push({
+        value: `${name}\t__balancer__`,
+        label: `${label} — ${_("Section balancer")}`,
+      });
+    });
+    groups.flat().forEach((item) => {
+      if (item && item.value && item.label) {
+        choices.push(item);
+      }
+    });
+    return choices.sort((left, right) => left.label.localeCompare(right.label));
+  });
 }
 
 function refreshOutboundDetourSectionOptionValues(option, sectionId) {
@@ -10550,6 +10571,145 @@ function createSectionContent(section) {
     });
   };
 
+  function addSpeedLimitFields() {
+    const downKey = "speed_limit_down_mbit";
+    const upKey = "speed_limit_up_mbit";
+    const field = section.taboption(
+      "settings",
+      form.Value,
+      downKey,
+      _("Speed limit"),
+      _(
+        "Download is megabits per second toward the devices. Upload is megabits per second from the devices to the internet. Extra traffic is dropped. Empty means no limit. Local traffic is not limited. The limit applies to addresses, ports and fully routed devices. A section that only has domain lists does not limit traffic. While either limit is set, this section skips flow offload and the rest of the traffic still uses it.",
+      ),
+    );
+    field.modalonly = true;
+    field.rmempty = false;
+    [
+      "connection",
+      "proxy",
+      "outbound",
+      "vpn",
+      "zapret",
+      "zapret2",
+      "byedpi",
+    ].forEach((action) => field.depends("action", action));
+    const directionText = function (section_id, key) {
+      const own = `${uci.get(UCI_PACKAGE, section_id, key) || ""}`.trim();
+      if (own) {
+        return own;
+      }
+      const otherKey = key === downKey ? upKey : downKey;
+      const other = `${uci.get(UCI_PACKAGE, section_id, otherKey) || ""}`.trim();
+      if (other) {
+        return "";
+      }
+      return `${uci.get(UCI_PACKAGE, section_id, "speed_limit_mbit") || ""}`.trim();
+    };
+    const acceptLimit = function (value) {
+      const text = `${value || ""}`.trim();
+      if (!text) {
+        return true;
+      }
+      if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > 10000) {
+        return _("Use a whole number from 1 to 10000, or leave empty");
+      }
+      return true;
+    };
+    field.formvalue = function (section_id) {
+      const node = document.getElementById(this.cbid(section_id));
+      return node ? `${node.value || ""}`.trim() : null;
+    };
+    field.load = function (section_id) {
+      return directionText(section_id, downKey);
+    };
+    field.renderWidget = function (section_id) {
+      const box = function (id, value, caption, widgetId) {
+        return E(
+          "label",
+          {
+            style:
+              "flex:1 1 8rem; display:flex; flex-direction:column; gap:0.25rem;",
+          },
+          [
+            E("span", {}, caption),
+            E("input", {
+              id: id,
+              "data-widget-id": widgetId,
+              type: "text",
+              class: "cbi-input-text",
+              placeholder: _("No limit"),
+              value: value,
+            }),
+          ],
+        );
+      };
+      const downId = this.cbid(section_id);
+      return E(
+        "div",
+        {
+          style:
+            "display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end;",
+        },
+        [
+          box(
+            downId,
+            directionText(section_id, downKey),
+            _("Download rate"),
+            `widget.${downId}`,
+          ),
+          box(
+            `${downId}-up`,
+            directionText(section_id, upKey),
+            _("Upload rate"),
+            `widget.${downId}-up`,
+          ),
+        ],
+      );
+    };
+    const saveLimit = function (section_id, key, value) {
+      const text = `${value || ""}`.trim();
+      if (text) {
+        uci.set(UCI_PACKAGE, section_id, key, text);
+      } else {
+        uci.unset(UCI_PACKAGE, section_id, key);
+      }
+    };
+    field.parse = function (section_id) {
+      if (!this.isActive(section_id)) {
+        return this.retain
+          ? Promise.resolve()
+          : Promise.resolve(this.remove(section_id));
+      }
+      const downNode = document.getElementById(this.cbid(section_id));
+      const upNode = document.getElementById(`${this.cbid(section_id)}-up`);
+      const down = downNode ? `${downNode.value || ""}`.trim() : "";
+      const up = upNode ? `${upNode.value || ""}`.trim() : "";
+      const downResult = acceptLimit(down);
+      const upResult = acceptLimit(up);
+      if (downResult !== true || upResult !== true) {
+        const message = downResult !== true ? downResult : upResult;
+        return Promise.reject(
+          new TypeError(
+            `${_("Option \"%s\" contains an invalid input value.").format(_("Speed limit"))} ${message}`,
+          ),
+        );
+      }
+      saveLimit(section_id, downKey, down);
+      saveLimit(section_id, upKey, up);
+      uci.unset(UCI_PACKAGE, section_id, "speed_limit_mbit");
+      return Promise.resolve();
+    };
+    field.remove = function (section_id) {
+      uci.unset(UCI_PACKAGE, section_id, downKey);
+      uci.unset(UCI_PACKAGE, section_id, upKey);
+      uci.unset(UCI_PACKAGE, section_id, "speed_limit_mbit");
+    };
+    return field;
+  }
+
+  addSpeedLimitFields();
+
   o = restrictSectionEngine(
     section.taboption(
       "settings",
@@ -11601,18 +11761,15 @@ function createSectionContent(section) {
       form.ListValue,
       "xray_fallback_target",
       _("Fallback server"),
-      _("One server from another section, used when the rest are dead."),
+      _("One server or the balancer of another Xray section, used when the rest are dead. Only Xray sections can be selected. Available only with Least ping and Least load."),
     ),
     "xray",
   );
   o.modalonly = true;
   o.rmempty = true;
   o.value("", _("None"));
-  ["", "auto", "random", "roundRobin", "leastPing", "leastLoad"].forEach(
-    (strategy) => {
-      o.depends({ action: "connection", xray_balancer_strategy: strategy });
-    },
-  );
+  dependOnObservatoryStrategy(o);
+  tagSharedCheckNode(o, "fallback");
   o.load = function (section_id) {
     const saved = uci.get(UCI_PACKAGE, section_id, "xray_fallback_target") || "";
     this.keylist = [];
@@ -12429,6 +12586,126 @@ function loadSectionTableOptions(sectionRef) {
   return Promise.all(tasks);
 }
 
+const SECTION_COPY_CHILD_TYPES = [
+  "subscription_url",
+  "section_interface",
+  "openconnect",
+  "openvpn",
+  "warp",
+  "masque",
+  "urltest",
+  "priority_group",
+];
+
+function uciSectionRecord(typeName, sectionId) {
+  return (uci.sections(UCI_PACKAGE, typeName) || []).find(
+    (item) => item && item[".name"] === sectionId,
+  );
+}
+
+function uciIdTaken(id) {
+  const types = ["section", "server", "settings"].concat(
+    SECTION_COPY_CHILD_TYPES,
+    ["priority_level"],
+  );
+  return types.some((typeName) => Boolean(uciSectionRecord(typeName, id)));
+}
+
+function uniqueUciId(base) {
+  let stem = `${base || "section"}`.replace(/[^A-Za-z0-9_]/g, "");
+  if (!stem || !/^[A-Za-z]/.test(stem)) {
+    stem = `s${stem}`;
+  }
+  stem = stem.slice(0, 24);
+  let candidate = `${stem}_copy`;
+  let number = 2;
+  while (uciIdTaken(candidate)) {
+    candidate = `${stem}_copy${number}`;
+    number += 1;
+  }
+  return candidate;
+}
+
+function sectionLabels() {
+  const labels = new Set();
+  (uci.sections(UCI_PACKAGE, "section") || []).forEach((item) => {
+    const id = item && item[".name"];
+    if (!id) {
+      return;
+    }
+    labels.add(`${uci.get(UCI_PACKAGE, id, "label") || id}`.trim());
+  });
+  return labels;
+}
+
+function uniqueCopyLabel(sourceId) {
+  const current = `${uci.get(UCI_PACKAGE, sourceId, "label") || sourceId}`.trim();
+  const labels = sectionLabels();
+  let candidate = _("Copy of %s").format(current);
+  let number = 2;
+  while (labels.has(candidate)) {
+    candidate = _("Copy of %s").format(`${current} ${number}`);
+    number += 1;
+  }
+  return candidate;
+}
+
+function copyUciOptions(typeName, sourceId, destId, overrides) {
+  const source = uciSectionRecord(typeName, sourceId) || {};
+  Object.keys(source).forEach((key) => {
+    if (!key || key.charAt(0) === ".") {
+      return;
+    }
+    const value = source[key];
+    if (Array.isArray(value)) {
+      uci.set(
+        UCI_PACKAGE,
+        destId,
+        key,
+        value.map((item) => `${item}`),
+      );
+    } else if (value != null && typeof value !== "object") {
+      uci.set(UCI_PACKAGE, destId, key, `${value}`);
+    }
+  });
+  Object.keys(overrides || {}).forEach((key) => {
+    uci.set(UCI_PACKAGE, destId, key, overrides[key]);
+  });
+}
+
+function cloneOwnedItem(typeName, sourceId, ownerKey, ownerId) {
+  const destId = uniqueUciId(sourceId);
+  uci.add(UCI_PACKAGE, typeName, destId);
+  copyUciOptions(typeName, sourceId, destId, { [ownerKey]: ownerId });
+  return destId;
+}
+
+function cloneRoutingSection(sourceId) {
+  if (!sourceId || !uciSectionRecord("section", sourceId)) {
+    return "";
+  }
+
+  const destId = uniqueUciId(sourceId);
+  uci.add(UCI_PACKAGE, "section", destId);
+  copyUciOptions("section", sourceId, destId, {
+    label: uniqueCopyLabel(sourceId),
+  });
+
+  SECTION_COPY_CHILD_TYPES.forEach((typeName) => {
+    getChildItemIds(sourceId, typeName).forEach((childId) => {
+      const copiedId = cloneOwnedItem(typeName, childId, "section", destId);
+      if (typeName !== "priority_group") {
+        return;
+      }
+      getChildItemIds(childId, "priority_level", "group").forEach((levelId) => {
+        cloneOwnedItem("priority_level", levelId, "group", copiedId);
+      });
+    });
+  });
+
+  return destId;
+}
+
 function configureSectionSection(sectionRef, options = {}) {
   setActionProvidersAvailabilityLoader(options.loadActionProvidersAvailability);
 
@@ -12474,6 +12751,7 @@ const EntryPoint = {
   configureSectionSection,
   createSectionContent,
   setActionProvidersAvailabilityLoader,
+  cloneRoutingSection,
 };
 
 return baseclass.extend(EntryPoint);

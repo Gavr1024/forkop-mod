@@ -980,6 +980,7 @@ function trigger_plan(settings) {
 
     print("delay\t", delay, "\n");
     print("config\tconfig.change\t", CONFIG_NAME, "\t", SERVICE_INIT, "\treload\t", CONFIG_CHANGE_REASON, "\n");
+    print("config\tconfig.change\tfirewall\t", SERVICE_INIT, "\tpatch_flow_offload\twait\n");
     print("interface\tinterface.*.up\twan\t", SERVICE_INIT, "\thandle_wan_up\t\n");
 
     if (badwan_enabled) {

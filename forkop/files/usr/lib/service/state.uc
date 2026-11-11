@@ -1006,6 +1006,9 @@ function nft_runtime_signature_body(settings, sections) {
 
         let action = option(section, "action", "");
         body = signature_add_value(body, "rule." + name + ".action", action);
+        body = signature_add_value(body, "rule." + name + ".speed_limit_mbit", option(section, "speed_limit_mbit", ""));
+        body = signature_add_value(body, "rule." + name + ".speed_limit_down_mbit", option(section, "speed_limit_down_mbit", ""));
+        body = signature_add_value(body, "rule." + name + ".speed_limit_up_mbit", option(section, "speed_limit_up_mbit", ""));
         if (action == "dns") {
             body = signature_add_value(body, "rule." + name + ".source_ip_cidr", section_rule_condition_csv(section, "source_ip_cidr", "subnets"));
             body = signature_add_value(body, "rule." + name + ".source_aware_dns", connections.has_dns_matchers(section) ? "1" : "0");

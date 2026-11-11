@@ -3141,6 +3141,14 @@ function print_list_cache_status() {
     print(sprintf("%J", status), "\n");
 }
 
+function print_list_cache_prune() {
+    let result = list_cache.prune_unused();
+    if (type(result) != "object")
+        result = { ok: false, freed: 0, removed: 0 };
+    print(sprintf("%J", result), "\n");
+    exit(result.ok ? 0 : 1);
+}
+
 function start_list_cache_persist() {
     if (list_cache_job_running()) {
         log_message("list cache download already running", "info");
@@ -3259,6 +3267,8 @@ else if (mode == "list-cache-persist")
     start_list_cache_persist();
 else if (mode == "list-cache-persist-run")
     run_list_cache_persist();
+else if (mode == "list-cache-prune")
+    print_list_cache_prune();
 else if (mode == "list-update-if-due")
     list_update_if_due();
 else if (mode == "list-update-if-missing")

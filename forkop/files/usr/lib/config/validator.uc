@@ -1559,7 +1559,19 @@ function validate_dns_action(section, sections, context) {
         fail_validation("DNS rule '" + name + "' references detour section '" + target_name + "' with unsupported action '" + rule_action(target) + "'. Select an enabled Connection, VPN, Zapret, Zapret2, or ByeDPI section. Aborted.");
 }
 
+function validate_speed_limit(section) {
+    let name = section_name(section);
+    for (let key in [ "speed_limit_mbit", "speed_limit_down_mbit", "speed_limit_up_mbit" ]) {
+        let raw = trim(option(section, key, ""));
+        if (raw == "")
+            continue;
+        if (match(raw, /^[0-9]+$/) == null || int(raw) < 1 || int(raw) > 10000)
+            fail_validation("Rule '" + name + "' has invalid speed limit '" + raw + "'. Use a whole number of megabits from 1 to 10000, or leave it empty. Aborted.");
+    }
+}
+
 function validate_rule(section, sections, context) {
+    validate_speed_limit(section);
     if (!section_enabled(section))
         return;
 

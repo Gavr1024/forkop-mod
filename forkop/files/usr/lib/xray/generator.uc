@@ -12,6 +12,7 @@ let xray_outbound = require("xray.outbound");
 let xray_servers = require("xray.servers");
 let xray_geodata = require("xray.geodata");
 let engine = require("core.engine");
+let device_route = require("service.device_route");
 let hostresolve = require("core.hostresolve");
 let sb_constants = require("singbox.constants");
 let converted_lists_cache = {};
@@ -826,13 +827,103 @@ function resolve_fallback_tag(nodes_map, request) {
     return "";
 }
 
-function apply_balancer_fallbacks(config, nodes_map, requests) {
+function balancer_by_tag(config, tag) {
+    for (let balancer in array_or_empty(object_or_empty(config.routing).balancers)) {
+        balancer = object_or_empty(balancer);
+        if (as_string(balancer.tag) == tag)
+            return balancer;
+    }
+    return null;
+}
+
+function fallback_balancer_target(requests, section_name) {
     for (let item in array_or_empty(requests)) {
         item = object_or_empty(item);
-        let tag = resolve_fallback_tag(nodes_map, item);
-        if (tag == "") {
-            warn("Xray fallback server for section '" + as_string(item.owner) + "' was not found\n");
-            continue;
+        if (as_string(item.owner) == section_name && as_string(item.server) == "__balancer__")
+            return as_string(item.section);
+    }
+    return "";
+}
+
+function fallback_balancer_cycle(requests, owner, target) {
+    let seen = {};
+    let current = target;
+    while (current != "") {
+        if (current == owner || seen[current])
+            return true;
+        seen[current] = true;
+        current = fallback_balancer_target(requests, current);
+    }
+    return false;
+}
+
+function prepend_routing_rule(config, rule) {
+    let old = array_or_empty(object_or_empty(config.routing).rules);
+    if (type(config.routing) != "object")
+        config.routing = { rules: [] };
+    config.routing.rules = [];
+    push(config.routing.rules, rule);
+    for (let existing in old)
+        push(config.routing.rules, existing);
+}
+
+function ensure_balancer_loopback(config, target_section) {
+    let target = xray_constants.balancer_tag(target_section);
+    if (balancer_by_tag(config, target) == null)
+        return "";
+    let loopback = "_bl_" + target;
+    let found = false;
+    for (let outbound in array_or_empty(config.outbounds)) {
+        outbound = object_or_empty(outbound);
+        if (as_string(outbound.tag) == loopback)
+            found = true;
+    }
+    if (!found)
+        push(config.outbounds, {
+            tag: loopback,
+            protocol: "loopback",
+            settings: { inboundTag: loopback }
+        });
+    let ruled = false;
+    for (let rule in array_or_empty(object_or_empty(config.routing).rules)) {
+        rule = object_or_empty(rule);
+        for (let tag in array_or_empty(rule.inboundTag))
+            if (as_string(tag) == loopback)
+                ruled = true;
+    }
+    if (!ruled)
+        prepend_routing_rule(config, {
+            type: "field",
+            inboundTag: [ loopback ],
+            balancerTag: target
+        });
+    return loopback;
+}
+
+function apply_balancer_fallbacks(config, nodes_map, requests) {
+    requests = array_or_empty(requests);
+    for (let item in requests) {
+        item = object_or_empty(item);
+        let owner = as_string(item.owner);
+        let tag = "";
+        if (as_string(item.server) == "__balancer__") {
+            let target_section = as_string(item.section);
+            if (fallback_balancer_cycle(requests, owner, target_section)) {
+                warn("Xray fallback balancer for section '" + owner + "' would loop. Skipped\n");
+                continue;
+            }
+            tag = ensure_balancer_loopback(config, target_section);
+            if (tag == "") {
+                warn("Xray fallback balancer for section '" + owner + "' was not found\n");
+                continue;
+            }
+        }
+        else {
+            tag = resolve_fallback_tag(nodes_map, item);
+            if (tag == "") {
+                warn("Xray fallback server for section '" + owner + "' was not found\n");
+                continue;
+            }
         }
         for (let balancer in array_or_empty(object_or_empty(config.routing).balancers)) {
             if (type(balancer) != "object")
@@ -911,7 +1002,7 @@ function add_section(config, taken, section, ports, index, xray_sections, connec
     let inbound = xray_constants.inbound_tag(section_name);
     let pinned = chosen_section_outbound(section_name, tags);
     let strategy = xray_balancer_strategy(section);
-    let fallback_req = strategy == "off" ? null : section_fallback_request(section);
+    let fallback_req = (strategy == "leastPing" || strategy == "leastLoad") ? section_fallback_request(section) : null;
     let use_balancer = strategy != "off" && pinned == "" && (length(tags) > 1 || fallback_req != null);
     if (use_balancer) {
         let balancer = xray_constants.balancer_tag(section_name);
@@ -1475,7 +1566,7 @@ function apply_dial_strategy(config) {
             tag == xray_constants.BLACKHOLE_TAG)
             continue;
         let protocol = lc(as_string(outbound.protocol || ""));
-        if (protocol == "hysteria")
+        if (protocol == "hysteria" || protocol == "loopback")
             continue;
         if (type(outbound.streamSettings) != "object")
             outbound.streamSettings = {};
@@ -2238,6 +2329,8 @@ function apply_section_tproxy_sources(config, section, target) {
     if (target == null)
         return;
     let sources = list_values(section, "fully_routed_ips");
+    for (let extra in device_route.ips_for(option(section, ".name", "")))
+        push(sources, extra);
     if (length(sources) == 0)
         return;
     // SOCKS into the shared sing-box inbound hides the LAN address, so a
@@ -2343,16 +2436,6 @@ function apply_primary_tproxy_routes(config, xray_sections) {
         inboundTag: tproxy_inbound_tags(),
         outboundTag: plane_fallback_tag()
     });
-}
-
-function prepend_routing_rule(config, rule) {
-    let old = array_or_empty(object_or_empty(config.routing).rules);
-    if (type(config.routing) != "object")
-        config.routing = { rules: [] };
-    config.routing.rules = [];
-    push(config.routing.rules, rule);
-    for (let existing in old)
-        push(config.routing.rules, existing);
 }
 
 function singbox_forced_outbound(config, section_name) {
@@ -2684,7 +2767,8 @@ function apply_output_interface(config) {
     for (let outbound in array_or_empty(config.outbounds)) {
         if (type(outbound) != "object")
             continue;
-        if (lc(as_string(outbound.protocol || "")) == "blackhole")
+        if (lc(as_string(outbound.protocol || "")) == "blackhole" ||
+            lc(as_string(outbound.protocol || "")) == "loopback")
             continue;
         if (outbound_is_local_socks(outbound)) {
             // Same as sing-box dialing Xray: keep the outbound mark, but do not
@@ -2867,6 +2951,54 @@ function apply_xray_servers(config) {
     }
 }
 
+function apply_temporary_device_routes(config) {
+    if (!engine.is_xray_primary())
+        return;
+    let items = [];
+    try {
+        items = device_route.list_routes().items;
+    }
+    catch (e) {
+        return;
+    }
+    if (type(items) != "array" || length(items) == 0)
+        return;
+    let index_at = length(items);
+    while (index_at > 0) {
+        index_at--;
+        let item = items[index_at];
+        let ip = as_string(item.ip);
+        let source = index(ip, ":") >= 0 ? ip + "/128" : ip + "/32";
+        let rule = {
+            type: "field",
+            inboundTag: tproxy_inbound_tags(),
+            source: [ source ]
+        };
+        let target = null;
+        if (item.action == "bypass")
+            target = { outboundTag: xray_constants.FREEDOM_TAG };
+        else if (item.action == "block")
+            target = { outboundTag: xray_constants.BLACKHOLE_TAG };
+        else {
+            for (let section in enabled_sections_any()) {
+                if (option(section, ".name", "") != item.section)
+                    continue;
+                target = section_policy_tproxy_target(section);
+                if (target == null)
+                    target = section_tproxy_target(config, section);
+                break;
+            }
+        }
+        if (target == null)
+            target = { outboundTag: "xray-" + item.section };
+        if (target.balancerTag)
+            rule.balancerTag = target.balancerTag;
+        else
+            rule.outboundTag = as_string(target.outboundTag || ("xray-" + item.section));
+        prepend_routing_rule(config, rule);
+    }
+}
+
 function generate_config(output_path, ports_path) {
     output_path = as_string(output_path || xray_constants.XRAY_CONFIG);
     ports_path = as_string(ports_path || xray_constants.XRAY_PORTS_FILE);
@@ -2913,6 +3045,8 @@ function generate_config(output_path, ports_path) {
         apply_output_interface(config);
     if (engine.is_xray_primary())
         apply_stats_api(config);
+    if (engine.is_xray_primary())
+        apply_temporary_device_routes(config);
 
     sanitize_generated_config(config);
 
