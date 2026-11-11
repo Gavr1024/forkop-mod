@@ -700,7 +700,7 @@ function nft_rebuild_runtime() {
         SB_TPROXY_INBOUND6_ADDRESS
     ]);
     if (status == 0)
-        command_success_from_args([ "sh", LIB_DIR + "/nft/flow_offload.sh" ]);
+        command_success_from_args([ "ucode", "-L", LIB_DIR, LIB_DIR + "/nft/flow_offload.uc" ]);
     return status;
 }
 

@@ -81,7 +81,7 @@ handle_monitored_update() {
 }
 
 patch_flow_offload() {
-    sh "$FORKOP_LIB/nft/flow_offload.sh" "$1"
+    FORKOP_LIB="$FORKOP_LIB" ucode -L "$FORKOP_LIB" "$FORKOP_LIB/nft/flow_offload.uc" "$1"
 }
 
 service_triggers() {
