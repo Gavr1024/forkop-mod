@@ -7954,10 +7954,16 @@ function showXdriveSettingsModal(
       : { flush: "20", pollMax: "500", requests: "8" };
     const paint = (option, text) => {
       option.placeholder = text;
-      if (typeof option.getUIElement !== "function") {
+      if (!option.map || !option.map.root || typeof option.getUIElement !== "function") {
         return;
       }
-      const node = option.getUIElement("settings");
+      let widget = null;
+      try {
+        widget = option.getUIElement("settings");
+      } catch (_error) {
+        return;
+      }
+      const node = widget && widget.node ? widget.node : widget;
       if (!node) {
         return;
       }
