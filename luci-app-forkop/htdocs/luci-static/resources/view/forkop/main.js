@@ -1213,7 +1213,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.16";
+var FORKOP_LUCI_APP_VERSION = "1.0.17";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -2647,6 +2647,7 @@ function renderDefaultState({
       },
       formatSectionTraffic(store.get().sectionTraffic?.[section.sectionName])
     ),
+    speedLimitCard(section.sectionName),
     E("div", { class: "fkp_dashboard-page__outbound-grid" }, [
       ...metadataNodes,
       ...section.outbounds.filter((outbound) => {
@@ -2660,6 +2661,116 @@ function formatSectionTraffic(traffic) {
   const uplink = prettyBytes(Math.max(0, Number(traffic?.uplink) || 0));
   const downlink = prettyBytes(Math.max(0, Number(traffic?.downlink) || 0));
   return `${_("Uplink")} ${uplink} · ${_("Downlink")} ${downlink}`;
+}
+function formatLiveMbit(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    return "0";
+  }
+  if (number >= 10) {
+    return String(Math.round(number));
+  }
+  const rounded = Math.round(number * 10) / 10;
+  return `${rounded}`.replace(/\.0$/, "");
+}
+function speedLimitParts(info) {
+  if (!info) {
+    return null;
+  }
+  const place = info.place === "egress" ? _("On exit") : _("On entry");
+  const rates = [];
+  if (Number(info.down) > 0) {
+    rates.push(`${_("Limit download")} ${info.down} ${_("Mbit/s")}`);
+  }
+  if (Number(info.up) > 0) {
+    rates.push(`${_("Limit upload")} ${info.up} ${_("Mbit/s")}`);
+  }
+  let drops = _("Saved, but the router rule was not found");
+  if (info.active) {
+    const counted = info.down_dropped != null || info.up_dropped != null;
+    if (!counted) {
+      drops = _("The drop counter appears after Save & Apply");
+    } else {
+      const parts = [];
+      if (Number(info.down) > 0) {
+        parts.push(`${_("Limit download")} ${info.down_dropped || 0}`);
+      }
+      if (Number(info.up) > 0) {
+        parts.push(`${_("Limit upload")} ${info.up_dropped || 0}`);
+      }
+      drops = `${_("Dropped packets")}: ${parts.join(" · ")}`;
+    }
+  }
+  if (info.shared) {
+    drops = `${drops}. ${_("Shared ByeDPI counter")}`;
+  }
+  const live = [];
+  if (info.down_now != null && Number(info.down) > 0) {
+    live.push(_("Now download %s of %s Mbit/s").format(formatLiveMbit(info.down_now), info.down));
+  }
+  if (info.up_now != null && Number(info.up) > 0) {
+    live.push(_("Now upload %s of %s Mbit/s").format(formatLiveMbit(info.up_now), info.up));
+  }
+  let liveText = live.join(" · ");
+  if (liveText && info.shared) {
+    liveText = `${liveText}. ${_("Shared ByeDPI counter")}`;
+  }
+  let cascade = "";
+  if (info.cascade) {
+    cascade = info.cascade_limit
+      ? _("This section connects through %s, so this exit limit does not apply. Section %s limits the traffic instead.").format(info.cascade_label, info.cascade_label)
+      : _("This section connects through %s, so this exit limit does not apply. That section has no exit limit.").format(info.cascade_label);
+  }
+  return {
+    title: `${_("Speed limit")} · ${place}`,
+    rates: rates.join(" · "),
+    live: liveText,
+    drops,
+    cascade,
+  };
+}
+function fillSpeedLimitNode(node, info) {
+  const parts = speedLimitParts(info);
+  const stamp = parts ? `${parts.title}\n${parts.rates}\n${parts.live}\n${parts.drops}\n${parts.cascade}` : "";
+  if ((node.getAttribute("data-limit-stamp") || "") === stamp) {
+    return;
+  }
+  node.setAttribute("data-limit-stamp", stamp);
+  node.classList.toggle("is-on", Boolean(parts));
+  node.replaceChildren();
+  if (!parts) {
+    return;
+  }
+  const rows = [
+    E("div", { class: "fkp_dashboard-page__speed-limit__title" }, parts.title),
+    E("div", {}, parts.rates),
+  ];
+  if (parts.live) {
+    rows.push(E("div", {}, parts.live));
+  }
+  rows.push(E("div", { class: "fkp_dashboard-page__speed-limit__drops" }, parts.drops));
+  if (parts.cascade) {
+    rows.push(E("div", { class: "fkp_dashboard-page__speed-limit__drops" }, parts.cascade));
+  }
+  node.append(...rows);
+}
+function speedLimitCard(sectionName) {
+  const node = E("div", {
+    class: "fkp_dashboard-page__speed-limit",
+    "data-section-limit": sectionName
+  });
+  fillSpeedLimitNode(node, store.get().speedLimits?.[sectionName]);
+  return node;
+}
+function updateSpeedLimitsInline(limits) {
+  const container = document.getElementById("dashboard-sections-grid");
+  if (!container) {
+    return;
+  }
+  container.querySelectorAll("[data-section-limit]").forEach((node) => {
+    const name = node.getAttribute("data-section-limit") || "";
+    fillSpeedLimitNode(node, limits?.[name]);
+  });
 }
 function updateSectionTrafficInline(sectionTraffic) {
   const container = document.getElementById("dashboard-sections-grid");
@@ -3239,6 +3350,12 @@ var ForkopShellMethods = {
   ),
   getSectionTraffic: async () => callBaseMethod(
     Forkop.AvailableMethods.GET_SECTION_TRAFFIC,
+    [],
+    "/usr/bin/forkop",
+    { timeout: 4e3 }
+  ),
+  getSpeedLimits: async () => callBaseMethod(
+    "speed_limit_status",
     [],
     "/usr/bin/forkop",
     { timeout: 4e3 }
@@ -3921,6 +4038,9 @@ function getJsonOutbounds(section) {
   const values = getListValues(section.outbound_jsons);
   return values.length ? values : getListValues(section.outbound_json);
 }
+function getXdriveOutbounds(section) {
+  return getListValues(section.xdrive_outbounds);
+}
 function isConnectionAction(action) {
   return Boolean(
     action && ["connection", "proxy", "outbound", "vpn"].includes(action)
@@ -3955,7 +4075,7 @@ function hasClientProfiles(section) {
   return Array.isArray(section?.warp_clients) && section.warp_clients.length > 0 || Array.isArray(section?.masque_clients) && section.masque_clients.length > 0;
 }
 function shouldUseProxyGroup(section) {
-  return getManualProxyLinks(section).length > 0 || hasSubscriptionSources(section) || getConnectionInterfaces(section).length > 0 || getJsonOutbounds(section).length > 0 || hasClientProfiles(section) || isUrlTestEnabled(section) || hasConfiguredPriorityList(section);
+  return getManualProxyLinks(section).length > 0 || hasSubscriptionSources(section) || getConnectionInterfaces(section).length > 0 || getJsonOutbounds(section).length > 0 || getXdriveOutbounds(section).length > 0 || hasClientProfiles(section) || isUrlTestEnabled(section) || hasConfiguredPriorityList(section);
 }
 function getSectionProxyConfigType(section) {
   if (hasSubscriptionSources(section)) {
@@ -3967,7 +4087,7 @@ function getSectionProxyConfigType(section) {
   if (getManualProxyLinks(section).length > 0) {
     return "selector";
   }
-  if (getJsonOutbounds(section).length > 0) {
+  if (getJsonOutbounds(section).length > 0 || getXdriveOutbounds(section).length > 0) {
     return "outbound";
   }
   if (getConnectionInterfaces(section).length > 0) {
@@ -5001,6 +5121,7 @@ function prettyBadgeLabel(value) {
     quic: "QUIC",
     kcp: "mKCP",
     mkcp: "mKCP",
+    xdrive: "XDRIVE",
     tls: "TLS",
     reality: "Reality",
     xtls: "XTLS",
@@ -6416,6 +6537,7 @@ var initialStore = {
     data: { downloadTotal: 0, uploadTotal: 0 }
   },
   sectionTraffic: {},
+  speedLimits: {},
   systemInfoWidget: {
     loading: true,
     failed: false,
@@ -8196,6 +8318,58 @@ async function pollSingboxSectionTraffic(dataUpdatesId) {
     applySingboxConnectionTraffic(latestClashConnections);
   }
 }
+const speedLimitSamples = {};
+function withSpeedRates(sections) {
+  const now = Date.now();
+  const next = {};
+  Object.keys(sections).forEach((name) => {
+    const item = { ...sections[name] };
+    const downBytes = Number(item.down_bytes);
+    const upBytes = Number(item.up_bytes);
+    const prev = speedLimitSamples[name];
+    if (prev && now > prev.at) {
+      const dt = (now - prev.at) / 1000;
+      if (dt >= 0.5 && dt <= 20) {
+        if (Number.isFinite(downBytes) && downBytes >= prev.down) {
+          item.down_now = ((downBytes - prev.down) * 8) / 1e6 / dt;
+        }
+        if (Number.isFinite(upBytes) && upBytes >= prev.up) {
+          item.up_now = ((upBytes - prev.up) * 8) / 1e6 / dt;
+        }
+      }
+    }
+    speedLimitSamples[name] = {
+      at: now,
+      down: Number.isFinite(downBytes) ? downBytes : prev ? prev.down : 0,
+      up: Number.isFinite(upBytes) ? upBytes : prev ? prev.up : 0,
+    };
+    next[name] = item;
+  });
+  return next;
+}
+let speedLimitPollRunning = false;
+async function pollSpeedLimits(dataUpdatesId) {
+  if (speedLimitPollRunning || dataUpdatesId !== dashboardDataUpdatesId || getDashboardServiceAvailability() === "stopped") {
+    return;
+  }
+  speedLimitPollRunning = true;
+  try {
+    const response = await ForkopShellMethods.getSpeedLimits();
+    if (dataUpdatesId !== dashboardDataUpdatesId) {
+      return;
+    }
+    const sections = response.success && response.data && response.data.success !== false && response.data.sections && typeof response.data.sections === "object" ? withSpeedRates(response.data.sections) : null;
+    if (!sections) {
+      return;
+    }
+    if (JSON.stringify(sections) === JSON.stringify(store.get().speedLimits || {})) {
+      return;
+    }
+    store.set({ speedLimits: sections });
+  } finally {
+    speedLimitPollRunning = false;
+  }
+}
 function startDashboardDataUpdates() {
   if (dashboardDataUpdatesStarted || !dashboardMounted || getDashboardServiceAvailability() === "stopped") {
     return;
@@ -8206,9 +8380,11 @@ function startDashboardDataUpdates() {
   void connectToClashSockets(dataUpdatesId);
   void pollXrayPlaneStats(dataUpdatesId);
   void pollSingboxSectionTraffic(dataUpdatesId);
+  void pollSpeedLimits(dataUpdatesId);
   xrayStatsTimer = setInterval(() => {
     void pollXrayPlaneStats(dataUpdatesId);
     void pollSingboxSectionTraffic(dataUpdatesId);
+    void pollSpeedLimits(dataUpdatesId);
   }, XRAY_STATS_POLL_INTERVAL_MS);
   sectionsRefreshTimer = setInterval(() => {
     void fetchDashboardSections();
@@ -9172,6 +9348,7 @@ async function renderSectionsWidget() {
   );
   return preserveScrollForPage(() => {
     container.replaceChildren(...renderedWidgets);
+    updateSpeedLimitsInline(store.get().speedLimits);
   });
 }
 async function renderBandwidthWidget() {
@@ -9390,6 +9567,9 @@ async function onStoreUpdate(next, prev, diff) {
   }
   if (diff.sectionTraffic) {
     updateSectionTrafficInline(next.sectionTraffic);
+  }
+  if (diff.speedLimits) {
+    updateSpeedLimitsInline(next.speedLimits);
   }
   if (diff.systemInfoWidget) {
     renderSystemInfoWidget();
@@ -9669,6 +9849,29 @@ var styles = `
     color: var(--text-color-medium, #666);
     font-size: 12px;
     line-height: 1.35;
+}
+
+.fkp_dashboard-page__speed-limit {
+    display: none;
+}
+
+.fkp_dashboard-page__speed-limit.is-on {
+    display: block;
+    margin: 0 0 10px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.fkp_dashboard-page__speed-limit__title {
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+
+.fkp_dashboard-page__speed-limit__drops {
+    margin-top: 2px;
 }
 
 .fkp_dashboard-page .btn.fkp_dashboard-page__outbound-section__subscription-update {

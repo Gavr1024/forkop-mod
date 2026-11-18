@@ -103,7 +103,11 @@ function sectionSpeedText(section_id) {
   const unit = _("Mbit/s");
   const downText = down ? down + " " + unit : none;
   const upText = up ? up + " " + unit : none;
-  return _("Limit: download %s, upload %s").format(downText, upText);
+  const place =
+    `${uci.get(UCI_PACKAGE, section_id, "speed_limit_place") || ""}` === "egress"
+      ? _(", on exit")
+      : _(", on entry");
+  return _("Limit: download %s, upload %s").format(downText, upText) + place;
 }
 
 function rememberSectionListWarnings(payload) {

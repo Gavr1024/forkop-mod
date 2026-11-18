@@ -356,6 +356,7 @@ function forkop_config_masked_line(line) {
     line = mask_after_token(line, "list urltest_proxy_links");
     line = mask_after_token(line, "list selector_proxy_links");
     line = mask_after_token_space(line, "option outbound_json");
+    line = mask_after_token_space(line, "list xdrive_outbounds");
     line = mask_after_token_space(line, "list domain");
     line = mask_after_token_space(line, "list domain_suffix");
     line = mask_after_token_space(line, "list domain_keyword");

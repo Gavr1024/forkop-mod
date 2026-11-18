@@ -356,8 +356,9 @@ function add_item_rules(item) {
         return;
     }
     let record = section_record(item.section);
-    let up = record == null ? 0 : speed_up(record);
-    let down = record == null ? 0 : speed_down(record);
+    let egress = record != null && trim(as_string(record.speed_limit_place)) == "egress";
+    let up = record == null || egress ? 0 : speed_up(record);
+    let down = record == null || egress ? 0 : speed_down(record);
     let shaped = "";
     if (down > 0)
         shaped = "ct mark set " + speed_mark(item.section) + " ";
@@ -428,11 +429,102 @@ function door_tag(item) {
     return "xray-" + item.section;
 }
 
+function json_string_field(object_text, field) {
+    let needle = "\"" + field + "\"";
+    let at = index(object_text, needle);
+    if (at < 0)
+        return "";
+    let rest = substr(object_text, at + length(needle));
+    let colon = index(rest, ":");
+    if (colon < 0)
+        return "";
+    rest = substr(rest, colon + 1);
+    let quote = index(rest, "\"");
+    if (quote < 0)
+        return "";
+    rest = substr(rest, quote + 1);
+    let end = index(rest, "\"");
+    if (end <= 0)
+        return "";
+    return substr(rest, 0, end);
+}
+
+function object_around(text, at) {
+    let depth = 0;
+    let start = -1;
+    let i = at;
+    while (i >= 0) {
+        let ch = substr(text, i, 1);
+        if (ch == "}")
+            depth++;
+        else if (ch == "{") {
+            if (depth == 0) {
+                start = i;
+                break;
+            }
+            depth--;
+        }
+        i--;
+    }
+    if (start < 0)
+        return "";
+    depth = 0;
+    let in_str = false;
+    let escaped = false;
+    i = start;
+    while (i < length(text)) {
+        let ch = substr(text, i, 1);
+        if (in_str) {
+            if (escaped)
+                escaped = false;
+            else if (ch == "\\")
+                escaped = true;
+            else if (ch == "\"")
+                in_str = false;
+        }
+        else if (ch == "\"")
+            in_str = true;
+        else if (ch == "{")
+            depth++;
+        else if (ch == "}") {
+            depth--;
+            if (depth == 0)
+                return substr(text, start, i - start + 1);
+        }
+        i++;
+    }
+    return "";
+}
+
+function socks_route_target(text, section_name) {
+    let needle = "\"socks-in-" + section_name + "\"";
+    let from = 0;
+    let needle_len = length(needle);
+    while (from < length(text)) {
+        let at = index(substr(text, from), needle);
+        if (at < 0)
+            return "";
+        at = from + at;
+        let obj = object_around(text, at);
+        let balancer = json_string_field(obj, "balancerTag");
+        if (balancer == "balancer-" + section_name)
+            return "balancer:" + section_name;
+        let outbound = json_string_field(obj, "outboundTag");
+        if (outbound != "")
+            return outbound;
+        from = at + needle_len;
+    }
+    return "";
+}
+
 function xray_outbound_for(text, item) {
     if (item.action == "bypass")
         return tag_present(text, "direct") ? "direct" : "";
     if (item.action == "block")
         return tag_present(text, "block") ? "block" : "";
+    let socks = socks_route_target(text, item.section);
+    if (socks != "")
+        return socks;
     if (tag_present(text, "balancer-" + item.section))
         return "balancer:" + item.section;
     let tag = door_tag(item);

@@ -861,7 +861,8 @@ function section_current_usable_cache_by_name(sections, section, default_user_ag
 function section_has_non_subscription_connection_sources(section) {
     return length(connections.connection_urls(section)) > 0 ||
         length(connections.interfaces(section)) > 0 ||
-        length(connections.outbound_jsons(section)) > 0;
+        length(connections.outbound_jsons(section)) > 0 ||
+        length(connections.xdrive_outbounds(section)) > 0;
 }
 
 function subscription_download_target_section_is_ready(sections, download_section, startup_blocked_sections, default_user_agent) {

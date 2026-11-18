@@ -708,6 +708,8 @@ pass
 
 [rule.proxy1.xray_mux_enabled]
 0
+[rule.proxy1.egress_mark]
+0
 [rule.proxy1.domain]
 full.example,legacy.example
 [rule.proxy1.domain_suffix]
@@ -813,6 +815,8 @@ disabled
 [rule.out1.xray_leastload_tolerance]
 
 [rule.out1.xray_mux_enabled]
+0
+[rule.out1.egress_mark]
 0
 [rule.out1.domain]
 
@@ -953,6 +957,8 @@ disabled
 [rule.vpn1.xray_leastload_tolerance]
 
 [rule.vpn1.xray_mux_enabled]
+0
+[rule.vpn1.egress_mark]
 0
 [rule.vpn1.domain]
 
@@ -1101,6 +1107,60 @@ EOF_SING_BOX_SIG
 assert_eq "$(md5_file "$WORK_DIR/sing-box-signature.expected")" \
   "$(state_ucode sing-box-signature-fixture "$WORK_DIR/sing-box-signature.json")" \
   "sing-box signature hash"
+
+cat >"$WORK_DIR/egress-mark-off.json" <<'JSON'
+{
+  "section": [
+    {
+      ".name": "BLESS",
+      ".type": "section",
+      "enabled": "1",
+      "action": "proxy",
+      "speed_limit_place": "ingress",
+      "speed_limit_down_mbit": "3",
+      "speed_limit_up_mbit": "1"
+    }
+  ]
+}
+JSON
+cat >"$WORK_DIR/egress-mark-on.json" <<'JSON'
+{
+  "section": [
+    {
+      ".name": "BLESS",
+      ".type": "section",
+      "enabled": "1",
+      "action": "proxy",
+      "speed_limit_place": "egress",
+      "speed_limit_down_mbit": "3",
+      "speed_limit_up_mbit": "1"
+    }
+  ]
+}
+JSON
+cat >"$WORK_DIR/egress-mark-rate.json" <<'JSON'
+{
+  "section": [
+    {
+      ".name": "BLESS",
+      ".type": "section",
+      "enabled": "1",
+      "action": "proxy",
+      "speed_limit_place": "egress",
+      "speed_limit_down_mbit": "5",
+      "speed_limit_up_mbit": "1"
+    }
+  ]
+}
+JSON
+if [ "$(state_ucode sing-box-signature-fixture "$WORK_DIR/egress-mark-off.json")" = \
+  "$(state_ucode sing-box-signature-fixture "$WORK_DIR/egress-mark-on.json")" ]; then
+  fail "switching the speed limit to egress must rebuild the proxy config"
+fi
+if [ "$(state_ucode sing-box-signature-fixture "$WORK_DIR/egress-mark-on.json")" != \
+  "$(state_ucode sing-box-signature-fixture "$WORK_DIR/egress-mark-rate.json")" ]; then
+  fail "changing only the egress megabit value must not rebuild the proxy config"
+fi
 
 cat >"$WORK_DIR/dpi-signatures.json" <<'JSON'
 {

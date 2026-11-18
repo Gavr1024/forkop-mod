@@ -401,6 +401,10 @@ function outbound_jsons(section) {
     return result;
 }
 
+function xdrive_outbounds(section) {
+    return list_value(section, "xdrive_outbounds");
+}
+
 function urltests(section) {
     let result = [];
     for (let child in child_items(section, "urltest")) {
@@ -606,6 +610,7 @@ function has_connection_sources(section) {
         length(subscription_urls(section)) > 0 ||
         length(interfaces(section)) > 0 ||
         length(outbound_jsons(section)) > 0 ||
+        length(xdrive_outbounds(section)) > 0 ||
         length(warp_clients(section)) > 0 ||
         length(masque_clients(section)) > 0;
 }
@@ -764,6 +769,10 @@ function exclude_token(value) {
 
 function json_exclude_key(value) {
     return "json:" + exclude_token(value);
+}
+
+function xdrive_exclude_key(value) {
+    return "xdrive:" + exclude_token(value);
 }
 
 function excluded_outbound_entries(section) {
@@ -1262,6 +1271,7 @@ return {
     warp_clients,
     masque_clients,
     outbound_jsons,
+    xdrive_outbounds,
     urltests,
     dashboard_filter_mode,
     dashboard_detect_server_country,
@@ -1307,6 +1317,7 @@ return {
     outbound_key_excluded,
     outbound_excluded_signature,
     json_exclude_key,
+    xdrive_exclude_key,
     subscription_user_agent,
     subscription_hwid,
     subscription_download_section,

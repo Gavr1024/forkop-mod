@@ -1466,6 +1466,112 @@ function validate_outbound_json_values(section) {
     }
 }
 
+function xdrive_spec_object(value) {
+    try {
+        value = json(as_string(value));
+    }
+    catch (e) {
+        return null;
+    }
+    return type(value) == "object" ? value : null;
+}
+
+function valid_xdrive_uuid(value) {
+    return match(trim(as_string(value)), /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/) != null;
+}
+
+function xdrive_tune_number(value, low, high) {
+    value = trim(as_string(value));
+    if (match(value, /^[0-9]+$/) == null)
+        return -1;
+    let number = int(value);
+    if (number < low || number > high)
+        return -1;
+    return number;
+}
+
+function xdrive_tune_optional(value, low, high) {
+    value = trim(as_string(value));
+    if (value == "")
+        return 0;
+    return xdrive_tune_number(value, low, high);
+}
+
+function validate_xdrive_tune(rule_name, label, spec) {
+    let poll = xdrive_tune_optional(spec.poll_ms, 50, 60000);
+    let poll_max = xdrive_tune_optional(spec.poll_max_ms, 50, 60000);
+    let flush = xdrive_tune_optional(spec.flush_ms, 1, 60000);
+    let segment = xdrive_tune_optional(spec.segment_kb, 16, 16384);
+    let requests = xdrive_tune_optional(spec.concurrency, 1, 64);
+    let eager = xdrive_tune_optional(spec.eager_ms, 100, 600000);
+    let hole = xdrive_tune_optional(spec.hole_ms, 1000, 600000);
+    let session = xdrive_tune_optional(spec.session_sec, 30, 86400);
+    if (poll < 0 || poll_max < 0 || flush < 0 || segment < 0 || requests < 0 || eager < 0 || hole < 0 || session < 0)
+        fail_validation("XDRIVE outbound '" + label + "' in rule '" + rule_name + "' has invalid request timing. Aborted.");
+    if (poll > 0 && poll_max > 0 && poll_max < poll)
+        fail_validation("XDRIVE outbound '" + label + "' in rule '" + rule_name + "' has a longest poll shorter than the shortest. Aborted.");
+}
+
+function validate_xdrive_values(section) {
+    let name = section_name(section);
+    let seen = {};
+    for (let value in connections.xdrive_outbounds(section)) {
+        if (as_string(value) == "")
+            fail_validation("Connection rule '" + name + "' has an empty XDRIVE outbound. Aborted.");
+        let spec = xdrive_spec_object(value);
+        if (spec == null)
+            fail_validation("Connection rule '" + name + "' has an invalid XDRIVE outbound. Aborted.");
+        let label = trim(as_string(spec.name || ""));
+        if (label == "")
+            fail_validation("XDRIVE outbound in rule '" + name + "' needs a display name. Aborted.");
+        if (seen[label])
+            fail_validation("Connection rule '" + name + "' has duplicate XDRIVE name '" + label + "'. Aborted.");
+        seen[label] = true;
+        if (!valid_xdrive_uuid(spec.uuid))
+            fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs a valid UUID. Aborted.");
+        let encryption = trim(as_string(spec.encryption || ""));
+        if (encryption == "" || lc(encryption) == "none")
+            fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs a VLESS encryption string. Aborted.");
+        let service = lc(trim(as_string(spec.service || "")));
+        let folder = trim(as_string(spec.folder || ""));
+        if (folder == "")
+            fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs a folder. Aborted.");
+        if (service == "yandex") {
+            if (trim(as_string(spec.login || "")) == "" || as_string(spec.password || "") == "")
+                fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs a Yandex Disk login and app password. Aborted.");
+        }
+        else if (service == "mail") {
+            if (trim(as_string(spec.login || "")) == "" || as_string(spec.password || "") == "")
+                fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs a Mail Cloud login and app password. Aborted.");
+        }
+        else if (service == "google" || service == "google-drive") {
+            if (trim(as_string(spec.client_id || "")) == "" || trim(as_string(spec.client_secret || "")) == "" || trim(as_string(spec.refresh_token || "")) == "")
+                fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs three Google Drive keys. Aborted.");
+        }
+        else if (service == "s3") {
+            if (trim(as_string(spec.endpoint || "")) == "" || trim(as_string(spec.bucket || "")) == "" || trim(as_string(spec.access_key || "")) == "" || trim(as_string(spec.secret_key || "")) == "")
+                fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs an S3 endpoint, bucket and keys. Aborted.");
+        }
+        else if (service == "template") {
+            let template = spec.template;
+            if (type(template) == "string") {
+                try {
+                    template = json(template);
+                }
+                catch (e) {
+                    template = null;
+                }
+            }
+            if (type(template) != "object")
+                fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' needs a template object. Aborted.");
+        }
+        else
+            fail_validation("XDRIVE outbound '" + label + "' in rule '" + name + "' has an unknown storage. Aborted.");
+        if (as_string(spec.tune) == "1")
+            validate_xdrive_tune(name, label, spec);
+    }
+}
+
 function rule_has_subscription_urls(section) {
     return length(connections.subscription_urls(section)) > 0;
 }
@@ -1568,6 +1674,9 @@ function validate_speed_limit(section) {
         if (match(raw, /^[0-9]+$/) == null || int(raw) < 1 || int(raw) > 10000)
             fail_validation("Rule '" + name + "' has invalid speed limit '" + raw + "'. Use a whole number of megabits from 1 to 10000, or leave it empty. Aborted.");
     }
+    let place = trim(option(section, "speed_limit_place", ""));
+    if (place != "" && place != "ingress" && place != "egress")
+        fail_validation("Rule '" + name + "' has invalid speed limit place '" + place + "'. Use ingress or egress. Aborted.");
 }
 
 function validate_rule(section, sections, context) {
@@ -1683,6 +1792,7 @@ function validate_rule(section, sections, context) {
         }
 
         validate_outbound_json_values(section);
+        validate_xdrive_values(section);
     }
 
     if (action == "outbound")
@@ -2179,6 +2289,7 @@ function has_outbound_section(ctx) {
         if (length(connections.connection_urls(section)) > 0 ||
             length(connections.subscription_urls(section)) > 0 ||
             length(connections.outbound_jsons(section)) > 0 ||
+            length(connections.xdrive_outbounds(section)) > 0 ||
             length(connections.interfaces(section)) > 0)
             return true;
     }

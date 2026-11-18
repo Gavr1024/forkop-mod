@@ -259,7 +259,7 @@ assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle\tiifname\
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle\tiifname\t@forkop_interfaces\tip6\tdaddr\t@forkop_subnets6\tmeta\tl4proto\ttcp\tmeta\tmark\tset\t0x00100000\tcounter' "runtime common6 tcp rule"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tproxy\tmeta\tmark\t&\t0x00100000\t==\t0x00100000\tmeta\tl4proto\ttcp\ttproxy\tip\tto\t:1602\tcounter' "runtime proxy tcp rule"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tproxy\tmeta\tmark\t&\t0x00100000\t==\t0x00100000\tmeta\tl4proto\ttcp\ttproxy\tip6\tto\t[::1]:1602\tcounter' "runtime proxy6 tcp rule"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\tmeta\tmark\t0x00200000\tcounter\treturn' "runtime outbound return"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\tmeta\tmark\t&\t0x00200000\t==\t0x00200000\tcounter\treturn' "runtime outbound return"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\tip6\tdaddr\t@localv6\tip6\tdaddr\t!=\tfc00::/18\treturn' "runtime output local6 return preserves FakeIP6 capture"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_output\tjump\tpriority_output_rules' "runtime priority output jump"
 assert_contains "$NFT_LOG" $'nft\tinsert\trule\tinet\tForkopTable\tmangle\tudp\tdport\t123\treturn' "runtime ntp exclusion"
@@ -276,7 +276,7 @@ nft_ucode nft-enable-router-output-intercept ForkopTable localv4 0x00200000 1
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\toutput_redirect\t{ type nat hook output priority -100; policy accept; }' "router output intercept chain"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tl4proto\ticmp\treturn' "router output intercept skips ICMP"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\ttcp\tdport\t53\treturn' "router output intercept skips DNS"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tmark\t0x00200000\treturn' "router output intercept skips outbound mark"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tmark\t&\t0x00200000\t==\t0x00200000\treturn' "router output intercept skips outbound mark"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tmark\t&\t0x10000000\t==\t0x10000000\tcounter\treturn' "router output intercept skips ByeDPI egress mark"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\toutput_redirect\tmeta\tl4proto\ttcp\tcounter\tredirect\tto\t:1604' "router output intercept redirects TCP"
 if grep -Fq $'network' "$NFT_LOG"; then

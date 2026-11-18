@@ -1145,6 +1145,9 @@ msgstr "Введите полный объект inbound sing-box"
 msgid "Enter a complete sing-box outbound object"
 msgstr "Введите полный объект outbound sing-box"
 
+msgid "Enter a complete Xray outbound object"
+msgstr "Введите полный объект outbound Xray"
+
 msgid "Enter a display name"
 msgstr "Введите отображаемое имя"
 
@@ -3464,6 +3467,24 @@ msgstr "В ByeByeDPI стоит 20. На роутере безопаснее 4�
 msgid "Use my strategies"
 msgstr "Использовать мои стратегии"
 
+msgid "How many to generate"
+msgstr "Сколько сгенерировать"
+
+msgid "Generate strategies"
+msgstr "Сгенерировать стратегии"
+
+msgid "Could not build strategies"
+msgstr "Не удалось сгенерировать стратегии"
+
+msgid "From the best checked strategy"
+msgstr "От лучшей проверенной"
+
+msgid "Run a strategy check first"
+msgstr "Сначала запустите проверку"
+
+msgid "When this is on, new lines keep that strategy and only shift its positions and TTL. Off builds a fresh pack."
+msgstr "Когда галочка стоит, новые строки сохраняют эту стратегию и только сдвигают позиции и TTL. Без галочки собирается новая пачка."
+
 msgid "One ciadpi strategy per line. Leave this off to test the built-in ByeByeDPI list."
 msgstr "Одна стратегия ciadpi на строку. Выключите, чтобы проверять встроенный список ByeByeDPI."
 
@@ -4135,4 +4156,37 @@ msgstr "Статус обновлён. Сохраните это окно, за�
 
 msgid "Could not check the WARP account"
 msgstr "Не удалось проверить аккаунт WARP"
+
+msgid "Speed limit"
+msgstr "Лимит скорости"
+
+msgid "Limit download"
+msgstr "Загрузка"
+
+msgid "Limit upload"
+msgstr "Отдача"
+
+msgid "Dropped packets"
+msgstr "Отброшено пакетов"
+
+msgid "Saved, but the router rule was not found"
+msgstr "Сохранено, но правило на роутере не найдено"
+
+msgid "The drop counter appears after Save & Apply"
+msgstr "Счётчик появится после сохранения и применения"
+
+msgid "Shared ByeDPI counter"
+msgstr "Общий счётчик ByeDPI"
+
+msgid "Now download %s of %s Mbit/s"
+msgstr "Сейчас загрузка %s из %s Мбит/с"
+
+msgid "Now upload %s of %s Mbit/s"
+msgstr "Сейчас отдача %s из %s Мбит/с"
+
+msgid "This section connects through %s, so this exit limit does not apply. Section %s limits the traffic instead."
+msgstr "Секция подключается через «%s», поэтому этот лимит на выходе не действует. Трафик режет секция «%s»."
+
+msgid "This section connects through %s, so this exit limit does not apply. That section has no exit limit."
+msgstr "Секция подключается через «%s», поэтому этот лимит на выходе не действует. У той секции лимита на выходе нет."
 

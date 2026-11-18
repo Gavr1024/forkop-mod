@@ -154,7 +154,6 @@ function ensureSharedCheckStyles() {
   margin: 0.85rem 0 0.35rem;
   padding: 0.85rem 1rem 0.45rem;
   border: 1px solid #3e8f46;
-  border-left: 4px solid #3cae4a;
   border-radius: 8px;
   background: rgba(60, 174, 74, 0.06);
   overflow: visible !important;
@@ -2417,6 +2416,12 @@ function currentDraftOutboundNames(section_id) {
   currentSourceOptionValues(section_id, "outbound_jsons").forEach((value) => {
     const tag = outboundJsonDisplayTag(value);
     if (tag) {
+      names.push(tag);
+    }
+  });
+  currentSourceOptionValues(section_id, "xdrive_outbounds").forEach((value) => {
+    const tag = xdriveDisplayName(value);
+    if (tag && tag !== _("XDRIVE")) {
       names.push(tag);
     }
   });
@@ -7309,6 +7314,805 @@ function validatePriorityGroupItemsBeforeSave(section_id, values) {
   return true;
 }
 
+function parseXdriveSettings(value) {
+  const parsed = parseOutboundJsonObject(value);
+  if (!parsed || parsed.service == null) {
+    return null;
+  }
+  const secrets = Array.isArray(parsed.secrets)
+    ? parsed.secrets.join("\n")
+    : `${parsed.secrets || ""}`;
+  return {
+    name: `${parsed.name || ""}`,
+    service: `${parsed.service || "yandex"}`,
+    folder: `${parsed.folder || ""}`,
+    uuid: `${parsed.uuid || ""}`,
+    encryption: `${parsed.encryption || ""}`,
+    login: `${parsed.login || ""}`,
+    password: `${parsed.password || ""}`,
+    client_id: `${parsed.client_id || ""}`,
+    client_secret: `${parsed.client_secret || ""}`,
+    refresh_token: `${parsed.refresh_token || ""}`,
+    endpoint: `${parsed.endpoint || ""}`,
+    region: `${parsed.region || ""}`,
+    bucket: `${parsed.bucket || ""}`,
+    access_key: `${parsed.access_key || ""}`,
+    secret_key: `${parsed.secret_key || ""}`,
+    template:
+      typeof parsed.template === "string"
+        ? parsed.template
+        : parsed.template
+          ? JSON.stringify(parsed.template, null, 2)
+          : "",
+    secrets,
+    tune: `${parsed.tune || ""}` === "1" ? "1" : "0",
+    poll_ms: `${parsed.poll_ms || ""}`,
+    poll_max_ms: `${parsed.poll_max_ms || ""}`,
+    flush_ms: `${parsed.flush_ms || ""}`,
+    segment_kb: `${parsed.segment_kb || ""}`,
+    concurrency: `${parsed.concurrency || ""}`,
+    eager_ms: `${parsed.eager_ms || ""}`,
+    hole_ms: `${parsed.hole_ms || ""}`,
+    session_sec: `${parsed.session_sec || ""}`,
+  };
+}
+
+function xdriveDisplayName(value) {
+  const parsed = parseXdriveSettings(value);
+  const name = parsed ? `${parsed.name || ""}`.trim() : "";
+  return name || _("XDRIVE");
+}
+
+function xdriveSettingsValue(settings) {
+  const service = `${settings.service || "yandex"}`.trim();
+  const stored = {
+    name: `${settings.name || ""}`.trim(),
+    service,
+    folder: `${settings.folder || ""}`.trim(),
+    uuid: `${settings.uuid || ""}`.trim(),
+    encryption: `${settings.encryption || ""}`.trim(),
+  };
+  if (service === "yandex" || service === "mail") {
+    stored.login = `${settings.login || ""}`.trim();
+    stored.password = `${settings.password || ""}`;
+  } else if (service === "google") {
+    stored.client_id = `${settings.client_id || ""}`.trim();
+    stored.client_secret = `${settings.client_secret || ""}`.trim();
+    stored.refresh_token = `${settings.refresh_token || ""}`.trim();
+  } else if (service === "s3") {
+    stored.endpoint = `${settings.endpoint || ""}`.trim();
+    stored.region = `${settings.region || ""}`.trim();
+    stored.bucket = `${settings.bucket || ""}`.trim();
+    stored.access_key = `${settings.access_key || ""}`.trim();
+    stored.secret_key = `${settings.secret_key || ""}`.trim();
+  } else if (service === "template") {
+    stored.template = `${settings.template || ""}`.trim();
+    stored.secrets = `${settings.secrets || ""}`
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (`${settings.tune || ""}` === "1") {
+    stored.tune = "1";
+    const keepTune = (key) => {
+      const value = `${settings[key] ?? ""}`.trim();
+      if (value !== "") {
+        stored[key] = value;
+      }
+    };
+    keepTune("poll_ms");
+    keepTune("poll_max_ms");
+    keepTune("flush_ms");
+    keepTune("segment_kb");
+    keepTune("concurrency");
+    keepTune("eager_ms");
+    keepTune("hole_ms");
+    keepTune("session_sec");
+  }
+  return JSON.stringify(stored);
+}
+
+function validateXdriveSettings(settings, usedNames) {
+  const name = `${settings.name || ""}`.trim();
+  if (!name) {
+    return _("Enter a display name");
+  }
+  if ((usedNames || []).includes(name)) {
+    return _("This name is already used");
+  }
+  const uuid = `${settings.uuid || ""}`.trim();
+  if (
+    !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+      uuid,
+    )
+  ) {
+    return _("Enter a valid UUID");
+  }
+  const encryption = `${settings.encryption || ""}`.trim();
+  if (!encryption || encryption.toLowerCase() === "none") {
+    return _("Enter the VLESS encryption string");
+  }
+  if (!`${settings.folder || ""}`.trim()) {
+    return _("Enter a folder");
+  }
+  const service = `${settings.service || "yandex"}`.trim();
+  if (service === "yandex") {
+    if (!`${settings.login || ""}`.trim() || !`${settings.password || ""}`) {
+      return _("Enter the Yandex Disk login and app password");
+    }
+  } else if (service === "mail") {
+    if (!`${settings.login || ""}`.trim() || !`${settings.password || ""}`) {
+      return _("Enter the Mail Cloud login and app password");
+    }
+  } else if (service === "google") {
+    if (
+      !`${settings.client_id || ""}`.trim() ||
+      !`${settings.client_secret || ""}`.trim() ||
+      !`${settings.refresh_token || ""}`.trim()
+    ) {
+      return _("Enter the three Google Drive keys");
+    }
+  } else if (service === "s3") {
+    if (
+      !`${settings.endpoint || ""}`.trim() ||
+      !`${settings.bucket || ""}`.trim() ||
+      !`${settings.access_key || ""}`.trim() ||
+      !`${settings.secret_key || ""}`.trim()
+    ) {
+      return _("Enter the S3 endpoint, bucket and keys");
+    }
+  } else if (service === "template") {
+    let template = null;
+    try {
+      template = JSON.parse(`${settings.template || ""}`);
+    } catch (_error) {
+      template = null;
+    }
+    const url = (item) =>
+      item && typeof item === "object" ? `${item.url || ""}`.trim() : "";
+    if (
+      !template ||
+      typeof template !== "object" ||
+      !url(template.put) ||
+      !url(template.get) ||
+      !url(template.list) ||
+      !url(template.delete) ||
+      !`${template.list.namesRegex || ""}`.trim()
+    ) {
+      return _("Template must include put, get, list and delete");
+    }
+  } else {
+    return _("Choose a storage");
+  }
+  if (`${settings.tune || ""}` === "1") {
+    const pollText = `${settings.poll_ms ?? ""}`.trim();
+    const pollMaxText = `${settings.poll_max_ms ?? ""}`.trim();
+    const poll = xdriveWholeNumber(pollText || "50", 50, 60000);
+    const pollMax = xdriveWholeNumber(pollMaxText || "500", 50, 60000);
+    const flush = xdriveWholeNumber(settings.flush_ms || "20", 1, 60000);
+    const segment = xdriveWholeNumber(settings.segment_kb || "512", 16, 16384);
+    const requests = xdriveWholeNumber(settings.concurrency || "8", 1, 64);
+    const eager = xdriveWholeNumber(settings.eager_ms || "2000", 100, 600000);
+    const hole = xdriveWholeNumber(settings.hole_ms || "30000", 1000, 600000);
+    const session = xdriveWholeNumber(settings.session_sec || "300", 30, 86400);
+    if (
+      poll == null ||
+      pollMax == null ||
+      flush == null ||
+      segment == null ||
+      requests == null ||
+      eager == null ||
+      hole == null ||
+      session == null
+    ) {
+      return _("Enter the request timing as whole numbers");
+    }
+    if (pollText !== "" && pollMaxText !== "" && pollMax < poll) {
+      return _("The longest poll must not be shorter than the shortest");
+    }
+  }
+  return true;
+}
+
+function xdriveWholeNumber(value, min, max) {
+  const text = `${value ?? ""}`.trim();
+  if (!/^[0-9]+$/.test(text)) {
+    return null;
+  }
+  const number = Number(text);
+  if (number < min || number > max) {
+    return null;
+  }
+  return number;
+}
+
+function xdriveWebdavTemplate(origin) {
+  const base = `${origin}/{folder}/{name}`;
+
+  return {
+    flatten: true,
+    auth: {
+      type: "basic",
+      username: "{secret0}",
+      password: "{secret1}",
+    },
+    put: { method: "PUT", url: base },
+    get: { method: "GET", url: base },
+    delete: { method: "DELETE", url: base },
+    list: {
+      method: "PROPFIND",
+      url: `${origin}/{folder}/`,
+      headers: { Depth: "1" },
+      namesRegex: "<d:href>[^<]*/([^/<]+)</d:href>",
+    },
+    retry: { status: [429, 500, 502, 503] },
+  };
+}
+
+function xdriveOptionValue(option) {
+  try {
+    return option.formvalue("settings");
+  } catch (_error) {
+    return "";
+  }
+}
+
+function copyXdriveText(text, button) {
+  const mark = () => {
+    const previous = button.textContent;
+
+    button.textContent = _("Copied");
+    window.setTimeout(() => {
+      button.textContent = previous;
+    }, 1200);
+  };
+  const fallback = () => {
+    const area = document.createElement("textarea");
+
+    area.value = text;
+    area.setAttribute("readonly", "readonly");
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.left = "0";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+
+    let copied = false;
+
+    try {
+      copied = document.execCommand("copy");
+    } catch (_error) {
+      copied = false;
+    }
+
+    document.body.removeChild(area);
+    if (copied) {
+      mark();
+      return;
+    }
+    if (ui && typeof ui.addNotification === "function") {
+      ui.addNotification(null, E("p", {}, _("Could not copy the template")), "warning");
+    }
+  };
+
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(mark, fallback);
+    return;
+  }
+
+  fallback();
+}
+
+function xdriveServerTemplate(settings) {
+  const service = `${settings.service || "yandex"}`.trim();
+  const folder = `${settings.folder || ""}`.trim();
+
+  if (service === "yandex" || service === "mail") {
+    const origin =
+      service === "mail" ? "https://webdav.cloud.mail.ru" : "https://webdav.yandex.ru";
+
+    return JSON.stringify(xdriveWebdavTemplate(origin), null, 2);
+  }
+
+  if (service === "google") {
+    const clientId = `${settings.client_id || ""}`.trim();
+    const clientSecret = `${settings.client_secret || ""}`.trim();
+    const refreshToken = `${settings.refresh_token || ""}`.trim();
+
+    if (!folder || !clientId || !clientSecret || !refreshToken) {
+      return null;
+    }
+
+    return JSON.stringify(
+      {
+        service: "google-drive",
+        remoteFolder: folder,
+        secrets: [clientId, clientSecret, refreshToken],
+      },
+      null,
+      2,
+    );
+  }
+
+  if (service === "s3") {
+    let endpoint = `${settings.endpoint || ""}`.trim();
+    const bucket = `${settings.bucket || ""}`.trim();
+    const accessKey = `${settings.access_key || ""}`.trim();
+    const secretKey = `${settings.secret_key || ""}`.trim();
+    const region = `${settings.region || ""}`.trim() || "us-east-1";
+
+    if (endpoint && !/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint)) {
+      endpoint = `https://${endpoint}`;
+    }
+    if (!folder || !endpoint || !bucket || !accessKey || !secretKey) {
+      return null;
+    }
+
+    return JSON.stringify(
+      {
+        service: "s3",
+        remoteFolder: folder,
+        secrets: [accessKey, secretKey],
+        s3: { endpoint, region, bucket },
+      },
+      null,
+      2,
+    );
+  }
+
+  if (service === "template") {
+    const raw = `${settings.template || ""}`.trim();
+
+    if (!raw) {
+      return null;
+    }
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch (_error) {
+      return raw;
+    }
+  }
+
+  return null;
+}
+
+function showXdriveSettingsModal(
+  _section_id,
+  itemValue,
+  _option,
+  widget,
+  itemNode,
+  context = {},
+) {
+  const current = parseXdriveSettings(itemValue) || {
+    service: "yandex",
+  };
+  const data = { settings: current };
+  const map = new form.JSONMap(data);
+  const itemSection = map.section(form.NamedSection, "settings");
+  itemSection.anonymous = true;
+  itemSection.addremove = false;
+
+  const usedNames = () =>
+    widget && widget.node
+      ? Array.from(widget.node.querySelectorAll(".item"))
+          .filter((item) => item !== itemNode)
+          .map((item) => xdriveDisplayName(dynamicListItemCurrentValue(item, "")))
+          .filter((name) => name && name !== _("XDRIVE"))
+      : [];
+
+  const name = itemSection.option(form.Value, "name", _("Display name"));
+  name.rmempty = false;
+  name.modalonly = true;
+  name.validate = function (_id, value) {
+    return `${value || ""}`.trim() ? true : _("Enter a display name");
+  };
+
+  const service = itemSection.option(form.ListValue, "service", _("Storage"));
+  service.value("yandex", _("Yandex Disk"));
+  service.value("mail", _("Mail Cloud"));
+  service.value("google", _("Google Drive"));
+  service.value("s3", _("S3"));
+  service.value("template", _("Custom template"));
+  service.default = "yandex";
+  service.rmempty = false;
+  service.modalonly = true;
+
+  const yandexNote = itemSection.option(form.DummyValue, "_yandex_note");
+  yandexNote.depends("service", "yandex");
+  yandexNote.modalonly = true;
+  yandexNote.optional = true;
+  yandexNote.rmempty = true;
+  yandexNote.title = "";
+  yandexNote.cfgvalue = function () {
+    return _(
+      "Yandex Disk connects only through WebDAV. A Yandex 360 plan and an app password are required, not the account password.",
+    );
+  };
+  yandexNote.validate = function () {
+    return true;
+  };
+  yandexNote.write = function () {};
+  yandexNote.remove = function () {};
+
+  const mailNote = itemSection.option(form.DummyValue, "_mail_note");
+  mailNote.depends("service", "mail");
+  mailNote.modalonly = true;
+  mailNote.optional = true;
+  mailNote.rmempty = true;
+  mailNote.title = "";
+  mailNote.cfgvalue = function () {
+    return _(
+      "Mail Cloud connects through WebDAV. Enter the full mailbox address and an external app password, not the mailbox password.",
+    );
+  };
+  mailNote.validate = function () {
+    return true;
+  };
+  mailNote.write = function () {};
+  mailNote.remove = function () {};
+
+  const folder = itemSection.option(
+    form.Value,
+    "folder",
+    _("Folder"),
+    _("The same folder must be set on the server"),
+  );
+  folder.rmempty = false;
+  folder.modalonly = true;
+
+  const uuid = itemSection.option(form.Value, "uuid", _("UUID"));
+  uuid.rmempty = false;
+  uuid.modalonly = true;
+
+  const encryption = itemSection.option(
+    form.Value,
+    "encryption",
+    _("VLESS encryption"),
+    _("The encryption string from the server. none does not work."),
+  );
+  encryption.rmempty = false;
+  encryption.modalonly = true;
+
+  const login = itemSection.option(form.Value, "login", _("Login"));
+  login.depends("service", "yandex");
+  login.depends("service", "mail");
+  login.modalonly = true;
+
+  const password = itemSection.option(form.Value, "password", _("App password"));
+  password.depends("service", "yandex");
+  password.depends("service", "mail");
+  password.password = true;
+  password.modalonly = true;
+
+  const clientId = itemSection.option(form.Value, "client_id", _("Client ID"));
+  clientId.depends("service", "google");
+  clientId.modalonly = true;
+  const clientSecret = itemSection.option(
+    form.Value,
+    "client_secret",
+    _("Client secret"),
+  );
+  clientSecret.depends("service", "google");
+  clientSecret.password = true;
+  clientSecret.modalonly = true;
+  const refreshToken = itemSection.option(
+    form.Value,
+    "refresh_token",
+    _("Refresh token"),
+  );
+  refreshToken.depends("service", "google");
+  refreshToken.password = true;
+  refreshToken.modalonly = true;
+
+  const endpoint = itemSection.option(form.Value, "endpoint", _("Endpoint"));
+  endpoint.depends("service", "s3");
+  endpoint.placeholder = "https://s3.example.com";
+  endpoint.modalonly = true;
+  const region = itemSection.option(form.Value, "region", _("Region"));
+  region.depends("service", "s3");
+  region.placeholder = "us-east-1";
+  region.modalonly = true;
+  const bucket = itemSection.option(form.Value, "bucket", _("Bucket"));
+  bucket.depends("service", "s3");
+  bucket.modalonly = true;
+  const accessKey = itemSection.option(form.Value, "access_key", _("Access key"));
+  accessKey.depends("service", "s3");
+  accessKey.modalonly = true;
+  const secretKey = itemSection.option(form.Value, "secret_key", _("Secret key"));
+  secretKey.depends("service", "s3");
+  secretKey.password = true;
+  secretKey.modalonly = true;
+
+  const template = itemSection.option(
+    form.TextValue,
+    "template",
+    _("Template"),
+    _("JSON with put, get, list and delete"),
+  );
+  template.depends("service", "template");
+  template.rows = 10;
+  template.wrap = "soft";
+  template.modalonly = true;
+  configureTextareaOption(template);
+  const secrets = itemSection.option(
+    form.TextValue,
+    "secrets",
+    _("Secrets"),
+    _("One secret per line. The template reads them as {secret0}, {secret1}."),
+  );
+  secrets.depends("service", "template");
+  secrets.rows = 4;
+  secrets.wrap = "soft";
+  secrets.modalonly = true;
+  configureTextareaOption(secrets);
+
+  const tune = itemSection.option(
+    form.Flag,
+    "tune",
+    _("Extra request settings"),
+    _(
+      "Written only while this box is checked. An empty field stays empty, and Xray keeps its own number. For Yandex Disk, Mail Cloud, S3 and a custom template that is poll 50–500 ms, send after 20 ms and 8 requests. For Google Drive it is poll 50–200 ms, send after 10 ms and 64 requests. The other numbers are a 512 KB piece, an active window of 2000 ms, a missing-piece wait of 30000 ms and a session of 300 s. A filled field replaces only that number. Set the same numbers in the server XDRIVE settings.",
+    ),
+  );
+  tune.modalonly = true;
+  tune.default = "0";
+  tune.rmempty = true;
+
+  const tuneRange = (option, min, max) => {
+    option.depends("tune", "1");
+    option.modalonly = true;
+    option.rmempty = true;
+    option.validate = function (_id, value) {
+      if (`${xdriveOptionValue(tune) || ""}` !== "1") {
+        return true;
+      }
+      if (`${value ?? ""}`.trim() === "") {
+        return true;
+      }
+      return xdriveWholeNumber(value, min, max) == null
+        ? _("Enter a whole number from %d to %d").format(min, max)
+        : true;
+    };
+  };
+
+  const poll = itemSection.option(
+    form.Value,
+    "poll_ms",
+    _("Poll from, ms"),
+    _("How often the folder is checked, shortest pause"),
+  );
+  poll.placeholder = "50";
+  tuneRange(poll, 50, 60000);
+
+  const pollMax = itemSection.option(
+    form.Value,
+    "poll_max_ms",
+    _("Poll up to, ms"),
+    _("How often the folder is checked, longest pause"),
+  );
+  pollMax.placeholder = "500";
+  tuneRange(pollMax, 50, 60000);
+  const pollMaxValidate = pollMax.validate;
+  pollMax.validate = function (id, value) {
+    const range = pollMaxValidate.call(this, id, value);
+    if (range !== true) {
+      return range;
+    }
+    if (`${xdriveOptionValue(tune) || ""}` !== "1") {
+      return true;
+    }
+    const startText = `${xdriveOptionValue(poll) ?? ""}`.trim();
+    const endText = `${value ?? ""}`.trim();
+    if (startText === "" || endText === "") {
+      return true;
+    }
+    const start = xdriveWholeNumber(startText, 50, 60000);
+    const end = xdriveWholeNumber(endText, 50, 60000);
+    if (start != null && end != null && end < start) {
+      return _("The longest poll must not be shorter than the shortest");
+    }
+    return true;
+  };
+
+  const flush = itemSection.option(
+    form.Value,
+    "flush_ms",
+    _("Send after, ms"),
+    _("Send the collected data after this many milliseconds"),
+  );
+  flush.placeholder = "20";
+  tuneRange(flush, 1, 60000);
+
+  const segment = itemSection.option(
+    form.Value,
+    "segment_kb",
+    _("Piece size, KB"),
+    _("Size of one file written to the cloud"),
+  );
+  segment.placeholder = "512";
+  tuneRange(segment, 16, 16384);
+
+  const requests = itemSection.option(
+    form.Value,
+    "concurrency",
+    _("Requests at once"),
+    _("How many cloud requests may run at the same time"),
+  );
+  requests.placeholder = "8";
+  tuneRange(requests, 1, 64);
+
+  const applyXdriveTuneHints = (serviceName) => {
+    const google =
+      `${serviceName ?? xdriveOptionValue(service) ?? current.service ?? ""}` ===
+      "google";
+    const hints = google
+      ? { flush: "10", pollMax: "200", requests: "64" }
+      : { flush: "20", pollMax: "500", requests: "8" };
+    const paint = (option, text) => {
+      option.placeholder = text;
+      if (typeof option.getUIElement !== "function") {
+        return;
+      }
+      const node = option.getUIElement("settings");
+      if (!node) {
+        return;
+      }
+      const input =
+        typeof node.querySelector === "function" ? node.querySelector("input") : null;
+      const target = input || node;
+      if (target) {
+        target.placeholder = text;
+      }
+    };
+    paint(flush, hints.flush);
+    paint(pollMax, hints.pollMax);
+    paint(requests, hints.requests);
+  };
+  applyXdriveTuneHints(current.service);
+  service.onchange = function (_event, _sectionId, value) {
+    applyXdriveTuneHints(value);
+  };
+
+  const eager = itemSection.option(
+    form.Value,
+    "eager_ms",
+    _("Active window, ms"),
+    _("After traffic, keep the shortest poll for this long"),
+  );
+  eager.placeholder = "2000";
+  tuneRange(eager, 100, 600000);
+
+  const hole = itemSection.option(
+    form.Value,
+    "hole_ms",
+    _("Missing piece wait, ms"),
+    _("How long to wait if one file in the series is missing"),
+  );
+  hole.placeholder = "30000";
+  tuneRange(hole, 1000, 600000);
+
+  const session = itemSection.option(
+    form.Value,
+    "session_sec",
+    _("Session, s"),
+    _("Delete a quiet session's files after this many seconds"),
+  );
+  session.placeholder = "300";
+  tuneRange(session, 30, 86400);
+
+  const copyTemplate = itemSection.option(form.DummyValue, "_xdrive_copy", _("Server template"));
+  copyTemplate.modalonly = true;
+  copyTemplate.optional = true;
+  copyTemplate.rmempty = true;
+  copyTemplate.depends("service", "yandex");
+  copyTemplate.depends("service", "mail");
+  copyTemplate.cfgvalue = function () {
+    return "";
+  };
+  copyTemplate.validate = function () {
+    return true;
+  };
+  copyTemplate.write = function () {};
+  copyTemplate.remove = function () {};
+  copyTemplate.renderWidget = function () {
+    const button = E(
+      "button",
+      {
+        class: "btn cbi-button cbi-button-action",
+        type: "button",
+        click: (event) => {
+          event.preventDefault();
+          const json = xdriveServerTemplate({
+            service: xdriveOptionValue(service),
+            folder: xdriveOptionValue(folder),
+            client_id: xdriveOptionValue(clientId),
+            client_secret: xdriveOptionValue(clientSecret),
+            refresh_token: xdriveOptionValue(refreshToken),
+            endpoint: xdriveOptionValue(endpoint),
+            region: xdriveOptionValue(region),
+            bucket: xdriveOptionValue(bucket),
+            access_key: xdriveOptionValue(accessKey),
+            secret_key: xdriveOptionValue(secretKey),
+            template: xdriveOptionValue(template),
+          });
+
+          if (!json) {
+            if (ui && typeof ui.addNotification === "function") {
+              ui.addNotification(
+                null,
+                E("p", {}, _("Fill in the storage fields first")),
+                "warning",
+              );
+            }
+            return;
+          }
+          copyXdriveText(json, button);
+        },
+      },
+      _("Copy for the server"),
+    );
+
+    return E("div", {}, [
+      button,
+      E(
+        "div",
+        { class: "cbi-value-description" },
+        _(
+          "Copies the JSON for the selected storage. For Yandex Disk and Mail Cloud, paste it into the server template field. Folder and secrets are entered separately.",
+        ),
+      ),
+    ]);
+  };
+
+  map.forkopMergeSave = function (settings) {
+    const validation = validateXdriveSettings(settings, usedNames());
+    if (validation !== true) {
+      throw new Error(validation);
+    }
+    return settings;
+  };
+
+  return renderStackedJsonSettingsModal(_("XDRIVE settings"), map, (settings) => {
+    const value = xdriveSettingsValue(settings);
+    if (context.adding) {
+      addDynamicListItem(widget, value, xdriveDisplayName(value));
+      return;
+    }
+    setDynamicListItemValue(itemNode, value);
+    updateDynamicListItemLabel(itemNode, xdriveDisplayName(value));
+    if (widget && widget.node) {
+      widget.dispatchCbiDynlistChange(widget.node, value);
+    }
+  });
+}
+
+function validateXdriveItemsBeforeSave(_section_id, values) {
+  const items = Array.isArray(values) ? values : values ? [values] : [];
+  const names = [];
+  for (const value of items) {
+    const settings = parseXdriveSettings(value);
+    if (!settings) {
+      return _("XDRIVE settings are invalid");
+    }
+    const validation = validateXdriveSettings(settings, names);
+    if (validation !== true) {
+      return validation;
+    }
+    names.push(`${settings.name || ""}`.trim());
+  }
+  return true;
+}
+
+function outboundJsonHint(sectionId) {
+  return settings.isXrayRoutingEngine(effectiveSectionEngine(null, sectionId))
+    ? _("Enter a complete Xray outbound object")
+    : _("Enter a complete sing-box outbound object");
+}
+
 function showOutboundJsonSettingsModal(
   _section_id,
   itemValue,
@@ -7331,7 +8135,7 @@ function showOutboundJsonSettingsModal(
     form.TextValue,
     "outbound_json",
     _("JSON outbound"),
-    _("Enter a complete sing-box outbound object"),
+    outboundJsonHint(_section_id),
   );
   jsonOption.rows = 12;
   jsonOption.wrap = "soft";
@@ -7642,6 +8446,18 @@ function writeListOption(section_id, key, values) {
   } else {
     uci.unset(UCI_PACKAGE, section_id, key);
   }
+}
+
+const USER_LIST_PREFIX = "/etc/forkop/user-lists/";
+
+function isUserListPath(value) {
+  return `${value || ""}`.indexOf(USER_LIST_PREFIX) === 0;
+}
+
+function writeDomainIpLists(section_id, foreign, user) {
+  writeListOption(section_id, "domain_ip_lists", []
+    .concat(normalizeOptionValues(foreign).filter((item) => !isUserListPath(item)))
+    .concat(normalizeOptionValues(user).filter((item) => isUserListPath(item))));
 }
 
 function makeDeviceOptionsExclusive(firstOption, secondOption) {
@@ -10574,18 +11390,7 @@ function createSectionContent(section) {
   function addSpeedLimitFields() {
     const downKey = "speed_limit_down_mbit";
     const upKey = "speed_limit_up_mbit";
-    const field = section.taboption(
-      "settings",
-      form.Value,
-      downKey,
-      _("Speed limit"),
-      _(
-        "Download is megabits per second toward the devices. Upload is megabits per second from the devices to the internet. Extra traffic is dropped. Empty means no limit. Local traffic is not limited. The limit applies to addresses, ports and fully routed devices. A section that only has domain lists does not limit traffic. While either limit is set, this section skips flow offload and the rest of the traffic still uses it.",
-      ),
-    );
-    field.modalonly = true;
-    field.rmempty = false;
-    [
+    const speedActions = [
       "connection",
       "proxy",
       "outbound",
@@ -10593,7 +11398,164 @@ function createSectionContent(section) {
       "zapret",
       "zapret2",
       "byedpi",
-    ].forEach((action) => field.depends("action", action));
+    ];
+    const speedConfigured = function (section_id) {
+      return [downKey, upKey, "speed_limit_mbit"].some((key) => {
+        return `${uci.get(UCI_PACKAGE, section_id, key) || ""}`.trim() !== "";
+      });
+    };
+    const enabled = section.taboption(
+      "settings",
+      form.Flag,
+      "speed_limit_enabled",
+      _("Speed limit"),
+      _("The fields below open when this is on."),
+    );
+    enabled.modalonly = true;
+    enabled.rmempty = true;
+    enabled.default = "0";
+    speedActions.forEach((action) => enabled.depends("action", action));
+    enabled.cfgvalue = function (section_id) {
+      const stored = `${uci.get(UCI_PACKAGE, section_id, "speed_limit_enabled") ?? ""}`.trim();
+      if (stored === "1" || stored === "0") {
+        return stored;
+      }
+      return speedConfigured(section_id) ? "1" : "0";
+    };
+    enabled.write = function (section_id, value) {
+      if (`${value || ""}` === "1") {
+        uci.set(UCI_PACKAGE, section_id, "speed_limit_enabled", "1");
+      } else {
+        uci.unset(UCI_PACKAGE, section_id, "speed_limit_enabled");
+      }
+    };
+    enabled.remove = function (section_id) {
+      uci.unset(UCI_PACKAGE, section_id, "speed_limit_enabled");
+    };
+    const speedPlaceText = function (value) {
+      if (`${value || ""}` === "egress") {
+        return _(
+          "On exit limits everything this section takes, including domains. A fallback server or balancer is another section's exit: this limit stops, and that section's limit is used if it has one. If this section connects through another section, this limit also stops, and only the last section's exit limit is used. A ByeDPI section set to on exit limits every ByeDPI section, and the strictest number is used.",
+        );
+      }
+      return _(
+        "On entry limits addresses, ports and fully routed devices. Domain lists are not limited. A fallback server or balancer from another section does not remove this limit.",
+      );
+    };
+    const readSpeedPlace = function (option, sectionId, explicit) {
+      if (explicit != null) {
+        const given = Array.isArray(explicit) ? explicit[0] : explicit;
+        return `${given == null ? "" : given}`;
+      }
+      try {
+        const widget =
+          option && typeof option.getUIElement === "function"
+            ? option.getUIElement(sectionId)
+            : null;
+        if (widget && typeof widget.getValue === "function") {
+          const current = widget.getValue();
+          const picked = Array.isArray(current) ? current[0] : current;
+          if (picked != null) {
+            return `${picked}`;
+          }
+        }
+      } catch (_error) {
+        /* the saved value is used until the list widget exists */
+      }
+      if (typeof document !== "undefined" && option && typeof option.cbid === "function") {
+        const root = document.getElementById(option.cbid(sectionId));
+        const choice =
+          root && typeof root.querySelector === "function"
+            ? root.querySelector("li[data-value][selected], li.selected[data-value]")
+            : null;
+        if (choice) {
+          return `${choice.getAttribute("data-value") || ""}`;
+        }
+        if (root && (root.tagName === "SELECT" || root.tagName === "INPUT")) {
+          return `${root.value || ""}`;
+        }
+      }
+      return `${uci.get(UCI_PACKAGE, sectionId, "speed_limit_place") || ""}`;
+    };
+    const applySpeedPlaceHint = function (option, sectionId, explicit) {
+      const text = speedPlaceText(readSpeedPlace(option, sectionId, explicit));
+      option.description = text;
+      if (
+        typeof document === "undefined" ||
+        typeof document.querySelectorAll !== "function" ||
+        typeof option.cbid !== "function"
+      ) {
+        return;
+      }
+      const fieldId = option.cbid(sectionId);
+      if (!fieldId) {
+        return;
+      }
+      document
+        .querySelectorAll(`[data-field="${fieldId}"] .cbi-value-description`)
+        .forEach((node) => {
+          node.textContent = text;
+        });
+    };
+    const place = section.taboption(
+      "settings",
+      form.ListValue,
+      "speed_limit_place",
+      _("Where to limit"),
+      speedPlaceText("ingress"),
+    );
+    place.modalonly = true;
+    place.rmempty = true;
+    place.value("ingress", _("On entry"));
+    place.value("egress", _("On exit"));
+    place.default = "ingress";
+    speedActions.forEach((action) =>
+      place.depends({ action: action, speed_limit_enabled: "1" }),
+    );
+    place.onchange = function (_event, section_id, value) {
+      applySpeedPlaceHint(this, section_id, value);
+    };
+    const placeRender = place.render;
+    place.render = function () {
+      const section_id = arguments.length >= 2 ? arguments[1] : arguments[0];
+      this.description = speedPlaceText(
+        uci.get(UCI_PACKAGE, section_id, "speed_limit_place"),
+      );
+      return Promise.resolve(placeRender.apply(this, arguments)).then((node) => {
+        applySpeedPlaceHint(this, section_id);
+        if (node && node.addEventListener && !node.dataset.fkpSpeedPlace) {
+          node.dataset.fkpSpeedPlace = "1";
+          node.addEventListener("widget-change", () => {
+            applySpeedPlaceHint(this, section_id);
+          });
+          node.addEventListener("change", (event) => {
+            const target = event && event.target;
+            if (!target) {
+              return;
+            }
+            const tag = target.tagName;
+            if (tag === "SELECT" || tag === "INPUT") {
+              applySpeedPlaceHint(this, section_id, target.value);
+            }
+          });
+        }
+        return node;
+      });
+    };
+    const field = section.taboption(
+      "settings",
+      form.Value,
+      downKey,
+      "\u00a0",
+      _(
+        "Download is megabits per second toward the devices. Upload is megabits per second from the devices to the internet. Extra traffic is dropped. Empty means no limit. Local traffic is not limited. Where the limit applies is chosen above.",
+      ),
+    );
+    field.modalonly = true;
+    field.rmempty = false;
+    speedActions.forEach((action) =>
+      field.depends({ action: action, speed_limit_enabled: "1" }),
+    );
     const directionText = function (section_id, key) {
       const own = `${uci.get(UCI_PACKAGE, section_id, key) || ""}`.trim();
       if (own) {
@@ -11451,6 +12413,50 @@ function createSectionContent(section) {
   };
   o.onListChange = refreshDashboardFilterChoiceWidgets;
   outboundNameSourceOptions.set("outbound_jsons", o);
+
+  o = restrictSectionEngine(
+    section.taboption(
+      "settings",
+      ButtonAddSettingsDynamicList,
+      "xdrive_outbounds",
+      _("XDRIVE"),
+      _("VLESS through cloud storage. The same folder and keys must be set on the server."),
+    ),
+    "xray",
+  );
+  o.depends("action", "connection");
+  o.rmempty = true;
+  o.modalonly = true;
+  o.addButtonLabel = _("+ Add XDRIVE");
+  o.renderItemSettingsModal = showXdriveSettingsModal;
+  o.renderListItemLabel = function (_section_id, value) {
+    return E("span", { class: "fkp-dynlist-label" }, xdriveDisplayName(value));
+  };
+  o.validateItemsOnSave = validateXdriveItemsBeforeSave;
+  o.validate = function (_section_id, value) {
+    if (value == null || value === "") {
+      return true;
+    }
+    const items = Array.isArray(value) ? value : [value];
+    const names = [];
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i] == null || items[i] === "") {
+        continue;
+      }
+      const settings = parseXdriveSettings(items[i]);
+      if (!settings) {
+        return _("XDRIVE settings are invalid");
+      }
+      const validation = validateXdriveSettings(settings, names);
+      if (validation !== true) {
+        return validation;
+      }
+      names.push(`${settings.name || ""}`.trim());
+    }
+    return true;
+  };
+  o.onListChange = refreshDashboardFilterChoiceWidgets;
+  outboundNameSourceOptions.set("xdrive_outbounds", o);
 
   o = restrictSectionEngine(
     section.taboption(
@@ -12486,10 +13492,11 @@ function createSectionContent(section) {
   domainIpListsOption.retain = true;
   dependsOnRoutingAction(domainIpListsOption);
   domainIpListsOption.load = function (section_id) {
-    return getConfigListValues(section_id, "domain_ip_lists");
+    return getConfigListValues(section_id, "domain_ip_lists").filter((item) => !isUserListPath(item));
   };
   domainIpListsOption.write = function (section_id, value) {
-    writeListOption(section_id, "domain_ip_lists", value);
+    const user = getConfigListValues(section_id, "domain_ip_lists").filter(isUserListPath);
+    writeDomainIpLists(section_id, value, user);
   };
   domainIpListsOption.validate = function (_section_id, value) {
     return validatePlainListReference(value);
@@ -12508,16 +13515,84 @@ function createSectionContent(section) {
   dnsDomainListsOption.modalonly = true;
   dnsDomainListsOption.retain = true;
   dnsDomainListsOption.load = function (section_id) {
-    return getConfigListValues(section_id, "domain_ip_lists");
+    return getConfigListValues(section_id, "domain_ip_lists").filter((item) => !isUserListPath(item));
   };
   dnsDomainListsOption.write = function (section_id, value) {
-    writeListOption(section_id, "domain_ip_lists", value);
+    const user = getConfigListValues(section_id, "domain_ip_lists").filter(isUserListPath);
+    writeDomainIpLists(section_id, value, user);
   };
   dnsDomainListsOption.remove = function (section_id) {
-    uci.unset(UCI_PACKAGE, section_id, "domain_ip_lists");
+    const user = getConfigListValues(section_id, "domain_ip_lists").filter(isUserListPath);
+    writeDomainIpLists(section_id, [], user);
   };
   dnsDomainListsOption.validate = function (_section_id, value) {
     return validatePlainListReference(value);
+  };
+
+  const userListsOption = section.taboption(
+    "conditions",
+    form.MultiValue,
+    "_user_lists",
+    _("Your lists"),
+    _("Lists you created on the information panel. Tick the ones this section should use."),
+  );
+  userListsOption.modalonly = true;
+  userListsOption.rmempty = true;
+  userListsOption.retain = true;
+  userListsOption.placeholder = _("Your lists");
+  dependsOnRoutingAction(userListsOption);
+  userListsOption.depends("action", "dns");
+  userListsOption.load = function (section_id) {
+    const selected = getConfigListValues(section_id, "domain_ip_lists").filter(isUserListPath);
+    this.keylist = [];
+    this.vallist = [];
+    const applyChoices = (items) => {
+      const known = new Set();
+      (items || []).forEach((item) => {
+        if (!item || !item.path) {
+          return;
+        }
+        known.add(item.path);
+        this.value(item.path, item.name || item.path);
+      });
+      selected.forEach((path) => {
+        if (!known.has(path)) {
+          this.value(path, path);
+        }
+      });
+      return selected;
+    };
+    return fs
+      .exec("/usr/bin/forkop", ["user_list_catalog"])
+      .then((result) => {
+        let items = [];
+        try {
+          items = JSON.parse(result.stdout || "[]");
+        } catch (_error) {
+          items = [];
+        }
+        return applyChoices(Array.isArray(items) ? items : []);
+      })
+      .catch(() => applyChoices([]));
+  };
+  userListsOption.transformChoices = function () {
+    const choices = form.MultiValue.prototype.transformChoices.call(this);
+    return choices || {};
+  };
+  userListsOption.write = function (section_id, value) {
+    const foreign = getConfigListValues(section_id, "domain_ip_lists").filter((item) => !isUserListPath(item));
+    writeDomainIpLists(section_id, foreign, value);
+  };
+  userListsOption.remove = function (section_id) {
+    const current = getConfigListValues(section_id, "domain_ip_lists");
+    if (!current.some(isUserListPath)) {
+      return;
+    }
+    writeDomainIpLists(
+      section_id,
+      current.filter((item) => !isUserListPath(item)),
+      [],
+    );
   };
 
   const sourceIpOption = addLocalDeviceSubnetDynamicField(section, {

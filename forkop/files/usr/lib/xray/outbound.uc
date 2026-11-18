@@ -153,6 +153,8 @@ function transport_names(kind) {
         return { network: "kcp", method: "mkcp" };
     if (kind == "hysteria" || kind == "hysteria2" || kind == "hy2")
         return { network: "hysteria", method: "hysteria" };
+    if (kind == "xdrive")
+        return { network: "xdrive", method: "xdrive" };
     return { network: "tcp", method: "raw" };
 }
 
@@ -161,6 +163,52 @@ function apply_transport_names(stream, kind) {
     stream.network = names.network;
     stream.method = names.method;
     return names;
+}
+
+function xhttp_range_json(value) {
+    if (type(value) == "int" || type(value) == "double")
+        return int(value);
+    value = trim(as_string(value));
+    return value != "" ? value : null;
+}
+
+function xhttp_extra_from_transport(transport) {
+    transport = object_or_empty(transport);
+    let extra = {};
+    let padding = xhttp_range_json(transport.x_padding_bytes);
+    if (padding != null)
+        extra.xPaddingBytes = padding;
+    if (transport.no_grpc_header != null)
+        extra.noGRPCHeader = transport.no_grpc_header == true;
+    let post = xhttp_range_json(transport.sc_max_each_post_bytes);
+    if (post != null)
+        extra.scMaxEachPostBytes = post;
+    let interval = xhttp_range_json(transport.sc_min_posts_interval_ms);
+    if (interval != null)
+        extra.scMinPostsIntervalMs = interval;
+    let stream_up = xhttp_range_json(transport.sc_stream_up_server_secs);
+    if (stream_up != null)
+        extra.scStreamUpServerSecs = stream_up;
+    if (type(transport.xmux) == "object") {
+        let xmux = {};
+        for (let item in [
+            ["maxConcurrency", "max_concurrency"],
+            ["maxConnections", "max_connections"],
+            ["cMaxReuseTimes", "c_max_reuse_times"],
+            ["hMaxRequestTimes", "h_max_request_times"],
+            ["hMaxReusableSecs", "h_max_reusable_secs"]
+        ]) {
+            let value = xhttp_range_json(transport.xmux[item[1]]);
+            if (value != null)
+                xmux[item[0]] = value;
+        }
+        let keep_alive = xhttp_range_json(transport.xmux.h_keep_alive_period);
+        if (type(keep_alive) == "int")
+            xmux.hKeepAlivePeriod = keep_alive;
+        if (length(keys(xmux)) > 0)
+            extra.xmux = xmux;
+    }
+    return length(keys(extra)) > 0 ? extra : null;
 }
 
 function apply_transport(stream, transport) {
@@ -213,6 +261,9 @@ function apply_transport(stream, transport) {
         };
         if (as_string(transport.host || "") != "")
             xhttp.host = first_string(transport.host);
+        let extra = xhttp_extra_from_transport(transport);
+        if (extra != null)
+            xhttp.extra = extra;
         stream.xhttpSettings = xhttp;
         if (names.network == "xhttp")
             delete stream.httpSettings;
@@ -602,6 +653,12 @@ function normalize_hysteria_native(outbound) {
     return outbound;
 }
 
+function outbound_is_xdrive(outbound) {
+    let stream = object_or_empty(object_or_empty(outbound).streamSettings);
+    let kind = lc(trim(as_string(stream.method || stream.network || "")));
+    return kind == "xdrive";
+}
+
 function normalize_native_settings(outbound) {
     outbound = object_or_empty(outbound);
     let proto = lc(as_string(outbound.protocol || ""));
@@ -609,7 +666,11 @@ function normalize_native_settings(outbound) {
         outbound.settings = {};
     if (proto == "vless") {
         outbound.settings = flatten_vnext(outbound.settings, [ "flow", "encryption" ]);
-        if (as_string(outbound.settings.encryption || "") == "")
+        if (outbound_is_xdrive(outbound)) {
+            if (outbound.settings.flow != null)
+                delete outbound.settings.flow;
+        }
+        else if (as_string(outbound.settings.encryption || "") == "")
             outbound.settings.encryption = "none";
     }
     else if (proto == "vmess") {
@@ -773,6 +834,8 @@ function apply_tcp_finalmask(outbound, spec) {
     let proto = lc(as_string(outbound.protocol || ""));
     if (proto == "" || proto == "freedom" || proto == "blackhole" || proto == "dns" || proto == "hysteria")
         return outbound;
+    if (outbound_is_xdrive(outbound))
+        return outbound;
     if (type(outbound.streamSettings) != "object")
         outbound.streamSettings = {};
     let stream = outbound.streamSettings;
@@ -892,8 +955,21 @@ function supported_ir(ir) {
     return convert_ir(ir, "probe") != null;
 }
 
+function apply_xdrive_mux(outbound) {
+    outbound = object_or_empty(outbound);
+    if (type(outbound.settings) == "object" && outbound.settings.flow != null)
+        delete outbound.settings.flow;
+    outbound.mux = {
+        enabled: true,
+        concurrency: 8
+    };
+    return outbound;
+}
+
 function apply_mux(outbound, spec) {
     outbound = object_or_empty(outbound);
+    if (outbound_is_xdrive(outbound))
+        return apply_xdrive_mux(outbound);
     spec = object_or_empty(spec);
     if (spec.enabled != true)
         return outbound;
@@ -929,6 +1005,246 @@ function apply_mux(outbound, spec) {
     return outbound;
 }
 
+function xdrive_http_host(value) {
+    value = trim(value);
+    let mark = index(value, "://");
+    if (mark < 0)
+        return "";
+    let rest = substr(value, mark + 3);
+    let slash = index(rest, "/");
+    if (slash >= 0)
+        rest = substr(rest, 0, slash);
+    let at = rindex(rest, "@");
+    if (at >= 0)
+        rest = substr(rest, at + 1);
+    if (length(rest) > 0 && substr(rest, 0, 1) == "[") {
+        let end = index(rest, "]");
+        return end > 1 ? substr(rest, 1, end - 1) : "";
+    }
+    let colon = rindex(rest, ":");
+    if (colon > 0)
+        rest = substr(rest, 0, colon);
+    return rest;
+}
+
+function xdrive_webdav_template(origin) {
+    origin = trim(as_string(origin));
+    let base = origin + "/{folder}/{name}";
+    return {
+        flatten: true,
+        auth: {
+            type: "basic",
+            username: "{secret0}",
+            password: "{secret1}"
+        },
+        put: { method: "PUT", url: base },
+        get: { method: "GET", url: base },
+        delete: { method: "DELETE", url: base },
+        list: {
+            method: "PROPFIND",
+            url: origin + "/{folder}/",
+            headers: { Depth: "1" },
+            namesRegex: "<d:href>[^<]*/([^/<]+)</d:href>"
+        },
+        retry: { status: [ 429, 500, 502, 503 ] }
+    };
+}
+
+function xdrive_yandex_template() {
+    return xdrive_webdav_template("https://webdav.yandex.ru");
+}
+
+function xdrive_template_object(value) {
+    if (type(value) == "object")
+        return value;
+    value = trim(as_string(value));
+    if (value == "")
+        return null;
+    try {
+        let parsed = json(value);
+        return type(parsed) == "object" ? parsed : null;
+    }
+    catch (e) {
+        return null;
+    }
+}
+
+function xdrive_positive(value, limit) {
+    let number = int(value);
+    if (number == null || number <= 0)
+        return 0;
+    if (limit != null && number > limit)
+        return limit;
+    return number;
+}
+
+function apply_xdrive_tune(settings, spec) {
+    if (as_string(spec.tune) != "1")
+        return;
+    let poll = xdrive_positive(spec.poll_ms, 60000);
+    let poll_max = xdrive_positive(spec.poll_max_ms, 60000);
+    let flush = xdrive_positive(spec.flush_ms, 60000);
+    let segment_kb = xdrive_positive(spec.segment_kb, 16384);
+    let requests = xdrive_positive(spec.concurrency, 64);
+    if (poll > 0 && poll < 50)
+        poll = 50;
+    if (poll_max > 0 && poll_max < poll)
+        poll_max = poll;
+    if (poll > 0)
+        settings.pollIntervalMs = poll;
+    if (poll_max > 0)
+        settings.maxPollIntervalMs = poll_max;
+    if (flush > 0)
+        settings.flushIntervalMs = flush;
+    if (segment_kb > 0)
+        settings.segmentBytes = segment_kb * 1024;
+    if (requests > 0)
+        settings.concurrency = requests;
+    let eager = xdrive_positive(spec.eager_ms, 600000);
+    let hole = xdrive_positive(spec.hole_ms, 600000);
+    let session = xdrive_positive(spec.session_sec, 86400);
+    if (eager > 0 && eager < 100)
+        eager = 100;
+    if (hole > 0 && hole < 1000)
+        hole = 1000;
+    if (session > 0 && session < 30)
+        session = 30;
+    if (eager > 0)
+        settings.eagerWindowMs = eager;
+    if (hole > 0)
+        settings.holeTimeoutMs = hole;
+    if (session > 0)
+        settings.sessionTtlSeconds = session;
+}
+
+function build_xdrive_outbound(spec, tag) {
+    spec = object_or_empty(spec);
+    tag = trim(as_string(tag));
+    let service = lc(trim(as_string(spec.service || "")));
+    let folder = trim(as_string(spec.folder || ""));
+    let id = trim(as_string(spec.uuid || spec.id || ""));
+    let encryption = trim(as_string(spec.encryption || ""));
+    if (tag == "" || id == "" || encryption == "" || lc(encryption) == "none")
+        return null;
+
+    let settings = {};
+    let host = "";
+    let port = 443;
+    if (service == "yandex") {
+        if (folder == "" || trim(as_string(spec.login || "")) == "" || trim(as_string(spec.password || "")) == "")
+            return null;
+        settings.service = "template";
+        settings.remoteFolder = folder;
+        settings.secrets = [ trim(as_string(spec.login)), as_string(spec.password) ];
+        settings.template = xdrive_yandex_template();
+        host = "webdav.yandex.ru";
+    }
+    else if (service == "mail") {
+        if (folder == "" || trim(as_string(spec.login || "")) == "" || trim(as_string(spec.password || "")) == "")
+            return null;
+        settings.service = "template";
+        settings.remoteFolder = folder;
+        settings.secrets = [ trim(as_string(spec.login)), as_string(spec.password) ];
+        settings.template = xdrive_webdav_template("https://webdav.cloud.mail.ru");
+        host = "webdav.cloud.mail.ru";
+    }
+    else if (service == "google" || service == "google-drive") {
+        let client_id = trim(as_string(spec.client_id || ""));
+        let client_secret = trim(as_string(spec.client_secret || ""));
+        let refresh_token = trim(as_string(spec.refresh_token || ""));
+        if (folder == "" || client_id == "" || client_secret == "" || refresh_token == "")
+            return null;
+        settings.service = "google-drive";
+        settings.remoteFolder = folder;
+        settings.secrets = [ client_id, client_secret, refresh_token ];
+        host = "www.googleapis.com";
+    }
+    else if (service == "s3") {
+        let endpoint = trim(as_string(spec.endpoint || ""));
+        if (endpoint != "" && index(endpoint, "://") < 0)
+            endpoint = "https://" + endpoint;
+        let bucket = trim(as_string(spec.bucket || ""));
+        let access_key = trim(as_string(spec.access_key || ""));
+        let secret_key = trim(as_string(spec.secret_key || ""));
+        host = xdrive_http_host(endpoint);
+        if (endpoint == "" || host == "" || bucket == "" || folder == "" || access_key == "" || secret_key == "")
+            return null;
+        settings.service = "s3";
+        settings.remoteFolder = folder;
+        settings.secrets = [ access_key, secret_key ];
+        settings.s3 = {
+            endpoint: endpoint,
+            region: trim(as_string(spec.region || "")) != "" ? trim(as_string(spec.region)) : "us-east-1",
+            bucket: bucket
+        };
+        port = index(lc(endpoint), "http://") == 0 ? 80 : 443;
+    }
+    else if (service == "template") {
+        let template = xdrive_template_object(spec.template);
+        if (template == null || folder == "")
+            return null;
+        let put = object_or_empty(template.put);
+        let get = object_or_empty(template.get);
+        let list_op = object_or_empty(template.list);
+        let delete_op = object_or_empty(template["delete"]);
+        if (trim(as_string(put.url || "")) == "" || trim(as_string(get.url || "")) == "" || trim(as_string(list_op.url || "")) == "" || trim(as_string(delete_op.url || "")) == "" || trim(as_string(list_op.namesRegex || "")) == "")
+            return null;
+        settings.service = "template";
+        settings.remoteFolder = folder;
+        settings.template = template;
+        let secrets = [];
+        if (type(spec.secrets) == "array") {
+            for (let item in spec.secrets) {
+                item = as_string(item);
+                if (item != "")
+                    push(secrets, item);
+            }
+        }
+        else {
+            for (let item in split(as_string(spec.secrets || ""), "\n")) {
+                if (item != "")
+                    push(secrets, item);
+            }
+        }
+        if (length(secrets) > 0)
+            settings.secrets = secrets;
+        host = xdrive_http_host(as_string(object_or_empty(template.put).url || ""));
+        if (host == "")
+            host = xdrive_http_host(as_string(object_or_empty(template.get).url || ""));
+        if (host == "")
+            return null;
+        let put_url = lc(as_string(object_or_empty(template.put).url || ""));
+        port = index(put_url, "http://") == 0 ? 80 : 443;
+    }
+    else
+        return null;
+
+    apply_xdrive_tune(settings, spec);
+
+    let outbound = {
+        tag: tag,
+        protocol: "vless",
+        settings: {
+            address: host,
+            port: port,
+            id: id,
+            encryption: encryption
+        },
+        streamSettings: {
+            network: "xdrive",
+            method: "xdrive",
+            security: "tls",
+            tlsSettings: {
+                serverName: host,
+                fingerprint: "chrome"
+            },
+            xdriveSettings: settings,
+            sockopt: sockopt()
+        }
+    };
+    return apply_xdrive_mux(outbound);
+}
+
 return {
     convert_ir,
     convert_xray_native,
@@ -938,6 +1254,7 @@ return {
     apply_mux,
     apply_freedom_fragment,
     apply_tcp_finalmask,
+    build_xdrive_outbound,
     supported_ir,
     ensure_sockopt,
     sockopt

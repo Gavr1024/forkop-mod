@@ -45,21 +45,23 @@ function check(id, values, expected) {
   }
 }
 
-check("down", { action: "proxy", speed_limit_down_mbit: "20" }, "Limit: download 20 Mbit/s, upload no limit");
-check("up", { action: "vpn", speed_limit_up_mbit: "5" }, "Limit: download no limit, upload 5 Mbit/s");
+check("down", { action: "proxy", speed_limit_down_mbit: "20" }, "Limit: download 20 Mbit/s, upload no limit, on entry");
+check("up", { action: "vpn", speed_limit_up_mbit: "5" }, "Limit: download no limit, upload 5 Mbit/s, on entry");
 check(
   "both",
   { action: "zapret", speed_limit_down_mbit: "20", speed_limit_up_mbit: "5" },
-  "Limit: download 20 Mbit/s, upload 5 Mbit/s",
+  "Limit: download 20 Mbit/s, upload 5 Mbit/s, on entry",
 );
-check("legacy", { action: "connection", speed_limit_mbit: "10" }, "Limit: download 10 Mbit/s, upload 10 Mbit/s");
+check("legacy", { action: "connection", speed_limit_mbit: "10" }, "Limit: download 10 Mbit/s, upload 10 Mbit/s, on entry");
 check(
   "legacy-kept",
   { action: "proxy", speed_limit_down_mbit: "20", speed_limit_mbit: "10" },
-  "Limit: download 20 Mbit/s, upload no limit",
+  "Limit: download 20 Mbit/s, upload no limit, on entry",
 );
 check("bypass", { action: "bypass", speed_limit_mbit: "10" }, "");
 check("block", { action: "block", speed_limit_down_mbit: "20", speed_limit_up_mbit: "5" }, "");
+check("entry", { action: "proxy", speed_limit_down_mbit: "5", speed_limit_up_mbit: "2", speed_limit_place: "ingress" }, "Limit: download 5 Mbit/s, upload 2 Mbit/s, on entry");
+check("exit", { action: "proxy", speed_limit_down_mbit: "20", speed_limit_place: "egress" }, "Limit: download 20 Mbit/s, upload no limit, on exit");
 check("none", { action: "proxy" }, "");
 check("bad", { action: "proxy", speed_limit_down_mbit: "0" }, "");
 JS
@@ -67,5 +69,17 @@ JS
 grep -Fq 'fkp-section-speed' "$VIEW" || fail "section row must show the speed line"
 grep -Fq 'Limit: download %s, upload %s' "$VIEW" || fail "speed line must name both directions"
 grep -Fq 'speed_limit_mbit' "$VIEW" || fail "old shared limit must still fill both directions"
+
+SECTION="$ROOT_DIR/luci-app-forkop/htdocs/luci-static/resources/view/forkop/section.js"
+grep -Fq 'speed_limit_enabled' "$SECTION" || fail "speed limit must sit behind a checkbox"
+grep -Fq 'The fields below open when this is on.' "$SECTION" || fail "checkbox must explain that the other fields open"
+grep -Fq 'A fallback server or balancer from another section does not remove this limit.' "$SECTION" || fail "entry hint must say a fallback from another section keeps the limit"
+grep -Fq "A fallback server or balancer is another section's exit" "$SECTION" || fail "exit hint must say a fallback from another section drops this limit"
+grep -Fq 'speedPlaceText' "$SECTION" || fail "place description must follow the selected place"
+grep -Fq 'widget.getValue' "$SECTION" || fail "place description must follow the open list, not a stale field"
+grep -Fq 'cbi-value-description' "$SECTION" || fail "place description must use the usual hint style"
+if grep -Fq '_speed_place_entry' "$SECTION"; then
+  fail "place help must not be a separate full-width row"
+fi
 
 printf 'section speed row checks passed\n'

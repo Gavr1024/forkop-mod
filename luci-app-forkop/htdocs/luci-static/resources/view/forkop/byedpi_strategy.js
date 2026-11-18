@@ -338,7 +338,7 @@ function renderLists(lists) {
 }
 
 function copyCommand(command, button) {
-  const done = () => {
+  const mark = () => {
     const previous = button.textContent;
 
     button.textContent = _("Copied");
@@ -346,13 +346,119 @@ function copyCommand(command, button) {
       button.textContent = previous;
     }, 1200);
   };
+  const fallback = () => {
+    const area = document.createElement("textarea");
 
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(command).then(done, done);
+    area.value = command;
+    area.setAttribute("readonly", "readonly");
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.left = "0";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+
+    let copied = false;
+
+    try {
+      copied = document.execCommand("copy");
+    } catch (_error) {
+      copied = false;
+    }
+
+    document.body.removeChild(area);
+
+    if (copied) {
+      mark();
+    }
+  };
+
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(command).then(mark, fallback);
     return;
   }
 
-  done();
+  fallback();
+}
+
+function bestCheckedCommand() {
+  if (!lastState || lastState.running || lastState.stopping) {
+    return "";
+  }
+
+  const ranked = sortedStrategies(lastState.strategies);
+
+  for (let index = 0; index < ranked.length; index++) {
+    const command = ranked[index] && ranked[index].command;
+
+    if (command && String(command).trim()) {
+      return String(command);
+    }
+  }
+
+  return "";
+}
+
+function generateStrategies(root) {
+  const field = root.querySelector('[data-field="generate_count"]');
+  let count = Number.parseInt(field && field.value, 10);
+
+  if (!Number.isFinite(count) || count < 1) {
+    count = 30;
+  }
+
+  if (count > 50) {
+    count = 50;
+  }
+
+  const fromBest = root.querySelector('[data-field="generate_from_best"]');
+  let base = "";
+
+  if (fromBest && fromBest.checked) {
+    base = bestCheckedCommand();
+
+    if (!base) {
+      ui.addNotification(null, E("p", {}, _("Run a strategy check first")));
+      return;
+    }
+  }
+
+  const button = root.querySelector('[data-action="generate"]');
+
+  if (button) {
+    button.disabled = true;
+  }
+
+  const seed = String(Date.now() % 1000000);
+
+  return callForkop(["byedpi_strategy_generate", String(count), seed, base]).then((result) => {
+    if (button) {
+      button.disabled = false;
+    }
+
+    const lines =
+      result.data && Array.isArray(result.data.strategies) ? result.data.strategies : [];
+
+    if (!lines.length) {
+      ui.addNotification(null, E("p", {}, _("Could not build strategies")));
+      return;
+    }
+
+    const area = root.querySelector('[data-field="commands"]');
+    const box = root.querySelector('[data-field="use_custom"]');
+
+    if (area) {
+      area.value = lines.join("\n");
+    }
+
+    if (box) {
+      box.checked = true;
+    }
+
+    updateEstimate(root);
+  });
 }
 
 function applyCommand(root, command) {
@@ -863,6 +969,40 @@ function renderPage() {
         E("input", { type: "checkbox", "data-field": "use_custom" }),
         E("span", {}, _("Use my strategies")),
       ]),
+      E("div", { class: "fkp-byedpi-strategy__actions" }, [
+        E("label", {}, [
+          _("How many to generate"),
+          E("input", {
+            type: "number",
+            min: "1",
+            max: "50",
+            "data-field": "generate_count",
+            class: "cbi-input-text",
+            value: "30",
+          }),
+        ]),
+        E(
+          "button",
+          {
+            class: "cbi-button cbi-button-action",
+            type: "button",
+            "data-action": "generate",
+            click: () => generateStrategies(root),
+          },
+          _("Generate strategies"),
+        ),
+      ]),
+      E("label", { class: "fkp-byedpi-strategy__lists" }, [
+        E("input", { type: "checkbox", "data-field": "generate_from_best" }),
+        E("span", {}, _("From the best checked strategy")),
+      ]),
+      E(
+        "div",
+        { class: "fkp-byedpi-strategy__note" },
+        _(
+          "When this is on, new lines keep that strategy and only shift its positions and TTL. Off builds a fresh pack.",
+        ),
+      ),
       E("label", {}, [
         _("One ciadpi strategy per line. Leave this off to test the built-in ByeByeDPI list."),
         E("textarea", {

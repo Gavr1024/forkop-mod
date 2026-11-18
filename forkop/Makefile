@@ -58,7 +58,6 @@ endef
 
 define Package/forkop/conffiles
 /etc/config/forkop
-/etc/forkop/list-cache/
 endef
 
 define Package/forkop/install
@@ -72,6 +71,9 @@ define Package/forkop/install
 	$(INSTALL_CONF) ./files/etc/config/forkop $(1)/etc/config/forkop
 
 	$(INSTALL_DIR) $(1)/etc/forkop/list-cache
+
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) ./files/lib/upgrade/keep.d/forkop $(1)/lib/upgrade/keep.d/forkop
 
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ./files/usr/bin/forkop $(1)/usr/bin/forkop

@@ -4,6 +4,7 @@ let fs = require("fs");
 let uci_core = require("core.uci");
 let connections = require("config.connections");
 let list_cache = require("routing.list_cache");
+let user_lists = require("routing.user_lists");
 let engine = require("core.engine");
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIB_DIR = getenv("FORKOP_LIB") || "/usr/lib/forkop";
@@ -3132,6 +3133,27 @@ function print_list_cache_show_close(token) {
     print(sprintf("%J", result), "\n");
 }
 
+function finish_list_edit(result) {
+    if (type(result) != "object")
+        result = { ok: false, error: "missing" };
+    if (result.ok == true && result.used == true && getenv("FORKOP_USER_LIST_RELOAD") != "0")
+        result.reloaded = command_success_from_args([ SERVICE_INIT, "reload" ]);
+    print(sprintf("%J", result), "\n");
+    exit(0);
+}
+
+function print_user_list_catalog() {
+    print(sprintf("%J", user_lists.catalog()), "\n");
+}
+
+function print_user_list_read(id) {
+    print(sprintf("%J", user_lists.read(id)), "\n");
+}
+
+function print_custom_list_read(id) {
+    print(sprintf("%J", user_lists.read_custom(list_cache.find_selected_item(id))), "\n");
+}
+
 function print_list_cache_status() {
     let status = list_cache.status_object();
     if (type(status) != "object")
@@ -3269,6 +3291,18 @@ else if (mode == "list-cache-persist-run")
     run_list_cache_persist();
 else if (mode == "list-cache-prune")
     print_list_cache_prune();
+else if (mode == "user-list-catalog")
+    print_user_list_catalog();
+else if (mode == "user-list-read")
+    print_user_list_read(ARGV[1]);
+else if (mode == "user-list-save")
+    finish_list_edit(user_lists.save(ARGV[1], ARGV[2], ARGV[3]));
+else if (mode == "user-list-delete")
+    finish_list_edit(user_lists.remove(ARGV[1]));
+else if (mode == "custom-list-read")
+    print_custom_list_read(ARGV[1]);
+else if (mode == "custom-list-save")
+    finish_list_edit(user_lists.save_custom(list_cache.find_selected_item(ARGV[1]), ARGV[2]));
 else if (mode == "list-update-if-due")
     list_update_if_due();
 else if (mode == "list-update-if-missing")

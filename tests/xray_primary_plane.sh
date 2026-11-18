@@ -581,6 +581,15 @@ extract_fn "$SB_GEN" "add_zapret_outbound" | grep -F 'bind_interface' >/dev/null
   fail "sing-box Zapret outbound must not bind the WAN interface"
 extract_fn "$SB_GEN" "add_zapret2_outbound" | grep -F 'bind_interface' >/dev/null &&
   fail "sing-box Zapret2 outbound must not bind the WAN interface"
+extract_fn "$XRAY_GEN" "generate_config" | awk '
+  /apply_config_egress_marks/ { a = NR }
+  /write_json_file\(output_path/ { w = NR }
+  END { if (!(a > 0 && w > 0 && a < w)) exit 1 }
+' || fail "egress fwmark must be stamped after dial strategy, immediately before the xray config is written"
+extract_fn "$STATE" "append_sing_box_rule_signature_body" | grep -F 'egress_mark' >/dev/null ||
+  fail "egress speed limit must change the sing-box signature so Xray is regenerated"
+extract_fn "$SB_GEN" "generate_config" | grep -F 'replay_egress_stamps' >/dev/null ||
+  fail "sing-box egress marks must be stamped again immediately before the config is written"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -F 'SINGBOX_SIDECAR_TAG' >/dev/null ||
   fail "sidecar SOCKS must keep AsIs so the domain is passed through"
 extract_fn "$XRAY_GEN" "apply_dial_strategy" | grep -F '"AsIs"' >/dev/null ||

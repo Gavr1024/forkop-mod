@@ -6843,6 +6843,101 @@ function unsupported_matcher_key(section) {
     return "";
 }
 
+function section_speed_hash(section) {
+    let name = as_string(section[".name"]);
+    let hash = 0;
+    let i = 0;
+    while (i < length(name)) {
+        hash = (hash * 33 + ord(substr(name, i, 1))) % 4095;
+        i++;
+    }
+    if (hash < 1)
+        hash = 1;
+    return hash;
+}
+
+function section_wants_egress_mark(section) {
+    if (option(section, "speed_limit_place", "") != "egress")
+        return false;
+    let action = option(section, "action", "");
+    if (action == "block" || action == "zapret" || action == "zapret2" || action == "byedpi")
+        return false;
+    let down = trim(option(section, "speed_limit_down_mbit", ""));
+    let up = trim(option(section, "speed_limit_up_mbit", ""));
+    let shared = trim(option(section, "speed_limit_mbit", ""));
+    return (match(down, /^[0-9]+$/) != null && int(down) > 0) ||
+        (match(up, /^[0-9]+$/) != null && int(up) > 0) ||
+        (down == "" && up == "" && match(shared, /^[0-9]+$/) != null && int(shared) > 0);
+}
+
+function stamp_singbox_egress_marks(config, section, start, endpoint_start, end, endpoint_end) {
+    if (!section_wants_egress_mark(section))
+        return;
+    let mark = runtime_constants.OUTBOUND_MARK + section_speed_hash(section);
+    let outbounds = array_or_empty(config.outbounds);
+    let i = int(start || 0);
+    let limit = end == null ? length(outbounds) : int(end);
+    if (limit > length(outbounds))
+        limit = length(outbounds);
+    while (i < limit) {
+        let outbound = outbounds[i];
+        i++;
+        if (type(outbound) != "object")
+            continue;
+        let kind = as_string(outbound.type || "");
+        if (kind == "" || kind == "selector" || kind == "urltest" || kind == "block" || kind == "dns")
+            continue;
+        let server = as_string(outbound.server || "");
+        if (server == "127.0.0.1" || server == "::1" || server == "localhost")
+            continue;
+        let current = int(outbound.routing_mark || 0);
+        if (current >= 0x01000000 && current < 0x03000000)
+            continue;
+        outbound.routing_mark = mark;
+    }
+    let endpoints = array_or_empty(config.endpoints);
+    let j = int(endpoint_start || 0);
+    let endpoint_limit = endpoint_end == null ? length(endpoints) : int(endpoint_end);
+    if (endpoint_limit > length(endpoints))
+        endpoint_limit = length(endpoints);
+    while (j < endpoint_limit) {
+        let endpoint = endpoints[j];
+        j++;
+        if (type(endpoint) != "object")
+            continue;
+        let current_mark = int(endpoint.routing_mark || 0);
+        if (current_mark >= 0x01000000 && current_mark < 0x03000000)
+            continue;
+        endpoint.routing_mark = mark;
+    }
+}
+
+let egress_stamp_spans = [];
+
+function remember_egress_stamp(section, start, endpoint_start, end, endpoint_end) {
+    push(egress_stamp_spans, {
+        section: section,
+        start: start,
+        endpoint_start: endpoint_start,
+        end: end,
+        endpoint_end: endpoint_end
+    });
+}
+
+function replay_egress_stamps(config) {
+    for (let span in egress_stamp_spans) {
+        span = object_or_empty(span);
+        stamp_singbox_egress_marks(
+            config,
+            span.section,
+            span.start,
+            span.endpoint_start,
+            span.end,
+            span.endpoint_end
+        );
+    }
+}
+
 function add_outbound_for_section(config, section, taken, sections) {
     let action = option(section, "action", "");
     let section_name = section[".name"];
@@ -6853,10 +6948,20 @@ function add_outbound_for_section(config, section, taken, sections) {
         runtime_generate_unsupported("section has unsupported matcher " + unsupported_matcher);
 
     if (connections.is_connections_action(action)) {
+        let before = length(array_or_empty(config.outbounds));
+        let endpoints_before = length(array_or_empty(config.endpoints));
         if (connections.proxy_core(section) == "xray")
             add_xray_sidecar_outbound(config, section, taken);
         else
             add_connections_outbound(config, section, taken);
+        remember_egress_stamp(
+            section,
+            before,
+            endpoints_before,
+            length(array_or_empty(config.outbounds)),
+            length(array_or_empty(config.endpoints))
+        );
+        stamp_singbox_egress_marks(config, section, before, endpoints_before);
     }
     else if (action == "zapret")
         add_zapret_outbound(config, section, sections);
@@ -7148,6 +7253,7 @@ function write_openconnect_probe_ports(config) {
 }
 
 function generate_config(output_path, service_address, mwan3_active, supports_xhttp, deferred_sections) {
+    egress_stamp_spans = [];
     runtime_supports_xhttp = supports_xhttp == null || as_string(supports_xhttp) == ""
         ? true
         : cli_bool(supports_xhttp);
@@ -7193,6 +7299,7 @@ function generate_config(output_path, service_address, mwan3_active, supports_xh
     strip_internal_fields(config);
     strip_redirect_inbound_network(config);
     prepend_temporary_device_rules(config);
+    replay_egress_stamps(config);
     if (!write_json_file(output_path, config)) {
         warn("failed to write ", output_path, "\n");
         exit(1);

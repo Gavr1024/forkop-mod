@@ -28,8 +28,14 @@ grep -Fq 'forkop:action-providers-availability' "$VIEW_JS" ||
   fail "strategy tab must stop when ByeDPI is removed"
 grep -Fq 'byedpi_strategy_start' "$BIN" ||
   fail "forkop must dispatch byedpi_strategy_start"
-grep -Fq 'byedpi_strategy_sites' "$BIN" ||
-  fail "forkop must dispatch byedpi_strategy_sites"
+grep -Fq 'byedpi_strategy_generate' "$BIN" ||
+  fail "forkop must dispatch byedpi_strategy_generate"
+grep -Fq 'data-action": "generate"' "$VIEW_JS" ||
+  fail "strategy page must offer a generate button"
+grep -Fq 'generate_from_best' "$VIEW_JS" ||
+  fail "strategy page must let the user generate from the best result"
+grep -Fq 'document.execCommand("copy")' "$VIEW_JS" ||
+  fail "strategy copy must work without a secure clipboard"
 grep -Fq 'start-stop-daemon' "$TEST_UC" ||
   fail "strategy worker must detach from the LuCI exec request"
 grep -Fq 'normalize_site("googleapis.com")' "$TEST_UC" ||
@@ -50,6 +56,9 @@ if command -v ucode >/dev/null 2>&1; then
   BYEDPI_STRATEGY_DATA="$DATA_DIR" \
     ucode -L "$ROOT_DIR/forkop/files/usr/lib" "$TEST_UC" self-check ||
     fail "ByeDPI strategy self-check failed"
+  ucode -L "$ROOT_DIR/forkop/files/usr/lib" \
+    "$ROOT_DIR/forkop/files/usr/lib/providers/byedpi/strategy_generate.uc" self-check ||
+    fail "ByeDPI strategy generator self-check failed"
 else
   printf 'ucode is not installed; skipped strategy_test.uc self-check\n' >&2
 fi

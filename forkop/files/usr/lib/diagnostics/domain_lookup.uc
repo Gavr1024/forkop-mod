@@ -941,6 +941,92 @@ function lookup_domain_work(raw, device_raw) {
     return with_forced(result);
 }
 
+function positive_speed(section, key) {
+    let raw = trim(as_string(section[key]));
+    if (match(raw, /^[0-9]+$/) == null)
+        return 0;
+    let value = int(raw);
+    if (value < 1 || value > 10000)
+        return 0;
+    return value;
+}
+
+function speeds_of(section) {
+    let down = positive_speed(section, "speed_limit_down_mbit");
+    let up = positive_speed(section, "speed_limit_up_mbit");
+    if (down > 0)
+        return { down: down, up: up };
+    if (up > 0)
+        return { down: 0, up: up };
+    let shared = positive_speed(section, "speed_limit_mbit");
+    return { down: shared, up: shared };
+}
+
+function limit_on(section) {
+    if (type(section) != "object")
+        return false;
+    if (as_string(section.enabled) == "0")
+        return false;
+    if (as_string(section.speed_limit_enabled) == "0")
+        return false;
+    let speeds = speeds_of(section);
+    return speeds.down > 0 || speeds.up > 0;
+}
+
+function decorate_limit(result) {
+    if (type(result) != "object")
+        return result;
+    result.limit = "none";
+    let id = as_string(result.section_id);
+    if (id == "" || result.status == "none" || result.status == "bad" || result.status == "unknown")
+        return result;
+    let map = {};
+    for (let section in uci_core.section_objects("forkop", "section")) {
+        section = type(section) == "object" ? section : {};
+        let name = as_string(section[".name"]);
+        if (name != "")
+            map[name] = section;
+    }
+    let section = map[id];
+    if (!limit_on(section))
+        return result;
+    let speeds = speeds_of(section);
+    result.limit_down = speeds.down;
+    result.limit_up = speeds.up;
+    let place = as_string(section.speed_limit_place) == "egress" ? "egress" : "ingress";
+    result.limit_place = place;
+    if (place == "ingress") {
+        result.limit = (result.via == "full" || result.reason_kind == "temporary" || result.reason_kind == "full") ? "holds" : "domains";
+        return result;
+    }
+    let hop = id;
+    let seen = {};
+    let guard = 0;
+    while (guard < 8) {
+        guard++;
+        if (seen[hop])
+            break;
+        seen[hop] = true;
+        let current = map[hop];
+        if (type(current) != "object" || as_string(current.outbound_detour_enabled) != "1")
+            break;
+        let next = trim(as_string(current.outbound_detour_section));
+        if (next == "" || type(map[next]) != "object")
+            break;
+        hop = next;
+    }
+    if (hop == id) {
+        result.limit = "holds";
+        return result;
+    }
+    let target = map[hop];
+    result.limit = "cascade";
+    let label = trim(as_string(target.label));
+    result.limit_via = label != "" ? label : hop;
+    result.limit_via_holds = limit_on(target) && as_string(target.speed_limit_place) == "egress";
+    return result;
+}
+
 function lookup_domain(raw, device_raw) {
     let result = null;
     try {
@@ -954,7 +1040,7 @@ function lookup_domain(raw, device_raw) {
         };
     }
     cleanup_decompiled();
-    return result;
+    return decorate_limit(result);
 }
 
 function module_exports() {

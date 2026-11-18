@@ -738,6 +738,27 @@ function option(section, key, fallback) {
     return as_string(value);
 }
 
+function local_list_stamp(value) {
+    let stamps = [];
+    for (let part in whitespace_fields(value)) {
+        if (substr(part, 0, 12) != "/etc/forkop/" || index(part, "..") >= 0)
+            continue;
+        let stat = fs.stat(part);
+        let rev = trim(as_string(fs.readfile(part + ".rev") || ""));
+        if (stat == null)
+            push(stamps, part + ":missing:" + rev);
+        else
+            push(stamps, part + ":" + int(stat.size || 0) + ":" + int(stat.mtime || 0) + ":" + rev);
+    }
+    return join(" ", stamps);
+}
+
+function signed_list_option(section, key) {
+    let value = option(section, key, "");
+    let stamp = local_list_stamp(value);
+    return stamp == "" ? value : value + " " + stamp;
+}
+
 function list_option(section, key, fallback) {
     let value = object_or_empty(section)[key];
     if (type(value) == "array")
@@ -1009,6 +1030,7 @@ function nft_runtime_signature_body(settings, sections) {
         body = signature_add_value(body, "rule." + name + ".speed_limit_mbit", option(section, "speed_limit_mbit", ""));
         body = signature_add_value(body, "rule." + name + ".speed_limit_down_mbit", option(section, "speed_limit_down_mbit", ""));
         body = signature_add_value(body, "rule." + name + ".speed_limit_up_mbit", option(section, "speed_limit_up_mbit", ""));
+        body = signature_add_value(body, "rule." + name + ".speed_limit_place", option(section, "speed_limit_place", ""));
         if (action == "dns") {
             body = signature_add_value(body, "rule." + name + ".source_ip_cidr", section_rule_condition_csv(section, "source_ip_cidr", "subnets"));
             body = signature_add_value(body, "rule." + name + ".source_aware_dns", connections.has_dns_matchers(section) ? "1" : "0");
@@ -1025,7 +1047,7 @@ function nft_runtime_signature_body(settings, sections) {
         body = signature_add_value(body, "rule." + name + ".community_subnet_lists", rule_config.filter_community_subnet_lists_value(connections.community_lists_value(section)));
         body = signature_add_value(body, "rule." + name + ".remote_subnet_lists", option(section, "remote_subnet_lists", ""));
         body = signature_add_value(body, "rule." + name + ".rule_set_with_subnets", connections.rule_sets_with_subnets_value(section));
-        body = signature_add_value(body, "rule." + name + ".domain_ip_lists", option(section, "domain_ip_lists", ""));
+        body = signature_add_value(body, "rule." + name + ".domain_ip_lists", signed_list_option(section, "domain_ip_lists"));
     }
 
     return body;
@@ -1451,6 +1473,25 @@ function signature_proxy_core(section, settings) {
     return signature_routing_engine(settings);
 }
 
+function section_speed_positive(value) {
+    value = trim(as_string(value));
+    return match(value, /^[0-9]+$/) != null && int(value) > 0;
+}
+
+// The outbound fwmark depends on whether egress limiting is active, not on the
+// number. A different megabit value only rebuilds nft.
+function section_egress_mark_active(section) {
+    if (option(section, "speed_limit_place", "") != "egress")
+        return "0";
+    let down = trim(option(section, "speed_limit_down_mbit", ""));
+    let up = trim(option(section, "speed_limit_up_mbit", ""));
+    if (section_speed_positive(down) || section_speed_positive(up))
+        return "1";
+    if (down == "" && up == "" && section_speed_positive(option(section, "speed_limit_mbit", "")))
+        return "1";
+    return "0";
+}
+
 function append_sing_box_rule_signature_body(body, section, sections, settings) {
     section = object_or_empty(section);
     let name = section_name(section);
@@ -1476,6 +1517,7 @@ function append_sing_box_rule_signature_body(body, section, sections, settings) 
         body = signature_add_value(body, prefix + ".warp", warp_signature(section));
         body = signature_add_value(body, prefix + ".masque", masque_signature(section));
         body = signature_add_value(body, prefix + ".outbound_jsons", option(section, "outbound_jsons", ""));
+        body = signature_add_value(body, prefix + ".xdrive_outbounds", option(section, "xdrive_outbounds", ""));
         body = signature_add_value(body, prefix + ".legacy_interface", option(section, "interface", ""));
         body = signature_add_value(body, prefix + ".legacy_outbound_json", option(section, "outbound_json", ""));
         body = signature_add_value(body, prefix + ".urltests", urltests_signature(section));
@@ -1524,6 +1566,7 @@ function append_sing_box_rule_signature_body(body, section, sections, settings) 
             if (bool_option(section, "xray_mux_xudp", true))
                 body = signature_add_value(body, prefix + ".xray_mux_udp443", option(section, "xray_mux_udp443", "reject"));
         }
+        body = signature_add_value(body, prefix + ".egress_mark", section_egress_mark_active(section));
     }
     else if (action == "byedpi") {
         body = signature_add_value(body, prefix + ".byedpi_index", sing_box_signature_enabled_action_index(sections, name, "byedpi"));
@@ -1558,7 +1601,7 @@ function append_sing_box_rule_signature_body(body, section, sections, settings) 
     body = signature_add_value(body, prefix + ".rule_set", connections.rule_sets_value(section));
     if (action != "dns")
         body = signature_add_value(body, prefix + ".rule_set_with_subnets", connections.rule_sets_with_subnets_value(section));
-    body = signature_add_value(body, prefix + ".domain_ip_lists", option(section, "domain_ip_lists", ""));
+    body = signature_add_value(body, prefix + ".domain_ip_lists", signed_list_option(section, "domain_ip_lists"));
 
     return body;
 }
@@ -1754,9 +1797,9 @@ function append_zapret_runtime_signature_body(body, section, signature_prefix, o
     body = signature_add_value(body, signature_prefix + "." + name + ".community_lists", connections.community_lists_value(section));
     body = signature_add_value(body, signature_prefix + "." + name + ".rule_set", connections.rule_sets_value(section));
     body = signature_add_value(body, signature_prefix + "." + name + ".rule_set_with_subnets", connections.rule_sets_with_subnets_value(section));
-    body = signature_add_value(body, signature_prefix + "." + name + ".domain_ip_lists", option(section, "domain_ip_lists", ""));
+    body = signature_add_value(body, signature_prefix + "." + name + ".domain_ip_lists", signed_list_option(section, "domain_ip_lists"));
     body = signature_add_value(body, signature_prefix + "." + name + ".user_domain_list_type", user_domain_list_type);
-    body = signature_add_value(body, signature_prefix + "." + name + ".local_domain_lists", option(section, "local_domain_lists", ""));
+    body = signature_add_value(body, signature_prefix + "." + name + ".local_domain_lists", signed_list_option(section, "local_domain_lists"));
     body = signature_add_value(body, signature_prefix + "." + name + ".remote_domain_lists", option(section, "remote_domain_lists", ""));
     body = signature_add_value(body, signature_prefix + "." + name + ".user_domains", section_user_domains_for_list_type(section));
 

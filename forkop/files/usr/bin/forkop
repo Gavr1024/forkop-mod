@@ -71,6 +71,14 @@ function show_help() {
     print("                            Delete a list preview from memory\n");
     print("    list_cache_persist      Download selected lists to flash cache\n");
     print("    list_cache_prune        Delete cached lists that are no longer selected\n");
+    print("    user_list_catalog       Show lists created on the information panel\n");
+    print("    user_list_read <id>     Show one created list\n");
+    print("    user_list_save <id> <name> <text>\n");
+    print("                            Create or update a list. An empty id creates one\n");
+    print("    user_list_delete <id>   Delete a list created on the information panel\n");
+    print("    custom_list_read <id>   Show a custom list for editing\n");
+    print("    custom_list_save <id> <text>\n");
+    print("                            Save a custom list or its address\n");
     print("    slot_status             Show config slot status as JSON\n");
     print("    slot_save <online|offline>\n");
     print("                            Save current config into a slot\n");
@@ -119,6 +127,7 @@ function show_help() {
     print("    get_byedpi_status       Get ByeDPI provider and Forkop-managed ciadpi status\n");
     print("    get_xray_stats          Get Xray plane traffic stats as JSON\n");
     print("    get_section_traffic     Get per-section traffic for the sing-box plane\n");
+    print("    speed_limit_status      Get the live speed limit and dropped packets\n");
     print("    get_xray_connections    Get Xray plane connections as JSON\n");
     print("    get_xray_nodes          Get Xray section outbounds as JSON\n");
     print("    set_xray_group_proxy    Pin an Xray section to a specific outbound\n");
@@ -171,6 +180,8 @@ function show_help() {
     print("    byedpi_strategy_status  Show the ByeDPI strategy check state\n");
     print("    byedpi_strategy_sites <n>\n");
     print("                            Show domains for one ByeDPI strategy result\n");
+    print("    byedpi_strategy_generate <count> <seed> [base]\n");
+    print("                            Build a small pack of ByeDPI strategies\n");
     print("    byedpi_strategy_stop    Stop the ByeDPI strategy check\n");
 }
 
@@ -195,6 +206,12 @@ function command_spec(command) {
         list_cache_show_close: [ "components/updates.uc", "list-cache-show-close", 1 ],
         list_cache_persist: [ "components/updates.uc", "list-cache-persist", 0 ],
         list_cache_prune: [ "components/updates.uc", "list-cache-prune", 0 ],
+        user_list_catalog: [ "components/updates.uc", "user-list-catalog", 0 ],
+        user_list_read: [ "components/updates.uc", "user-list-read", 1 ],
+        user_list_save: [ "components/updates.uc", "user-list-save", 3 ],
+        user_list_delete: [ "components/updates.uc", "user-list-delete", 1 ],
+        custom_list_read: [ "components/updates.uc", "custom-list-read", 1 ],
+        custom_list_save: [ "components/updates.uc", "custom-list-save", 2 ],
         slot_status: [ "config/slots.uc", "status-json", 0 ],
         slot_save: [ "config/slots.uc", "save", 1 ],
         slot_apply: [ "config/slots.uc", "apply", 1 ],
@@ -234,6 +251,7 @@ function command_spec(command) {
         get_xray_status: [ "diagnostics/runtime.uc", "get-xray-status", 0 ],
         get_xray_stats: [ "xray/runtime.uc", "stats", 0 ],
         get_section_traffic: [ "diagnostics/runtime.uc", "section-traffic", 0 ],
+        speed_limit_status: [ "diagnostics/speed_limit.uc", "status", 0 ],
         get_xray_connections: [ "xray/runtime.uc", "connections", 0 ],
         get_xray_nodes: [ "xray/runtime.uc", "nodes", 0 ],
         set_xray_group_proxy: [ "xray/runtime.uc", "select-outbound", 2 ],
@@ -282,6 +300,7 @@ function command_spec(command) {
         byedpi_strategy_start: [ "providers/byedpi/strategy_test.uc", "start", 1 ],
         byedpi_strategy_status: [ "providers/byedpi/strategy_test.uc", "status", 0 ],
         byedpi_strategy_sites: [ "providers/byedpi/strategy_test.uc", "sites", 1 ],
+        byedpi_strategy_generate: [ "providers/byedpi/strategy_generate.uc", "generate", 3 ],
         byedpi_strategy_stop: [ "providers/byedpi/strategy_test.uc", "stop", 0 ],
         package_prerm: [ "service/package.uc", "prerm", 1 ],
         package_postinst: [ "service/package.uc", "postinst", 0 ],

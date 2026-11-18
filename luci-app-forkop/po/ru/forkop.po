@@ -23,6 +23,132 @@ msgstr "-- Выберите --"
 msgid "+ Add JSON outbound"
 msgstr "+ Добавить JSON outbound"
 
+msgid "+ Add XDRIVE"
+msgstr "+ Добавить XDRIVE"
+
+msgid "Access key"
+msgstr "Ключ доступа"
+
+msgid "App password"
+msgstr "Пароль приложения"
+
+msgid "Bucket"
+msgstr "Бакет"
+
+msgid "Choose a storage"
+msgstr "Выберите хранилище"
+
+msgid "Client ID"
+msgstr "Идентификатор клиента"
+
+msgid "Client secret"
+msgstr "Секрет клиента"
+
+msgid "Yandex Disk connects only through WebDAV. A Yandex 360 plan and an app password are required, not the account password."
+msgstr "Яндекс Диск подключается только через WebDAV. Нужны тариф Яндекс 360 и пароль приложения, не пароль от аккаунта."
+
+msgid "Custom template"
+msgstr "Свой шаблон"
+
+msgid "Endpoint"
+msgstr "Адрес"
+
+msgid "Enter a folder"
+msgstr "Введите папку"
+
+msgid "Enter a valid UUID"
+msgstr "Введите правильный UUID"
+
+msgid "Enter the S3 endpoint, bucket and keys"
+msgstr "Введите адрес S3, бакет и ключи"
+
+msgid "Enter the VLESS encryption string"
+msgstr "Введите строку шифрования VLESS"
+
+msgid "Enter the Yandex Disk login and app password"
+msgstr "Введите логин Яндекс Диска и пароль приложения"
+
+msgid "Enter the Mail Cloud login and app password"
+msgstr "Введите адрес почты Mail и пароль для внешнего приложения"
+
+msgid "Mail Cloud"
+msgstr "Облако Mail"
+
+msgid "Mail Cloud connects through WebDAV. Enter the full mailbox address and an external app password, not the mailbox password."
+msgstr "Облако Mail подключается через WebDAV. Нужны полный адрес почты и пароль для внешнего приложения, не пароль от ящика."
+
+msgid "Enter the three Google Drive keys"
+msgstr "Введите три ключа Google Drive"
+
+msgid "Folder"
+msgstr "Папка"
+
+msgid "Google Drive"
+msgstr "Google Drive"
+
+msgid "JSON with put, get, list and delete"
+msgstr "JSON с действиями put, get, list и delete"
+
+msgid "Login"
+msgstr "Логин"
+
+msgid "One secret per line. The template reads them as {secret0}, {secret1}."
+msgstr "Один секрет на строку. Шаблон читает их как {secret0}, {secret1}."
+
+msgid "Refresh token"
+msgstr "Токен обновления"
+
+msgid "Region"
+msgstr "Регион"
+
+msgid "S3"
+msgstr "S3"
+
+msgid "Secret key"
+msgstr "Секретный ключ"
+
+msgid "Secrets"
+msgstr "Секреты"
+
+msgid "Storage"
+msgstr "Хранилище"
+
+msgid "Template"
+msgstr "Шаблон"
+
+msgid "Template must include put, get, list and delete"
+msgstr "В шаблоне должны быть put, get, list и delete"
+
+msgid "The encryption string from the server. none does not work."
+msgstr "Строка шифрования с сервера. Значение none не подходит."
+
+msgid "The same folder must be set on the server"
+msgstr "Та же папка должна быть указана на сервере"
+
+msgid "This name is already used"
+msgstr "Такое имя уже используется"
+
+msgid "UUID"
+msgstr "UUID"
+
+msgid "VLESS encryption"
+msgstr "Шифрование VLESS"
+
+msgid "VLESS through cloud storage. The same folder and keys must be set on the server."
+msgstr "VLESS через облачное хранилище. На сервере должны быть та же папка и те же ключи."
+
+msgid "XDRIVE"
+msgstr "XDRIVE"
+
+msgid "XDRIVE settings"
+msgstr "Настройки XDRIVE"
+
+msgid "XDRIVE settings are invalid"
+msgstr "Настройки XDRIVE заполнены неверно"
+
+msgid "Yandex Disk"
+msgstr "Яндекс Диск"
+
 msgid "+ Add level"
 msgstr "+ Добавить уровень"
 
@@ -503,6 +629,84 @@ msgstr "Проверка соединения не прошла"
 msgid "Copied"
 msgstr "Скопировано"
 
+msgid "Copy for the server"
+msgstr "Копировать для сервера"
+
+msgid "Could not copy the template"
+msgstr "Не удалось скопировать шаблон"
+
+msgid "Fill in the storage fields first"
+msgstr "Сначала заполните поля хранилища"
+
+msgid "Server template"
+msgstr "Шаблон для сервера"
+
+msgid "Copies the JSON for the selected storage. For Yandex Disk and Mail Cloud, paste it into the server template field. Folder and secrets are entered separately."
+msgstr "Копирует JSON выбранного хранилища. Для Яндекс Диска и Облака Mail вставьте его в поле шаблона на сервере. Папку и secrets впишите отдельно."
+
+msgid "Extra request settings"
+msgstr "Дополнительные настройки запросов"
+
+msgid "Written only while this box is checked. An empty field stays empty, and Xray keeps its own number. For Yandex Disk, Mail Cloud, S3 and a custom template that is poll 50–500 ms, send after 20 ms and 8 requests. For Google Drive it is poll 50–200 ms, send after 10 ms and 64 requests. The other numbers are a 512 KB piece, an active window of 2000 ms, a missing-piece wait of 30000 ms and a session of 300 s. A filled field replaces only that number. Set the same numbers in the server XDRIVE settings."
+msgstr "Записывается только пока галочка стоит. Пустое поле остаётся пустым, и Xray использует своё число. Для Яндекс Диска, Облака Mail, S3 и своего шаблона это опрос 50–500 мс, отправка через 20 мс и 8 запросов. Для Google Диска это опрос 50–200 мс, отправка через 10 мс и 64 запроса. Остальные числа одинаковые: кусок 512 КБ, окно активности 2000 мс, ожидание пропущенного куска 30000 мс и сессия 300 с. Заполненное поле заменяет только своё число. Те же числа нужно поставить в настройках XDRIVE на сервере."
+
+msgid "Active window, ms"
+msgstr "Окно активности, мс"
+
+msgid "After traffic, keep the shortest poll for this long"
+msgstr "После трафика столько времени спрашивать папку с самой короткой паузой"
+
+msgid "Missing piece wait, ms"
+msgstr "Ожидание пропущенного куска, мс"
+
+msgid "How long to wait if one file in the series is missing"
+msgstr "Сколько ждать, если одного файла в серии нет"
+
+msgid "Session, s"
+msgstr "Сессия, с"
+
+msgid "Delete a quiet session's files after this many seconds"
+msgstr "Удалить файлы затихшей сессии через столько секунд"
+
+msgid "Poll from, ms"
+msgstr "Опрос от, мс"
+
+msgid "How often the folder is checked, shortest pause"
+msgstr "Как часто спрашивать папку, самая короткая пауза"
+
+msgid "Poll up to, ms"
+msgstr "Опрос до, мс"
+
+msgid "How often the folder is checked, longest pause"
+msgstr "Как часто спрашивать папку, самая длинная пауза"
+
+msgid "Send after, ms"
+msgstr "Отправить через, мс"
+
+msgid "Send the collected data after this many milliseconds"
+msgstr "Отправить накопленные данные через столько миллисекунд"
+
+msgid "Piece size, KB"
+msgstr "Размер куска, КБ"
+
+msgid "Size of one file written to the cloud"
+msgstr "Размер одного файла, который записывается в облако"
+
+msgid "Requests at once"
+msgstr "Запросов сразу"
+
+msgid "How many cloud requests may run at the same time"
+msgstr "Сколько запросов к облаку может идти одновременно"
+
+msgid "Enter a whole number from %d to %d"
+msgstr "Введите целое число от %d до %d"
+
+msgid "Enter the request timing as whole numbers"
+msgstr "Введите паузы запросов целыми числами"
+
+msgid "The longest poll must not be shorter than the shortest"
+msgstr "Верхняя пауза опроса не может быть меньше нижней"
+
 msgid "Copy"
 msgstr "Копировать"
 
@@ -715,6 +919,81 @@ msgstr "Копировать"
 
 msgid "Speed limit"
 msgstr "Лимит скорости"
+
+msgid "Where to limit"
+msgstr "Где ограничивать"
+
+msgid "On entry"
+msgstr "На входе"
+
+msgid "On exit"
+msgstr "На выходе"
+
+msgid "Speed limit"
+msgstr "Лимит скорости"
+
+msgid "Limit download"
+msgstr "Загрузка"
+
+msgid "Limit upload"
+msgstr "Отдача"
+
+msgid "Dropped packets"
+msgstr "Отброшено пакетов"
+
+msgid "Saved, but the router rule was not found"
+msgstr "Сохранено, но правило на роутере не найдено"
+
+msgid "The drop counter appears after Save & Apply"
+msgstr "Счётчик появится после сохранения и применения"
+
+msgid "Shared ByeDPI counter"
+msgstr "Общий счётчик ByeDPI"
+
+msgid "Now download %s of %s Mbit/s"
+msgstr "Сейчас загрузка %s из %s Мбит/с"
+
+msgid "Now upload %s of %s Mbit/s"
+msgstr "Сейчас отдача %s из %s Мбит/с"
+
+msgid "This section connects through %s, so this exit limit does not apply. Section %s limits the traffic instead."
+msgstr "Секция подключается через «%s», поэтому этот лимит на выходе не действует. Трафик режет секция «%s»."
+
+msgid "This section connects through %s, so this exit limit does not apply. That section has no exit limit."
+msgstr "Секция подключается через «%s», поэтому этот лимит на выходе не действует. У той секции лимита на выходе нет."
+
+msgid "This section has an entry limit (%s), but a domain match is not limited."
+msgstr "У этой секции есть лимит на входе (%s), но попадание по домену он не режет."
+
+msgid "This section has an exit limit (%s), but it connects through %s, so that section's exit limit is used."
+msgstr "У этой секции есть лимит на выходе (%s), но она подключается через «%s», поэтому действует лимит той секции."
+
+msgid "This section has an exit limit (%s), but it connects through %s, and that section has no exit limit."
+msgstr "У этой секции есть лимит на выходе (%s), но она подключается через «%s», а у той секции лимита на выходе нет."
+
+msgid "The speed limit applies here: %s, %s."
+msgstr "Лимит скорости здесь действует: %s, %s."
+
+msgid "On entry limits addresses, ports and fully routed devices. Domain lists are not limited. On exit limits everything this section takes, including domains. A ByeDPI section set to on exit limits every ByeDPI section, and the strictest number is used. Only one place is used."
+msgstr "На входе лимит режет адреса, порты и полную маршрутизацию. Списки доменов не ограничиваются. На выходе лимит режет всё, что секция забрала, включая домены. Если хотя бы одна секция ByeDPI стоит на выходе, ограничивается весь трафик ByeDPI, и берётся самое строгое число. Используется только одно место."
+
+msgid ", on exit"
+msgstr ", на выходе"
+
+msgid ", on entry"
+msgstr ", на входе"
+
+msgid "The fields below open when this is on."
+msgstr "Поля ниже открываются, когда галочка стоит."
+
+msgid "On entry limits addresses, ports and fully routed devices. Domain lists are not limited. A fallback server or balancer from another section does not remove this limit."
+msgstr "На входе лимит режет адреса, порты и полную маршрутизацию. Списки доменов не ограничиваются. Запасной сервер или балансировщик другой секции этот лимит не снимает."
+
+msgid "On exit limits everything this section takes, including domains. A fallback server or balancer is another section's exit: this limit stops, and that section's limit is used if it has one. If this section connects through another section, this limit also stops, and only the last section's exit limit is used. A ByeDPI section set to on exit limits every ByeDPI section, and the strictest number is used."
+msgstr "На выходе лимит режет всё, что секция забрала, включая домены. Запасной сервер или балансировщик — это выход другой секции: этот лимит снимается, действует лимит той секции, если он у неё есть. Если секция подключается через другую, этот лимит тоже снимается: действует лимит последней секции, если он у неё стоит на выходе. Если хотя бы одна секция ByeDPI стоит на выходе, ограничивается весь трафик ByeDPI, и берётся самое строгое число."
+
+msgid "Download is megabits per second toward the devices. Upload is megabits per second from the devices to the internet. Extra traffic is dropped. Empty means no limit. Local traffic is not limited. Where the limit applies is chosen above."
+msgstr "Загрузка — мегабит в секунду к устройствам. Отдача — мегабит в секунду от устройств в интернет. Лишнее отбрасывается. Пусто — без лимита. Обмен внутри локальной сети не ограничивается. Где именно резать, выбирается выше."
 
 msgid "Download rate"
 msgstr "Загрузка"
@@ -1144,6 +1423,9 @@ msgstr "Введите полный объект inbound sing-box"
 
 msgid "Enter a complete sing-box outbound object"
 msgstr "Введите полный объект outbound sing-box"
+
+msgid "Enter a complete Xray outbound object"
+msgstr "Введите полный объект outbound Xray"
 
 msgid "Enter a display name"
 msgstr "Введите отображаемое имя"
@@ -3464,6 +3746,24 @@ msgstr "В ByeByeDPI стоит 20. На роутере безопаснее 4�
 msgid "Use my strategies"
 msgstr "Использовать мои стратегии"
 
+msgid "How many to generate"
+msgstr "Сколько сгенерировать"
+
+msgid "Generate strategies"
+msgstr "Сгенерировать стратегии"
+
+msgid "Could not build strategies"
+msgstr "Не удалось сгенерировать стратегии"
+
+msgid "From the best checked strategy"
+msgstr "От лучшей проверенной"
+
+msgid "Run a strategy check first"
+msgstr "Сначала запустите проверку"
+
+msgid "When this is on, new lines keep that strategy and only shift its positions and TTL. Off builds a fresh pack."
+msgstr "Когда галочка стоит, новые строки сохраняют эту стратегию и только сдвигают позиции и TTL. Без галочки собирается новая пачка."
+
 msgid "One ciadpi strategy per line. Leave this off to test the built-in ByeByeDPI list."
 msgstr "Одна стратегия ciadpi на строку. Выключите, чтобы проверять встроенный список ByeByeDPI."
 
@@ -4135,4 +4435,47 @@ msgstr "Статус обновлён. Сохраните это окно, за�
 
 msgid "Could not check the WARP account"
 msgstr "Не удалось проверить аккаунт WARP"
+
+msgid "Create list"
+msgstr "Создать список"
+
+msgid "Edit"
+msgstr "Изменить"
+
+msgid "List name"
+msgstr "Название"
+
+msgid "One site or subnet per line."
+msgstr "Один сайт или подсеть на строку."
+
+msgid "Enter a name"
+msgstr "Введите название"
+
+msgid "Each line must be one site or subnet, without spaces"
+msgstr "На каждой строке один сайт или подсеть, без пробелов"
+
+msgid "Enter an http or https address"
+msgstr "Введите адрес http или https"
+
+msgid "This list is too large to edit here"
+msgstr "Этот список слишком большой, чтобы править его здесь"
+
+msgid "Could not save this list"
+msgstr "Не удалось сохранить список"
+
+msgid "List saved"
+msgstr "Список сохранён"
+
+msgid "List saved. Open the section and save it so the router picks the change up."
+msgstr "Список сохранён. Откройте секцию и сохраните её, чтобы роутер подхватил изменение."
+
+msgid "List deleted"
+msgstr "Список удалён"
+
+msgid "Delete this list?"
+msgstr "Удалить этот список?"
+
+msgid "Lists you created on the information panel. Tick the ones this section should use."
+msgstr "Списки, которые вы создали на информационной панели. Отметьте те, что нужны этой секции."
+
 

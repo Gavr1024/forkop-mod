@@ -4,6 +4,7 @@ let fs = require("fs");
 let uci_core = require("core.uci");
 let connections = require("config.connections");
 let singbox_rulesets = require("singbox.rulesets");
+let user_lists = require("routing.user_lists");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const LIST_CACHE_DIR = getenv("FORKOP_LIST_CACHE_DIR") || "/etc/forkop/list-cache";
@@ -891,7 +892,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.16",
+        "-A", "forkop-list-cache/1.0.17",
         "-o", output_path,
         "--url", as_string(url)
     ];
@@ -1072,7 +1073,7 @@ function find_selected_item(id) {
         if (as_string(item.id) == id || as_string(item.name) == id)
             return item;
     }
-    return null;
+    return user_lists.selected_item(id);
 }
 
 function readable_item_path(path) {
@@ -1719,18 +1720,21 @@ function paths_bytes(paths) {
 
 function decorate_item(item) {
     item = object_or_empty(item);
+    let owned = user_lists.meta(item);
     let size = stored_list_size(item.path);
     let mtime = file_mtime(item.path + ".gz");
     if (mtime <= 0)
         mtime = file_mtime(item.path);
     return {
         id: as_string(item.id),
-        name: as_string(item.name),
-        kind: as_string(item.kind),
-        builtin: item.builtin == true,
-        local: item.local == true,
+        name: owned.name != "" ? owned.name : as_string(item.name),
+        kind: owned.kind != "" ? owned.kind : as_string(item.kind),
+        builtin: item.builtin == true && owned.edit != "user",
+        local: item.local == true || owned.edit == "user",
         url: as_string(item.url),
         path: as_string(item.path),
+        edit: as_string(owned.edit),
+        user_id: as_string(owned.user_id),
         size,
         mtime,
         status: item_status(item)
@@ -1777,6 +1781,11 @@ function status_object() {
     let items = [];
     for (let item in selected)
         push(items, decorate_item(item));
+    let seen_paths = {};
+    for (let item in items)
+        seen_paths[as_string(item.path)] = true;
+    for (let extra in user_lists.unattached(seen_paths))
+        push(items, decorate_item(extra));
 
     let flash = flash_bytes(LIST_CACHE_DIR);
     let unused = unused_cache_paths(selected);
@@ -1960,6 +1969,7 @@ function module_exports() {
         preview_selected,
         preview_page,
         preview_close,
+        find_selected_item,
         download_to_file,
         lists_proxy_address,
         download_proxy_address,

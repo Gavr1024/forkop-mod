@@ -470,6 +470,37 @@ function add_json_outbounds(config, taken, section, tags, display_names, exclude
     }
 }
 
+function add_xdrive_outbounds(config, taken, section, tags, display_names, exclude_keys) {
+    let section_name = as_string(section[".name"]);
+    let items = connections.xdrive_outbounds(section);
+    for (let i = 0; i < length(items); i++) {
+        let exclude_key = connections.xdrive_exclude_key(items[i]);
+        if (connections.outbound_key_excluded(section, exclude_key))
+            continue;
+        let parsed = parse_json_text(items[i]);
+        if (type(parsed) != "object") {
+            warn("xray: skipped invalid XDRIVE outbound in section '" + section_name + "'\n");
+            continue;
+        }
+        let label = trim(as_string(parsed.name || ""));
+        if (label == "")
+            label = "XDRIVE " + (i + 1);
+        let tag = unique_tag(label, taken);
+        let outbound = xray_outbound.build_xdrive_outbound(parsed, tag);
+        if (outbound == null) {
+            warn("xray: XDRIVE outbound '" + label + "' in section '" + section_name + "' is incomplete\n");
+            continue;
+        }
+        taken[tag] = true;
+        push(config.outbounds, outbound);
+        push(tags, tag);
+        if (type(exclude_keys) == "object")
+            exclude_keys[tag] = exclude_key;
+        if (type(display_names) == "object")
+            display_names[tag] = label;
+    }
+}
+
 function subscription_copy_link(outbound) {
     let link = as_string(object_or_empty(outbound).share_link || "");
     if (!subscription_share_link.is_copyable_link(link))
@@ -963,6 +994,69 @@ function node_stream_mask(stream) {
     return "";
 }
 
+function section_speed_hash(section) {
+    let name = as_string(section[".name"]);
+    let hash = 0;
+    let i = 0;
+    while (i < length(name)) {
+        hash = (hash * 33 + ord(substr(name, i, 1))) % 4095;
+        i++;
+    }
+    if (hash < 1)
+        hash = 1;
+    return hash;
+}
+
+function section_wants_egress_mark(section) {
+    if (option(section, "speed_limit_place", "") != "egress")
+        return false;
+    let action = option(section, "action", "");
+    if (action == "block" || action == "zapret" || action == "zapret2" || action == "byedpi")
+        return false;
+    let down = trim(option(section, "speed_limit_down_mbit", ""));
+    let up = trim(option(section, "speed_limit_up_mbit", ""));
+    let shared = trim(option(section, "speed_limit_mbit", ""));
+    return (match(down, /^[0-9]+$/) != null && int(down) > 0) ||
+        (match(up, /^[0-9]+$/) != null && int(up) > 0) ||
+        (down == "" && up == "" && match(shared, /^[0-9]+$/) != null && int(shared) > 0);
+}
+
+function egress_outbound_markable(outbound) {
+    if (type(outbound) != "object")
+        return false;
+    let protocol = lc(as_string(outbound.protocol || ""));
+    if (protocol == "" || protocol == "blackhole" || protocol == "loopback" || protocol == "dns")
+        return false;
+    if (protocol == "socks") {
+        let settings = object_or_empty(outbound.settings);
+        let address = lc(trim(as_string(settings.address || "")));
+        if (address == "" && type(settings.servers) == "array" && length(settings.servers) > 0)
+            address = lc(trim(as_string(object_or_empty(settings.servers[0]).address || "")));
+        if (address == "127.0.0.1" || address == "::1" || address == "localhost")
+            return false;
+    }
+    let mark = int(object_or_empty(object_or_empty(outbound.streamSettings).sockopt).mark || 0);
+    if (mark >= 0x01000000 && mark < 0x03000000)
+        return false;
+    return true;
+}
+
+function apply_section_egress_mark(config, section, tags) {
+    if (!section_wants_egress_mark(section))
+        return;
+    let mark = xray_constants.OUTBOUND_MARK + section_speed_hash(section);
+    for (let tag in tags) {
+        let outbound = outbound_by_tag(config, tag);
+        if (!egress_outbound_markable(outbound))
+            continue;
+        if (type(outbound.streamSettings) != "object")
+            outbound.streamSettings = {};
+        if (type(outbound.streamSettings.sockopt) != "object")
+            outbound.streamSettings.sockopt = {};
+        outbound.streamSettings.sockopt.mark = mark;
+    }
+}
+
 function add_section(config, taken, section, ports, index, xray_sections, connection_sections, cascade, deferred, nodes_map, node_seq, fallback_requests) {
     let section_name = as_string(section[".name"]);
     let tags = [];
@@ -978,6 +1072,7 @@ function add_section(config, taken, section, ports, index, xray_sections, connec
     for (let i = subscription_from; i < length(tags); i++)
         subscription_tags[as_string(tags[i])] = true;
     add_json_outbounds(config, taken, section, tags, display_names, exclude_keys);
+    add_xdrive_outbounds(config, taken, section, tags, display_names, exclude_keys);
     add_interfaces(config, taken, section, tags, display_names, exclude_keys);
     apply_section_detour(config, taken, section, tags, xray_sections, connection_sections, cascade, deferred);
     let mask = section_finalmask_spec(section);
@@ -1089,6 +1184,7 @@ function add_section(config, taken, section, ports, index, xray_sections, connec
         });
     }
     nodes_map[section_name] = section_nodes;
+    apply_section_egress_mark(config, section, tags);
 }
 
 function enabled_xray_sections() {
@@ -2999,6 +3095,21 @@ function apply_temporary_device_routes(config) {
     }
 }
 
+function apply_config_egress_marks(config, nodes_map) {
+    nodes_map = object_or_empty(nodes_map);
+    for (let section in enabled_xray_sections()) {
+        if (!section_wants_egress_mark(section))
+            continue;
+        let tags = [];
+        for (let node in array_or_empty(nodes_map[as_string(section[".name"])])) {
+            let tag = as_string(object_or_empty(node).tag || "");
+            if (tag != "")
+                push(tags, tag);
+        }
+        apply_section_egress_mark(config, section, tags);
+    }
+}
+
 function generate_config(output_path, ports_path) {
     output_path = as_string(output_path || xray_constants.XRAY_CONFIG);
     ports_path = as_string(ports_path || xray_constants.XRAY_PORTS_FILE);
@@ -3061,6 +3172,9 @@ function generate_config(output_path, ports_path) {
         parent = substr(output_path, 0, slash);
     if (parent != "" && parent != "." && !ensure_dir(parent))
         generate_fail("failed to create xray config directory");
+    // After dial strategy and interface binding, which can install a fresh
+    // sockopt that still carries the plain outbound mark.
+    apply_config_egress_marks(config, nodes_map);
     if (!write_json_file(output_path, config))
         generate_fail("failed to write xray config");
 
@@ -3108,6 +3222,7 @@ function collect_download_tags(config, taken, section) {
     add_manual_links(config, taken, section, tags, display_names);
     add_subscriptions(config, taken, section, tags, display_names);
     add_json_outbounds(config, taken, section, tags, display_names);
+    add_xdrive_outbounds(config, taken, section, tags, display_names);
     add_interfaces(config, taken, section, tags, display_names);
     let mask = section_finalmask_spec(section);
     if (mask != null) {

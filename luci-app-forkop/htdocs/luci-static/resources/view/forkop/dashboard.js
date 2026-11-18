@@ -89,6 +89,155 @@ function notify(message, type) {
   }
 }
 
+function readCommandJson(result) {
+  try {
+    return JSON.parse(result && result.stdout ? result.stdout : "{}");
+  } catch (_error) {
+    return {};
+  }
+}
+
+function listEditError(error) {
+  if (error === "bad-name") {
+    return _("Enter a name");
+  }
+  if (error === "bad-line") {
+    return _("Each line must be one site or subnet, without spaces");
+  }
+  if (error === "bad-url") {
+    return _("Enter an http or https address");
+  }
+  if (error === "too-large") {
+    return _("This list is too large to edit here");
+  }
+  return _("Could not save this list");
+}
+
+function closeListEditor() {
+  if (ui && typeof ui.hideModal === "function") {
+    ui.hideModal();
+  }
+}
+
+function saveListEditor(kind, id, userId, name, text) {
+  const command = kind === "user"
+    ? ["user_list_save", userId || "", name || "", text || ""]
+    : ["custom_list_save", id || "", text || ""];
+  return fs.exec("/usr/bin/forkop", command).then((result) => {
+    const payload = readCommandJson(result);
+    if (!payload.ok) {
+      notify(listEditError(payload.error), "error");
+      return;
+    }
+    closeListEditor();
+    if (payload.used && payload.reloaded === false) {
+      notify(_("List saved. Open the section and save it so the router picks the change up."), "warning");
+    } else {
+      notify(_("List saved"), "info");
+    }
+    refreshLocalListsView();
+  }).catch(() => {
+    notify(_("Could not save this list"), "error");
+  });
+}
+
+function deleteUserList(userId) {
+  if (typeof window !== "undefined" && window.confirm && !window.confirm(_("Delete this list?"))) {
+    return;
+  }
+  fs.exec("/usr/bin/forkop", ["user_list_delete", userId || ""])
+    .then((result) => {
+      const payload = readCommandJson(result);
+      if (!payload.ok) {
+        notify(_("Could not save this list"), "error");
+        return;
+      }
+      closeListEditor();
+      notify(_("List deleted"), "info");
+      refreshLocalListsView();
+    })
+    .catch(() => {
+      notify(_("Could not save this list"), "error");
+    });
+}
+
+function showListEditor(kind, id, userId, name, text) {
+  if (!ui || typeof ui.showModal !== "function") {
+    return;
+  }
+  const nameInput = E("input", {
+    type: "text",
+    value: name || "",
+    style: "width:100%;margin:0 0 0.6rem;",
+  });
+  const textInput = E("textarea", {
+    style: "width:100%;min-height:16rem;font:inherit;",
+  }, text || "");
+  const body = [];
+  if (kind === "user") {
+    body.push(E("div", {}, _("List name")));
+    body.push(nameInput);
+    body.push(E("div", { style: "margin:0 0 0.4rem;" }, _("One site or subnet per line.")));
+  } else if (kind === "url") {
+    body.push(E("div", { style: "margin:0 0 0.4rem;" }, _("Address")));
+  } else {
+    body.push(E("div", { style: "margin:0 0 0.4rem;" }, _("One site or subnet per line.")));
+  }
+  body.push(textInput);
+  const buttons = [
+    E("button", {
+      class: "btn cbi-button cbi-button-action",
+      click: () => saveListEditor(
+        kind,
+        id,
+        userId,
+        nameInput.value,
+        kind === "url" ? textInput.value.trim() : textInput.value,
+      ),
+    }, _("Save")),
+  ];
+  if (kind === "user" && userId) {
+    buttons.push(E("button", {
+      class: "btn cbi-button cbi-button-remove",
+      click: () => deleteUserList(userId),
+    }, _("Delete")));
+  }
+  buttons.push(E("button", {
+    class: "btn",
+    click: closeListEditor,
+  }, _("Close")));
+  body.push(E("div", { class: "right", style: "margin-top:0.6rem;" }, buttons));
+  if (typeof ui.hideModal === "function") {
+    ui.hideModal();
+  }
+  ui.showModal(kind === "user" && !userId ? _("Create list") : _("Edit"), body);
+}
+
+function openListEditor(kind, id, userId) {
+  if (kind === "user" && !userId) {
+    showListEditor("user", "", "", "", "");
+    return;
+  }
+  const command = kind === "user"
+    ? ["user_list_read", userId || ""]
+    : ["custom_list_read", id || ""];
+  ui.showModal(_("Edit"), [E("p", {}, _("Loading..."))]);
+  fs.exec("/usr/bin/forkop", command)
+    .then((result) => {
+      const payload = readCommandJson(result);
+      if (!payload.ok) {
+        closeListEditor();
+        notify(listEditError(payload.error), "warning");
+        return;
+      }
+      showListEditor(payload.kind || kind, id, payload.id || userId, payload.name || "", payload.text || "");
+    })
+    .catch(() => {
+      closeListEditor();
+      notify(_("Could not read this list"), "error");
+    });
+}
+
 function renderLocalLists(payload) {
   const enabled = Boolean(payload && payload.enabled);
   const items = payload && Array.isArray(payload.items) ? payload.items : [];
@@ -106,14 +255,15 @@ function renderLocalLists(payload) {
     const clickable =
       (item.status === "cached" || item.status === "ready") && item.id;
     const custom = !isBuiltinList(item);
-    const tag = custom
-      ? `<span class="fkp-list-custom-tag">${escapeHtml(_("Not a built-in list"))}</span>`
-      : "";
     const nameCell = clickable
-      ? `<button type="button" class="fkp-list-open" data-list-id="${escapeHtml(item.id)}" data-list-name="${name}" style="background:none;border:0;padding:0;color:var(--primary-color,#1a73e8);cursor:pointer;text-align:left;font:inherit;text-decoration:underline;">${name}</button>${tag}`
-      : `${name}${tag}`;
+      ? `<button type="button" class="fkp-list-open" data-list-id="${escapeHtml(item.id)}" data-list-name="${name}" style="background:none;border:0;padding:0;color:var(--primary-color,#1a73e8);cursor:pointer;text-align:left;font:inherit;text-decoration:underline;">${name}</button>`
+      : name;
+    const edit = `${item.edit || ""}`;
+    const editButton = edit
+      ? ` <button type="button" class="btn cbi-button" data-list-edit="${escapeHtml(item.id || "")}" data-list-edit-kind="${escapeHtml(edit)}" data-list-user-id="${escapeHtml(item.user_id || "")}" style="margin-left:0.4rem;padding:0 0.45rem;">${escapeHtml(_("Edit"))}</button>`
+      : "";
     return `<tr>
-        <td>${nameCell}</td>
+        <td>${nameCell}${editButton}</td>
         <td>${escapeHtml(custom ? _("Your lists") : _("Built-in lists"))}</td>
         <td>${escapeHtml(formatBytes(item.size))}</td>
         <td>${escapeHtml(formatTime(item.mtime))}</td>
@@ -169,17 +319,6 @@ function renderLocalLists(payload) {
         font-weight: 600;
         background: var(--background-color-high, rgba(127, 127, 127, 0.12));
       }
-      .fkp-list-custom-tag {
-        display: inline-block;
-        margin-left: 0.45rem;
-        padding: 0 0.4rem;
-        border: 1px solid #c4a35a;
-        border-radius: 999px;
-        color: #8a6d1d;
-        font-size: 0.8em;
-        white-space: nowrap;
-        vertical-align: middle;
-      }
       #cbi-forkop-dashboard-_local_lists > .cbi-value-title {
         display: none;
       }
@@ -195,6 +334,11 @@ function renderLocalLists(payload) {
     <div class="fkp_dashboard-page__local-lists__header">
       <h4>${escapeHtml(_("Local list cache"))}</h4>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button
+        id="forkop-local-lists-create"
+        type="button"
+        class="btn cbi-button cbi-button-add"
+      >${escapeHtml(_("Create list"))}</button>
       <button
         id="forkop-local-lists-download"
         type="button"
@@ -240,6 +384,14 @@ function mountLocalLists(payload) {
   node.onclick = (event) => {
     let element = event.target;
     while (element && element !== node) {
+      if (element.getAttribute && element.getAttribute("data-list-edit") != null) {
+        openListEditor(
+          element.getAttribute("data-list-edit-kind") || "",
+          element.getAttribute("data-list-edit") || "",
+          element.getAttribute("data-list-user-id") || "",
+        );
+        return;
+      }
       if (element.getAttribute && element.getAttribute("data-list-id")) {
         openListPreview(
           element.getAttribute("data-list-id"),
@@ -250,6 +402,10 @@ function mountLocalLists(payload) {
       element = element.parentNode;
     }
   };
+  const createButton = document.getElementById("forkop-local-lists-create");
+  if (createButton) {
+    createButton.addEventListener("click", () => openListEditor("user", "", ""));
+  }
   const button = document.getElementById("forkop-local-lists-download");
   if (!button) {
     return;
@@ -717,7 +873,37 @@ function routeDnsText(data) {
   return ` ${text}${dnsDetourText(data)}`;
 }
 
+function limitSentence(data) {
+  if (!data || !data.limit || data.limit === "none") {
+    return "";
+  }
+  const bits = [];
+  if (Number(data.limit_down) > 0) {
+    bits.push(`${_("Limit download")} ${data.limit_down} ${_("Mbit/s")}`);
+  }
+  if (Number(data.limit_up) > 0) {
+    bits.push(`${_("Limit upload")} ${data.limit_up} ${_("Mbit/s")}`);
+  }
+  const numbers = bits.join(", ");
+  if (data.limit === "domains") {
+    return _("This section has an entry limit (%s), but a domain match is not limited.").format(numbers);
+  }
+  if (data.limit === "cascade") {
+    return data.limit_via_holds
+      ? _("This section has an exit limit (%s), but it connects through %s, so that section's exit limit is used.").format(numbers, data.limit_via)
+      : _("This section has an exit limit (%s), but it connects through %s, and that section has no exit limit.").format(numbers, data.limit_via);
+  }
+  const where = data.limit_place === "egress" ? _("On exit") : _("On entry");
+  return _("The speed limit applies here: %s, %s.").format(where, numbers);
+}
+
 function lookupSentence(data) {
+  const sentence = lookupSentenceMain(data);
+  const limit = limitSentence(data);
+  return limit ? `${sentence} ${limit}` : sentence;
+}
+
+function lookupSentenceMain(data) {
   if (!data || data.status === "bad") {
     return _("Enter a site, for example youtube.com");
   }

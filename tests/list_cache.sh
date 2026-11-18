@@ -68,7 +68,9 @@ require_text "$CACHE_UC" "subnets.txt"
 require_text "$CACHE_UC" "has_subnets"
 require_text "$DASHBOARD_JS" "has_subnets"
 require_text "$DASHBOARD_JS" "Your lists"
-require_text "$DASHBOARD_JS" "Not a built-in list"
+if grep -Fq 'Not a built-in list' "$DASHBOARD_JS"; then
+  fail "custom lists must not show the built-in tag"
+fi
 require_text "$CACHE_UC" "separate_custom_preview"
 require_text "$CACHE_UC" "local_item"
 require_text "$BIN" "domains|subnets"

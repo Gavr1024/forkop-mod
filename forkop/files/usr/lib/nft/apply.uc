@@ -908,7 +908,13 @@ function section_speed_up(section) {
     return section_speed_value(section, "speed_limit_mbit");
 }
 
+function section_speed_place(section) {
+    return option(section, "speed_limit_place", "") == "egress" ? "egress" : "ingress";
+}
+
 function section_speed_active(section) {
+    if (section_speed_place(section) == "egress")
+        return 0;
     if (section_action(section) == "block")
         return 0;
     if (section_priority_action(section) != "capture")
@@ -949,12 +955,12 @@ function nft_install_direction_chain(table, section, direction, mbit) {
     let kbytes = as_string(mbit * 125);
     return nft_add_rule(table, chain, [
         "limit", "rate", "over", kbytes + " kbytes/second",
-        "burst", kbytes + " kbytes", "drop"
+        "burst", kbytes + " kbytes", "counter", "drop"
     ]);
 }
 
 function nft_install_section_speed(table, section) {
-    if (section_priority_action(section) != "capture")
+    if (section_speed_active(section) < 1)
         return true;
     return nft_install_direction_chain(table, section, "up", section_speed_up(section)) &&
         nft_install_direction_chain(table, section, "down", section_speed_down(section));
@@ -970,7 +976,7 @@ function nft_ensure_speed_postrouting(table) {
 }
 
 function nft_install_section_speed_reply(table, section, interface_set, localv4_set, localv6_set) {
-    if (section_speed_down(section) < 1 || section_priority_action(section) != "capture")
+    if (section_speed_active(section) < 1 || section_speed_down(section) < 1 || section_priority_action(section) != "capture")
         return true;
     if (!nft_ensure_speed_postrouting(table))
         return false;
@@ -1012,7 +1018,7 @@ function nft_priority_verdict_args(priority_action, mark, section, count_now) {
 function nft_install_speed_jump(table, chain, section, match_args, count_now) {
     if (count_now === false)
         return true;
-    if (section == null || section_priority_action(section) != "capture" || section_speed_up(section) < 1)
+    if (section == null || section_speed_active(section) < 1 || section_priority_action(section) != "capture" || section_speed_up(section) < 1)
         return true;
     let args = [];
     append_array(args, match_args);
@@ -1374,7 +1380,7 @@ function nft_create_runtime_base(table, localv4_set, common_set, port_set, ip_po
         !nft_add_rule(table, "proxy", [ "meta", "mark", "&", fakeip_mark, "==", fakeip_mark, "meta", "l4proto", "udp", "tproxy", "ip6", "to", core_ip.format_ipv6_tproxy_target(tproxy6_address, tproxy_port), "counter" ]) ||
         !nft_add_rule(table, "mangle_output", [ "ip", "daddr", "@" + as_string(localv4_set), "return" ]) ||
         !nft_add_rule(table, "mangle_output", [ "ip6", "daddr", "@" + as_string(localv6_set), "ip6", "daddr", "!=", fakeip6_range, "return" ]) ||
-        !nft_add_rule(table, "mangle_output", [ "meta", "mark", outbound_mark, "counter", "return" ]) ||
+        !nft_add_rule(table, "mangle_output", [ "meta", "mark", "&", outbound_mark, "==", outbound_mark, "counter", "return" ]) ||
         !nft_add_rule(table, "mangle_output", [ "ip", "daddr", "@" + EXCLUDED_DNS_UPSTREAM_SET, "tcp", "dport", "53", "meta", "mark", "set", outbound_mark, "return" ]) ||
         !nft_add_rule(table, "mangle_output", [ "ip", "daddr", "@" + EXCLUDED_DNS_UPSTREAM_SET, "udp", "dport", "53", "meta", "mark", "set", outbound_mark, "return" ]) ||
         !nft_add_rule(table, "mangle_output", [ "ip6", "daddr", "@" + EXCLUDED_DNS_UPSTREAM6_SET, "tcp", "dport", "53", "meta", "mark", "set", outbound_mark, "return" ]) ||
@@ -2191,6 +2197,151 @@ function write_xray_dnsmasq_nftset_conf(table) {
     return true;
 }
 
+let speed_egress_in_ready = false;
+let speed_egress_out_ready = false;
+
+function section_speed_egress(section) {
+    if (section_speed_place(section) != "egress")
+        return 0;
+    if (section_action(section) == "block")
+        return 0;
+    if (section_speed_down(section) < 1 && section_speed_up(section) < 1)
+        return 0;
+    return 1;
+}
+
+function nft_ensure_speed_egress_input(table) {
+    if (speed_egress_in_ready)
+        return true;
+    if (!nft_create_chain(table, "speed_egress_in", "{ type filter hook input priority -150; policy accept; }"))
+        return false;
+    speed_egress_in_ready = true;
+    return true;
+}
+
+function nft_ensure_speed_egress_output(table) {
+    if (speed_egress_out_ready)
+        return true;
+    // Filter hook, not the route hook: drop is valid here, and this runs
+    // before Zapret queues the packet.
+    if (!nft_create_chain(table, "speed_egress_out", "{ type filter hook output priority -190; policy accept; }"))
+        return false;
+    speed_egress_out_ready = true;
+    return true;
+}
+
+function nft_egress_output_rule(table, match_args, ct_mark, up_chain) {
+    if (!nft_ensure_speed_egress_output(table))
+        return false;
+    let args = [];
+    append_array(args, match_args);
+    append_array(args, [ "ct", "mark", "set", as_string(ct_mark), "counter" ]);
+    if (up_chain != "")
+        append_array(args, [ "jump", up_chain ]);
+    return nft_add_rule(table, "speed_egress_out", args);
+}
+
+function nft_install_one_egress(table, section, match_args, ct_mark) {
+    let up = section_speed_up(section);
+    let down = section_speed_down(section);
+    if (up < 1 && down < 1)
+        return true;
+    if (up > 0 && !nft_install_direction_chain(table, section, "up", up))
+        return false;
+    if (down > 0 && !nft_install_direction_chain(table, section, "down", down))
+        return false;
+    let up_chain = up > 0 ? section_speed_chain(section, "up") : "";
+    if (!nft_egress_output_rule(table, match_args, ct_mark, up_chain))
+        return false;
+    if (down < 1)
+        return true;
+    if (!nft_ensure_speed_egress_input(table))
+        return false;
+    return nft_add_rule(table, "speed_egress_in", [
+        "ct", "mark", as_string(ct_mark), "counter", "jump", section_speed_chain(section, "down")
+    ]);
+}
+
+function nft_install_egress_limits(table, outbound_mark, zapret_route_mark_base, zapret2_route_mark_base) {
+    let byedpi_down = 0;
+    let byedpi_up = 0;
+    let byedpi_used = false;
+    let outbound_mask = as_string(outbound_mark);
+    for (let section in uci_sections("section")) {
+        if (!bool_option(section, "enabled", true) || section_speed_egress(section) < 1)
+            continue;
+        let action = section_action(section);
+        if (action == "byedpi") {
+            byedpi_used = true;
+            let down = section_speed_down(section);
+            let up = section_speed_up(section);
+            if (down > 0 && (byedpi_down < 1 || down < byedpi_down))
+                byedpi_down = down;
+            if (up > 0 && (byedpi_up < 1 || up < byedpi_up))
+                byedpi_up = up;
+            continue;
+        }
+        if (action == "zapret" || action == "zapret2") {
+            let index = 0;
+            for (let candidate in uci_sections("section")) {
+                if (!bool_option(candidate, "enabled", true) || section_action(candidate) != action)
+                    continue;
+                index++;
+                if (as_string(candidate[".name"]) == as_string(section[".name"]))
+                    break;
+            }
+            let mark_hex = nft_provider_mark_hex(action == "zapret2" ? zapret2_route_mark_base : zapret_route_mark_base, index);
+            if (mark_hex == "")
+                continue;
+            if (!nft_install_one_egress(table, section, [ "meta", "mark", mark_hex ], section_speed_mark(section)))
+                log_debug("nftables egress speed limit failed for " + as_string(section[".name"]));
+            continue;
+        }
+        if (outbound_mask == "")
+            continue;
+        let hash = as_string(section_speed_mark(section));
+        if (!nft_install_one_egress(table, section, [
+            "meta", "mark", "&", outbound_mask, "==", outbound_mask,
+            "meta", "mark", "&", "0xfff", "==", hash
+        ], section_speed_mark(section)))
+            log_debug("nftables egress speed limit failed for " + as_string(section[".name"]));
+    }
+    if (!byedpi_used)
+        return true;
+    let shared = { ".name": "allbyedpi" };
+    let mark = byedpi_egress_mark();
+    if (byedpi_up < 1 && byedpi_down < 1)
+        return true;
+    if (byedpi_up > 0 && !nft_install_direction_chain(table, shared, "up", byedpi_up))
+        return false;
+    if (byedpi_down > 0 && !nft_install_direction_chain(table, shared, "down", byedpi_down))
+        return false;
+    let up_chain = byedpi_up > 0 ? section_speed_chain(shared, "up") : "";
+    if (!nft_ensure_speed_egress_output(table))
+        return false;
+    let mark_number = parse_mark_number(mark);
+    if (mark_number == null)
+        return false;
+    let flagged = sprintf("0x%08x", mark_number + 0x00800000);
+    // cgroupv2 has already set the mark. Flag this packet so the classid
+    // rule below does not count it a second time. The flag is per packet.
+    let marked = [ "meta", "mark", "&", mark, "==", mark, "meta", "mark", "set", flagged, "ct", "mark", "set", "4096", "counter" ];
+    if (up_chain != "")
+        append_array(marked, [ "jump", up_chain ]);
+    let classic = [ "meta", "cgroup", mark, "meta", "mark", "&", "0x00800000", "!=", "0x00800000", "ct", "mark", "set", "4096", "counter" ];
+    if (up_chain != "")
+        append_array(classic, [ "jump", up_chain ]);
+    if (!nft_add_rule(table, "speed_egress_out", marked) || !nft_add_rule(table, "speed_egress_out", classic))
+        return false;
+    if (byedpi_down < 1)
+        return true;
+    if (!nft_ensure_speed_egress_input(table))
+        return false;
+    return nft_add_rule(table, "speed_egress_in", [
+        "ct", "mark", "4096", "counter", "jump", section_speed_chain(shared, "down")
+    ]);
+}
+
 function nft_create_full_runtime_from_uci(rt_table, table, localv4_set, common_set, port_set, ip_port_set, interface_set, fakeip_mark, outbound_mark, fakeip_range, tproxy_port, zapret_bin, zapret_route_mark_base, zapret_queue_base, zapret_desync_mark, zapret_desync_mark_postnat, zapret2_bin, zapret2_route_mark_base, zapret2_queue_base, zapret2_desync_mark, zapret2_desync_mark_postnat, localv6_set, common6_set, ip_port6_set, fakeip6_range, tproxy6_address) {
     log_debug("Building nftables runtime model");
     let intercept = router_output_intercept_enabled(uci_settings());
@@ -2215,6 +2366,7 @@ function nft_create_full_runtime_from_uci(rt_table, table, localv4_set, common_s
             log_debug("nftables output TPROXY rules skipped");
     }
     device_route.install_from_file();
+    nft_install_egress_limits(table, outbound_mark, zapret_route_mark_base, zapret2_route_mark_base);
     return true;
 }
 
@@ -2263,7 +2415,7 @@ function nft_enable_router_output_intercept(table, localv4_set, outbound_mark, e
         return false;
     if (arg_bool(exclude_ntp) && !nft_add_rule(table, "output_redirect", [ "udp", "dport", "123", "return" ]))
         return false;
-    if (outbound_mark != "" && !nft_add_rule(table, "output_redirect", [ "meta", "mark", outbound_mark, "return" ]))
+    if (outbound_mark != "" && !nft_add_rule(table, "output_redirect", [ "meta", "mark", "&", outbound_mark, "==", outbound_mark, "return" ]))
         return false;
     if (!nft_add_rule(table, "output_redirect", [ "meta", "mark", "&", byedpi_egress_mark(), "==", byedpi_egress_mark(), "counter", "return" ]))
         return false;
