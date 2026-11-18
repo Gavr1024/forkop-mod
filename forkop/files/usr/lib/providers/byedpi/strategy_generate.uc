@@ -188,8 +188,21 @@ function build_group() {
     return oob_group();
 }
 
+function group_fits(group, used) {
+    let local = {};
+    for (let token in group) {
+        let key = position_key(token);
+        if (key != "" && (used[key] || local[key]))
+            return false;
+        if (key != "")
+            local[key] = true;
+    }
+    return true;
+}
+
 function one_strategy() {
     let tokens = [];
+    let used = {};
     if (rng_int(100) < 40) {
         push(tokens, "-n");
         push(tokens, "{sni}");
@@ -197,10 +210,23 @@ function one_strategy() {
     }
     let groups = between(1, 3);
     for (let number = 0; number < groups; number++) {
-        if (number > 0 && rng_int(100) < 50)
+        let group = build_group();
+        let split = number > 0 && rng_int(100) < 50;
+        if (number > 0 && !split && !group_fits(group, used)) {
+            split = true;
+            for (let attempt = 0; attempt < 6 && !group_fits(group, {}); attempt++)
+                group = build_group();
+        }
+        if (split) {
             push(tokens, pick(AUTO));
-        for (let token in build_group())
+            used = {};
+        }
+        for (let token in group) {
             push(tokens, token);
+            let key = position_key(token);
+            if (key != "")
+                used[key] = true;
+        }
     }
     return join(" ", tokens);
 }

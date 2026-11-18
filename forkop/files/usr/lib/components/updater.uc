@@ -20,6 +20,10 @@ function read_json_file(path) {
 }
 
 function read_stdin() {
+    if (fs.stdin) {
+        let data = fs.stdin.read("all");
+        return data == null ? "" : data;
+    }
     let input = fs.open("/dev/stdin", "r");
     if (!input)
         return "";

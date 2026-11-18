@@ -141,7 +141,9 @@ grep -Fq 'dependsOnRoutingAction(domainIpListsOption);' <<<"$create_section" ||
   fail "routing actions must use their own domain and subnet list copy"
 grep -Fq 'dnsDomainListsOption.depends("action", "dns");' <<<"$create_section" ||
   fail "DNS actions must use their own domain-only list copy"
-[[ "$(grep -Fc 'writeListOption(section_id, "domain_ip_lists", value);' <<<"$create_section")" -eq 2 ]] ||
+[[ "$(grep -Fc 'writeDomainIpLists(section_id, value, user);' <<<"$create_section")" -eq 2 ]] ||
+  fail "both list views must write the shared domain_ip_lists option"
+grep -Fq 'writeListOption(section_id, "domain_ip_lists"' "$SECTION_JS" ||
   fail "both list views must write the shared domain_ip_lists option"
 grep -Fq 'Add URLs or local paths to .srs / .json lists. Subnets are ignored by default.' <<<"$create_section" ||
   fail "routing rule-set copy must explain the default subnet behavior"

@@ -642,6 +642,8 @@ sing-box
 [ ]
 [rule.proxy1.outbound_jsons]
 
+[rule.proxy1.xdrive_outbounds]
+
 [rule.proxy1.legacy_interface]
 
 [rule.proxy1.legacy_outbound_json]
@@ -759,6 +761,8 @@ sing-box
 [rule.out1.masque]
 [ ]
 [rule.out1.outbound_jsons]
+
+[rule.out1.xdrive_outbounds]
 
 [rule.out1.legacy_interface]
 
@@ -901,6 +905,8 @@ sing-box
 [rule.vpn1.masque]
 [ ]
 [rule.vpn1.outbound_jsons]
+
+[rule.vpn1.xdrive_outbounds]
 
 [rule.vpn1.legacy_interface]
 wg0

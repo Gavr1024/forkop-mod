@@ -403,12 +403,12 @@ assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\t
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_wide_proxy_subnets\tct\tmark\tset\t1741\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "proxy priority capture rule"
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_wide_proxy_up\t{ }' "legacy limit still builds an upload chain"
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_wide_proxy_down\t{ }' "legacy limit still builds a download chain"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_wide_proxy_up\tlimit\trate\tover\t1250 kbytes/second\tburst\t1250 kbytes\tdrop' "legacy upload ceiling"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_wide_proxy_down\tlimit\trate\tover\t1250 kbytes/second\tburst\t1250 kbytes\tdrop' "legacy download ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_wide_proxy_up\tlimit\trate\tover\t1250 kbytes/second\tburst\t1250 kbytes\tcounter\tdrop' "legacy upload ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_wide_proxy_down\tlimit\trate\tover\t1250 kbytes/second\tburst\t1250 kbytes\tcounter\tdrop' "legacy download ceiling"
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_capped_up\t{ }' "upload speed chain"
 assert_contains "$NFT_LOG" $'nft\tadd\tchain\tinet\tForkopTable\tforkop_lim_capped_down\t{ }' "download speed chain"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_capped_up\tlimit\trate\tover\t625 kbytes/second\tburst\t625 kbytes\tdrop' "upload ceiling"
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_capped_down\tlimit\trate\tover\t2500 kbytes/second\tburst\t2500 kbytes\tdrop' "download ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_capped_up\tlimit\trate\tover\t625 kbytes/second\tburst\t625 kbytes\tcounter\tdrop' "upload ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_capped_down\tlimit\trate\tover\t2500 kbytes/second\tburst\t2500 kbytes\tcounter\tdrop' "download ceiling"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_capped_subnets\tcounter\tjump\tforkop_lim_capped_up' "section speed upload rule"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_capped_subnets\tct\tmark\tset\t1264\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "section speed capture rule"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_post\toifname\t@forkop_interfaces\tct\tmark\t1264\tip\tsaddr\t!=\t@localv4\tcounter\tjump\tforkop_lim_capped_down' "section speed reply rule"
@@ -448,13 +448,13 @@ JSON
 
 : > "$NFT_LOG"
 nft_ucode nft-add-section-priority-rules-fixture "$WORK_DIR/split-speed.json" ForkopTable forkop_interfaces localv4 localv6 0x00100000
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_down_only_down\tlimit\trate\tover\t1000 kbytes/second\tburst\t1000 kbytes\tdrop' "download-only ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_down_only_down\tlimit\trate\tover\t1000 kbytes/second\tburst\t1000 kbytes\tcounter\tdrop' "download-only ceiling"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_down_only_subnets\tct\tmark\tset\t400\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "download-only still marks the connection"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tmangle_post\toifname\t@forkop_interfaces\tct\tmark\t400\tip\tsaddr\t!=\t@localv4\tcounter\tjump\tforkop_lim_down_only_down' "download-only reply rule"
 if grep -Fq 'forkop_lim_down_only_up' "$NFT_LOG"; then
   fail "download-only section must not build an upload chain"
 fi
-assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_up_only_up\tlimit\trate\tover\t375 kbytes/second\tburst\t375 kbytes\tdrop' "upload-only ceiling"
+assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tforkop_lim_up_only_up\tlimit\trate\tover\t375 kbytes/second\tburst\t375 kbytes\tcounter\tdrop' "upload-only ceiling"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_up_only_subnets\tcounter\tjump\tforkop_lim_up_only_up' "upload-only forward rule"
 assert_contains "$NFT_LOG" $'nft\tadd\trule\tinet\tForkopTable\tpriority_rules\tiifname\t@forkop_interfaces\tip\tdaddr\t!=\t@localv4\tip\tdaddr\t@forkop_rule_up_only_subnets\tct\tmark\tset\t121\tmeta\tmark\tset\t0x00100000\tcounter\taccept' "upload-only still marks the connection"
 if grep -Fq 'forkop_lim_up_only_down' "$NFT_LOG"; then

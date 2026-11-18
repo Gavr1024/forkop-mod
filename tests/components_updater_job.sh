@@ -408,6 +408,14 @@ function module_exports() {
 if (sourcepath(1) != null && sourcepath(1) != "")
   return module_exports();
 UCODE
+cat >"$fake_lib/routing/user_lists.uc" <<'UCODE'
+function module_exports() {
+  return {};
+}
+
+if (sourcepath(1) != null && sourcepath(1) != "")
+  return module_exports();
+UCODE
 cat >"$fake_lib/components/action.uc" <<'UCODE'
 #!/usr/bin/env ucode
 if ((ARGV[0] || "") == "component-action") {
