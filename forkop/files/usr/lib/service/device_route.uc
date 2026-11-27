@@ -5,6 +5,7 @@ let core_ip = require("core.ip");
 let uci_core = require("core.uci");
 let connections = require("config.connections");
 let device_pause = require("service.device_pause");
+let engine = require("core.engine");
 
 const ROUTE_FILE = getenv("FORKOP_DEVICE_ROUTE_FILE") || "/var/run/forkop/device-routes.json";
 const JUMP_FILE = getenv("FORKOP_DEVICE_ROUTE_JUMP") || "/var/run/forkop/device-route.jump";
@@ -208,7 +209,8 @@ function nft_ok() {
 function nft_run(args) {
     if (!nft_ok())
         return;
-    system("nft " + args + " >/dev/null 2>&1");
+    // nft arguments are literal. A shell glob would turn [::1]:1605 into a filename.
+    system("set -f; nft " + args + " >/dev/null 2>&1");
 }
 
 function jump_installed() {
@@ -242,6 +244,10 @@ function pin_port(section_name) {
     section_name = trim(section_name);
     if (section_name == "")
         return "";
+    if (!engine.is_xray_primary()) {
+        let spec = engine.singbox_section_pin_spec(section_name);
+        return spec == null ? "" : as_string(spec.port || "");
+    }
     try {
         let specs = require("xray.constants").section_pin_specs();
         for (let spec in specs)
@@ -271,18 +277,38 @@ function chain_text_with_handles(name) {
 
 function first_rule_line(text) {
     let lines = split(as_string(text), "\n");
-    for (let line in lines)
-        if (index(line, "# handle ") >= 0)
-            return line;
+    for (let line in lines) {
+        if (index(line, "# handle ") < 0)
+            continue;
+        if (index(trim(line), "chain ") == 0)
+            continue;
+        return line;
+    }
     return "";
+}
+
+function line_has_jump(line, jump_name) {
+    let needle = "jump " + jump_name;
+    let from = 0;
+    while (from < length(line)) {
+        let at = index(substr(line, from), needle);
+        if (at < 0)
+            return false;
+        at = from + at;
+        let next = at + length(needle);
+        let after = next >= length(line) ? "" : substr(line, next, 1);
+        if (after == "" || after == " " || after == "\t" || after == "#")
+            return true;
+        from = at + length(needle);
+    }
+    return false;
 }
 
 function jump_handles(text, jump_name) {
     let handles = [];
     let lines = split(as_string(text), "\n");
-    let needle = "jump " + jump_name;
     for (let line in lines) {
-        if (index(line, needle) < 0)
+        if (!line_has_jump(line, jump_name))
             continue;
         let pos = index(line, "# handle ");
         if (pos < 0)
@@ -301,7 +327,7 @@ function ensure_front_jump(chain, jump_name) {
     let text = chain_text_with_handles(chain);
     let handles = jump_handles(text, jump_name);
     let first = first_rule_line(text);
-    if (length(handles) == 1 && index(first, "jump " + jump_name) >= 0)
+    if (length(handles) == 1 && line_has_jump(first, jump_name))
         return;
     for (let handle in handles)
         nft_run("delete rule inet " + NFT_TABLE + " " + chain + " handle " + handle);
@@ -322,19 +348,37 @@ function shared_tproxy_port() {
     return "1602";
 }
 
+function fakeip_tproxy_port() {
+    try {
+        let port = require("xray.constants").XRAY_TPROXY_FAKEIP_PORT;
+        if (match(as_string(port), /^[0-9]+$/) != null)
+            return as_string(port);
+    }
+    catch (e) {
+    }
+    return "1605";
+}
+
+function fakeip_dest_range(v6) {
+    try {
+        let constants = require("xray.constants");
+        let range = trim(as_string(v6 ? constants.FAKEIP_INET6_RANGE : constants.FAKEIP_INET4_RANGE));
+        if (range != "")
+            return range;
+    }
+    catch (e) {
+    }
+    return v6 ? "fc00::/18" : "198.18.0.0/15";
+}
+
 function install_jump(force) {
     nft_run("add chain inet " + NFT_TABLE + " forkop_temp");
     nft_run("add chain inet " + NFT_TABLE + " forkop_temp_early");
     nft_run("add chain inet " + NFT_TABLE + " forkop_temp_dns");
     nft_run("add chain inet " + NFT_TABLE + " forkop_temp_proxy");
-    if (force || index(chain_text("mangle"), "jump forkop_temp_early") < 0)
-        nft_run("insert rule inet " + NFT_TABLE + " mangle jump forkop_temp_early");
-    if (force || index(chain_text("priority_rules"), "jump forkop_temp") < 0)
-        nft_run("insert rule inet " + NFT_TABLE + " priority_rules jump forkop_temp");
-    if (force || index(chain_text("dns_redirect"), "jump forkop_temp_dns") < 0)
-        nft_run("insert rule inet " + NFT_TABLE + " dns_redirect jump forkop_temp_dns");
-    // Section pins are inserted at the front and steal by destination address.
-    // The device jump has to be put back in front after every rebuild.
+    ensure_front_jump("mangle", "forkop_temp_early");
+    ensure_front_jump("priority_rules", "forkop_temp");
+    ensure_front_jump("dns_redirect", "forkop_temp_dns");
     ensure_front_jump("proxy", "forkop_temp_proxy");
 }
 
@@ -371,9 +415,23 @@ function add_item_rules(item) {
     nft_run("add rule inet " + NFT_TABLE + " forkop_temp " + family + " saddr " + ip + " " + family + " daddr != " + local_set + " meta l4proto tcp " + shaped + "meta mark set " + FAKEIP_MARK + " counter accept");
     nft_run("add rule inet " + NFT_TABLE + " forkop_temp " + family + " saddr " + ip + " " + family + " daddr != " + local_set + " meta l4proto udp " + shaped + "meta mark set " + FAKEIP_MARK + " counter accept");
     let port = pin_port(item.section);
-    if (match(port, /^[0-9]+$/) == null)
+    let pinned = match(port, /^[0-9]+$/) != null;
+    if (!pinned)
         port = shared_tproxy_port();
-    let target = v6 ? core_ip.format_ipv6_tproxy_target("::1", port) : (":" + port);
+    let override = getenv("FORKOP_DEVICE_ROUTE_PIN");
+    let local_pin = !engine.is_xray_primary() && (override == null || trim(as_string(override)) == "");
+    let target = v6 ? core_ip.format_ipv6_tproxy_target("::1", port) : (local_pin ? ("127.0.0.1:" + port) : (":" + port));
+    // A section pin already owns every packet from the device. Moving only the
+    // service address to :1605 would drop that ownership. Without a pin the
+    // normal door keeps the address, so it goes to the second inbound, which
+    // puts the site name back before the section dials.
+    if (engine.is_xray_primary() && !pinned) {
+        let fake_port = fakeip_tproxy_port();
+        let fake_target = v6 ? core_ip.format_ipv6_tproxy_target("::1", fake_port) : (":" + fake_port);
+        let fake_range = fakeip_dest_range(v6);
+        nft_run("add rule inet " + NFT_TABLE + " forkop_temp_proxy " + family + " saddr " + ip + " " + family + " daddr " + fake_range + " meta l4proto tcp tproxy " + family + " to " + fake_target + " counter accept");
+        nft_run("add rule inet " + NFT_TABLE + " forkop_temp_proxy " + family + " saddr " + ip + " " + family + " daddr " + fake_range + " meta l4proto udp tproxy " + family + " to " + fake_target + " counter accept");
+    }
     nft_run("add rule inet " + NFT_TABLE + " forkop_temp_proxy " + family + " saddr " + ip + " " + family + " daddr != " + local_set + " meta l4proto tcp tproxy " + family + " to " + target + " counter accept");
     nft_run("add rule inet " + NFT_TABLE + " forkop_temp_proxy " + family + " saddr " + ip + " " + family + " daddr != " + local_set + " meta l4proto udp tproxy " + family + " to " + target + " counter accept");
 }
@@ -386,27 +444,6 @@ function apply_nft(items, force_jump) {
     nft_run("flush chain inet " + NFT_TABLE + " forkop_temp_proxy");
     for (let item in items)
         add_item_rules(item);
-}
-
-function stored_items(now) {
-    let kept = [];
-    let changed = false;
-    for (let item in read_state().items) {
-        if (!item_alive(item, now)) {
-            changed = true;
-            continue;
-        }
-        push(kept, public_item(item));
-    }
-    if (changed) {
-        write_state(kept);
-        apply_nft(kept, false);
-    }
-    return kept;
-}
-
-function list_routes() {
-    return { ok: true, items: stored_items(now_time()) };
 }
 
 function tag_present(text, tag) {
@@ -659,16 +696,50 @@ function routes_ready(items) {
     return true;
 }
 
+function singbox_pins_ready(items) {
+    for (let item in items) {
+        if (item.action == "bypass" || item.action == "block")
+            continue;
+        if (match(pin_port(item.section), /^[0-9]+$/) == null)
+            return false;
+    }
+    return true;
+}
+
 function publish(items) {
     let applied = false;
     try {
         apply_nft(items, false);
-        applied = routes_ready(items) && sync_xray_rules(items);
+        if (engine.is_xray_primary())
+            applied = routes_ready(items) && sync_xray_rules(items);
+        else
+            applied = singbox_pins_ready(items);
     }
     catch (e2) {
         applied = false;
     }
     return applied;
+}
+
+function stored_items(now) {
+    let kept = [];
+    let changed = false;
+    for (let item in read_state().items) {
+        if (!item_alive(item, now)) {
+            changed = true;
+            continue;
+        }
+        push(kept, public_item(item));
+    }
+    if (changed) {
+        write_state(kept);
+        publish(kept);
+    }
+    return kept;
+}
+
+function list_routes() {
+    return { ok: true, items: stored_items(now_time()) };
 }
 
 function arm_timer(ip, until, seconds) {

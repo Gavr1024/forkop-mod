@@ -961,7 +961,7 @@ function apply_xdrive_mux(outbound) {
         delete outbound.settings.flow;
     outbound.mux = {
         enabled: true,
-        concurrency: 8
+        concurrency: 128
     };
     return outbound;
 }

@@ -1,4 +1,4 @@
-# Forkop-Mod 1.0.17 patch set
+# Forkop-Mod 1.0.18 patch set
 
 Based on upstream https://github.com/ushan0v/forkop main (1.0.5).
 
@@ -142,7 +142,10 @@ Leftover `route_router_traffic=1` without a section (old checkbox) is treated as
 
 Copy **settings.js, generator.uc, route.uc, constants.uc, nft/apply.uc, lifecycle.uc, state.uc, validator.uc** together and **restart Forkop**, not only Save. Copying nft/lifecycle without generator DNATs to a closed port.
 
-Сборка ipk/apk — в `BUILD.md` (`./build.sh 1.0.17 ./dist`). Версия пакета 1.0.17.
+Сборка ipk/apk — в `BUILD.md` (`./build.sh 1.0.18 ./dist`). Версия пакета 1.0.18. Схема конфига остаётся 1.0.17.
+
+### Temporary full route on Xray
+A section without its own port sends only service addresses (`198.18.0.0/15`, `fc00::/18`) to the FakeIP inbound `:1605`, ahead of the shared door `:1602`. That inbound restores the site name. A section that already has a pin keeps the whole device on that pin, including service addresses. sing-box is unchanged.
 
 ## Manual copy onto an existing 1.0.5 install
 

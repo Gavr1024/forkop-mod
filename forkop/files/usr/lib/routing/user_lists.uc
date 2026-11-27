@@ -135,8 +135,7 @@ function write_text(path, text) {
         return false;
     if (type(result) == "boolean" && !result)
         return false;
-    let prev = int(trim_string(fs.readfile(path + ".rev") || "0"));
-    fs.writefile(path + ".rev", sprintf("%d\n", prev + 1));
+    try { fs.unlink(path + ".rev"); } catch (e) { }
     return true;
 }
 

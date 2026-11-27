@@ -709,9 +709,7 @@ fi
 if grep -Fq '192.0.2.1' "$NFT_LOG"; then
   fail "disabled section should not populate nft"
 fi
-if grep -Fq '192.0.2.2' "$NFT_LOG"; then
-  fail "deferred section should not populate nft"
-fi
+assert_contains "$NFT_LOG" $'nft\tadd\telement\tinet\tForkopTable\tforkop_rule_deferred_ip_ports' "waiting subscription section must still capture its addresses"
 if grep -Fq $'nft\tadd\telement\tinet\tForkopTable\tforkop_rule_ports_with_domain_ports\t{ 8443 }' "$NFT_LOG"; then
   fail "ports with destination matchers should not populate global port set"
 fi

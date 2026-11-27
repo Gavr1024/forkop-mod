@@ -20,6 +20,7 @@ let device_route = require("service.device_route");
 let core_ip = require("core.ip");
 let hostresolve = require("core.hostresolve");
 let engine = require("core.engine");
+let foreign_dns = require("routing.foreign_dns");
 let subscription_share_link = require("subscription.share_link");
 let uci = null;
 let fixture_uci_data = null;
@@ -676,6 +677,20 @@ function base_config(settings, service_address, runtime_context) {
         runtime_generate_unsupported(dns_config.unsupported);
 
     let dns_rules = [];
+    if (!engine.is_xray_primary() && foreign_dns.enabled(settings)) {
+        let blocked = foreign_dns.blocked_names(settings);
+        if (length(blocked) > 0)
+            push(dns_rules, {
+                action: "reject",
+                domain_suffix: blocked,
+                inbound: [
+                    runtime_constants.DNS_INBOUND_TAG,
+                    runtime_constants.SOURCE_DNS_INBOUND_TAG,
+                    runtime_constants.TPROXY_INBOUND_TAG,
+                    runtime_constants.TPROXY_INBOUND6_TAG
+                ]
+            });
+    }
     for (let rule in dns_config.rules)
         push(dns_rules, rule);
     push(dns_rules, { action: "reject", query_type: "HTTPS" });
@@ -4763,26 +4778,21 @@ function openvpn_detour_section(name) {
     return length(found) > 0 ? found[length(found) - 1] : null;
 }
 
-function openvpn_apply_detour(config, section, taken, endpoint, label) {
-    let detour_tag = outbound_detour_tag_for_section(section);
-    if (detour_tag == "")
-        return true;
-    let name = trim(option(section, "outbound_detour_section", ""));
-    let target = openvpn_detour_section(name);
+function cascade_hop_tag(config, taken, target_name) {
+    target_name = trim(as_string(target_name));
+    if (target_name == "")
+        return "";
+    let target = openvpn_detour_section(target_name);
     if (target != null && connections.proxy_core(target) == "xray") {
-        let port = openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
-        if (port <= 0) {
-            openconnect_log("OpenVPN '" + label + "' was not started: cascade SOCKS port is not ready.");
-            return false;
-        }
+        let port = openconnect_port_from_map("/var/run/forkop/xray-ports.json", target_name);
+        if (port <= 0)
+            return null;
         if (type(config.__ovpn_via) != "object" || config.__ovpn_via == null)
             config.__ovpn_via = {};
-        let existing = as_string(config.__ovpn_via[name] || "");
-        if (existing != "") {
-            endpoint.detour = existing;
-            return true;
-        }
-        let via_tag = unique_tag("ovpn-via-" + name, taken);
+        let existing = as_string(config.__ovpn_via[target_name] || "");
+        if (existing != "")
+            return existing;
+        let via_tag = unique_tag("ovpn-via-" + target_name, taken);
         push(config.outbounds, {
             type: "socks",
             tag: via_tag,
@@ -4792,11 +4802,24 @@ function openvpn_apply_detour(config, section, taken, endpoint, label) {
             udp_fragment: true,
             routing_mark: runtime_constants.OUTBOUND_MARK
         });
-        config.__ovpn_via[name] = via_tag;
-        endpoint.detour = via_tag;
-        return true;
+        config.__ovpn_via[target_name] = via_tag;
+        return via_tag;
     }
-    endpoint.detour = detour_tag;
+    return outbound_tag(target_name);
+}
+
+function openvpn_apply_detour(config, section, taken, endpoint, label) {
+    let name = trim(option(section, "outbound_detour_section", ""));
+    if (outbound_detour_tag_for_section(section) == "")
+        return true;
+    let hop = cascade_hop_tag(config, taken, name);
+    if (hop == null) {
+        openconnect_log("OpenVPN '" + label + "' was not started: cascade SOCKS port is not ready.");
+        return false;
+    }
+    if (hop == "")
+        return true;
+    endpoint.detour = hop;
     return true;
 }
 
@@ -5053,11 +5076,16 @@ function add_masque_profiles(config, state, section, taken, selector_tags, urlte
             tag: tag_name,
             system: false,
             name: "masque" + n,
-            use_http2: false,
+            use_http2: bool_option(client, "use_http2", false),
             use_ipv6: !bool_option(client, "ipv4_only", true),
             profile: profile,
             routing_mark: runtime_constants.OUTBOUND_MARK
         };
+        if (bool_option(client, "use_http2", false)) {
+            let server_name = trim(option(client, "server_name", ""));
+            if (server_name != "")
+                endpoint.tls = { server_name: server_name };
+        }
         let port = trim(option(client, "endpoint_port", "443"));
         if (port != "443" && port != "500" && port != "1701" && port != "4500" && port != "4443" && port != "8443" && port != "8095")
             port = "443";
@@ -5086,6 +5114,18 @@ function add_masque_profiles(config, state, section, taken, selector_tags, urlte
             continue;
         if (as_string(endpoint.detour || "") != "" && type(endpoint.profile) == "object")
             endpoint.profile.detour = endpoint.detour;
+        else if (type(endpoint.profile) == "object") {
+            let register_via = trim(option(client, "register_via", ""));
+            if (register_via == section_name)
+                register_via = "";
+            if (register_via != "") {
+                let hop = cascade_hop_tag(config, taken, register_via);
+                if (hop == null || hop == "")
+                    warn("WARP MASQUE '", label, "': registration through '", register_via, "' is not ready, so it stays direct\n");
+                else
+                    endpoint.profile.detour = hop;
+            }
+        }
         taken[tag_name] = true;
         push(config.outbounds, endpoint);
         push(selector_tags, tag_name);
@@ -5432,6 +5472,23 @@ function add_xray_sidecar_outbound(config, section, taken) {
         runtime_generate_unsupported("failed to write section cache for " + section_name);
 }
 
+function subscription_download_pending(section) {
+    let urls = connections.subscription_urls(section);
+    if (length(urls) == 0)
+        return false;
+    let section_name = section[".name"];
+    for (let i = 0; i < length(urls); i++) {
+        if (runtime_subscription.source_cache_is_current(
+            runtime_subscription.source_id(section_name, i + 1),
+            urls[i],
+            connections.subscription_user_agent(section, urls[i]),
+            connections.subscription_hwid(section, urls[i])
+        ))
+            return false;
+    }
+    return true;
+}
+
 function add_connections_outbound(config, section, taken) {
     let section_name = section[".name"];
     let selector_tags = [];
@@ -5455,9 +5512,13 @@ function add_connections_outbound(config, section, taken) {
     add_connection_json_outbounds(config, state, section, taken, selector_tags, urltest_candidate_tags);
 
     if (length(selector_tags) == 0) {
-        if (connections.outbound_excluded_signature(section) == "")
+        let waiting = subscription_download_pending(section);
+        if (connections.outbound_excluded_signature(section) == "" && !waiting)
             runtime_generate_unsupported("connection section has no usable outbounds");
-        let tag_name = outbound_tag(section_name);
+        if (waiting)
+            warn("section '", section_name, "' has no downloaded subscription yet; matching traffic will be blocked until it is downloaded\n");
+        let tag_name = unique_tag(section_name + "-blocked", taken);
+        taken[tag_name] = true;
         push(config.outbounds, { type: "block", tag: tag_name });
         push(selector_tags, tag_name);
     }
@@ -6736,6 +6797,26 @@ function add_fully_routed_ips_rules(config, section) {
     push(config.route.rules, apply_source_exclusions(route_rule, excluded));
 }
 
+function ruleset_subnet_cidrs(reference) {
+    let geodata = null;
+    try {
+        geodata = require("xray.geodata");
+    }
+    catch (e) {
+        return [];
+    }
+    let converted = { ok: false, ips: [] };
+    try {
+        converted = geodata.ruleset_matchers(reference);
+    }
+    catch (e2) {
+        return [];
+    }
+    if (type(converted) != "object" || converted.ok != true || type(converted.ips) != "array")
+        return [];
+    return converted.ips;
+}
+
 function add_combined_route_for_section(config, section) {
     let domains = domain_conditions(section);
     let domain = domains.domain;
@@ -6812,6 +6893,31 @@ function add_combined_route_for_section(config, section) {
             push_split_domain_resolves(config.route.rules, resolve.rule, excluded, section_place[as_string(section[".name"])]);
         }
         push(config.route.rules, apply_source_exclusions(route_rule, excluded));
+    }
+
+    let subnet_ips = [];
+    let seen_subnet = {};
+    for (let reference in connections.rule_sets_with_subnets(section)) {
+        for (let ip in ruleset_subnet_cidrs(reference)) {
+            ip = trim(as_string(ip));
+            if (ip == "" || seen_subnet[ip])
+                continue;
+            seen_subnet[ip] = true;
+            push(subnet_ips, ip);
+        }
+    }
+    if (length(subnet_ips) > 0) {
+        let ip_rule = {
+            action: target.action,
+            inbound: tproxy_inbound_matcher(),
+            ip_cidr: single_or_array(subnet_ips)
+        };
+        if (target.outbound)
+            ip_rule.outbound = target.outbound;
+        if (length(source_ip_cidr) > 0)
+            ip_rule.source_ip_cidr = source_ip_cidr;
+        add_port_matchers(ip_rule, section);
+        push(config.route.rules, apply_source_exclusions(ip_rule, excluded));
     }
 
     let rewrite_ttl = int_option(runtime_settings(), "dns_rewrite_ttl", "60");
@@ -7007,6 +7113,56 @@ function add_route_for_section(config, section) {
         add_combined_route_for_section(config, section);
 }
 
+function add_singbox_section_pins(config, sections) {
+    if (!engine.is_singbox_primary())
+        return;
+    let head = [];
+    for (let spec in engine.singbox_section_pin_specs()) {
+        let section = null;
+        for (let item in sections) {
+            if (as_string(item[".name"]) == spec.name) {
+                section = item;
+                break;
+            }
+        }
+        if (section == null)
+            continue;
+        let target = runtime_route.target(section, outbound_tag(spec.name));
+        if (target.unsupported)
+            continue;
+        push(config.inbounds, {
+            type: "tproxy",
+            tag: spec.inbound_tag,
+            listen: "127.0.0.1",
+            listen_port: int(spec.port),
+            tcp_fast_open: true,
+            udp_fragment: true,
+            udp_timeout: "3m"
+        });
+        push(config.inbounds, {
+            type: "tproxy",
+            tag: spec.inbound6_tag,
+            listen: "::1",
+            listen_port: int(spec.port),
+            tcp_fast_open: true,
+            udp_fragment: true,
+            udp_timeout: "3m"
+        });
+        let rule = {
+            action: target.action,
+            inbound: [ spec.inbound_tag, spec.inbound6_tag ]
+        };
+        if (target.outbound)
+            rule.outbound = target.outbound;
+        push(head, rule);
+    }
+    if (length(head) == 0)
+        return;
+    for (let rule in config.route.rules)
+        push(head, rule);
+    config.route.rules = head;
+}
+
 function prepend_temporary_device_rules(config) {
     let items = [];
     try {
@@ -7078,10 +7234,12 @@ function deferred_section_set(value) {
 }
 
 function enabled_sections(deferred_sections) {
-    let deferred = deferred_section_set(deferred_sections);
+    // A subscription that is not downloaded yet stays in the config. Omitting it
+    // would send its traffic direct. The generator blocks that traffic instead.
+    deferred_sections = as_string(deferred_sections);
     let result = [];
     uci_cursor().foreach(CONFIG_NAME, "section", function(section) {
-        if (section_enabled(section) && !deferred[as_string(section[".name"])])
+        if (section_enabled(section))
             push(result, section);
     });
     return result;
@@ -7298,6 +7456,7 @@ function generate_config(output_path, service_address, mwan3_active, supports_xh
     write_openconnect_probe_ports(config);
     strip_internal_fields(config);
     strip_redirect_inbound_network(config);
+    add_singbox_section_pins(config, sections);
     prepend_temporary_device_rules(config);
     replay_egress_stamps(config);
     if (!write_json_file(output_path, config)) {

@@ -612,7 +612,9 @@ function has_connection_sources(section) {
         length(outbound_jsons(section)) > 0 ||
         length(xdrive_outbounds(section)) > 0 ||
         length(warp_clients(section)) > 0 ||
-        length(masque_clients(section)) > 0;
+        length(masque_clients(section)) > 0 ||
+        length(openconnect_clients(section)) > 0 ||
+        length(openvpn_clients(section)) > 0;
 }
 
 function subscription_url_settings(section, value) {

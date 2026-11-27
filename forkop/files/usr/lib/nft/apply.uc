@@ -10,6 +10,7 @@ let connections = require("config.connections");
 let routing_rulesets = require("routing.rulesets");
 let runtime_constants = require("singbox.constants");
 let engine = require("core.engine");
+let foreign_dns = require("routing.foreign_dns");
 let hostresolve = require("core.hostresolve");
 let xray_constants = require("xray.constants");
 let device_pause = require("service.device_pause");
@@ -1250,6 +1251,65 @@ function xray_list_catch_all_needed() {
     return false;
 }
 
+function nft_reject_lan(table, interface_set, extra) {
+    let args = [ "iifname", "@" + as_string(interface_set) ];
+    for (let part in extra)
+        push(args, part);
+    push(args, "reject");
+    push(args, "with");
+    push(args, "icmpx");
+    push(args, "port-unreachable");
+    return nft_add_rule(table, "mangle", args);
+}
+
+function nft_return_lan(table, interface_set, extra) {
+    let args = [ "iifname", "@" + as_string(interface_set) ];
+    for (let part in extra)
+        push(args, part);
+    push(args, "return");
+    return nft_add_rule(table, "mangle", args);
+}
+
+function nft_install_foreign_dns(table, interface_set) {
+    let settings = uci_settings();
+    if (!foreign_dns.enabled(settings))
+        return true;
+    let blocked4 = foreign_dns.blocked_v4(settings);
+    let blocked6 = foreign_dns.blocked_v6(settings);
+    let allow4 = foreign_dns.allowed_v4(settings);
+    let allow6 = foreign_dns.allowed_v6(settings);
+    if (length(allow4) > 0 && (
+        !nft_create_ipv4_host_set(table, "forkop_foreign_dns_allow4") ||
+        !nft_add_set_elements(table, "forkop_foreign_dns_allow4", join(",", allow4)) ||
+        !nft_return_lan(table, interface_set, [ "ip", "daddr", "@forkop_foreign_dns_allow4", "tcp", "dport", "853" ]) ||
+        !nft_return_lan(table, interface_set, [ "ip", "daddr", "@forkop_foreign_dns_allow4", "udp", "dport", "853" ]) ||
+        !nft_return_lan(table, interface_set, [ "ip", "daddr", "@forkop_foreign_dns_allow4", "tcp", "dport", "443" ]) ||
+        !nft_return_lan(table, interface_set, [ "ip", "daddr", "@forkop_foreign_dns_allow4", "udp", "dport", "443" ])))
+        return false;
+    if (length(allow6) > 0 && (
+        !nft_create_ipv6_host_set(table, "forkop_foreign_dns_allow6") ||
+        !nft_add_set_elements(table, "forkop_foreign_dns_allow6", join(",", allow6)) ||
+        !nft_return_lan(table, interface_set, [ "ip6", "daddr", "@forkop_foreign_dns_allow6", "tcp", "dport", "853" ]) ||
+        !nft_return_lan(table, interface_set, [ "ip6", "daddr", "@forkop_foreign_dns_allow6", "udp", "dport", "853" ]) ||
+        !nft_return_lan(table, interface_set, [ "ip6", "daddr", "@forkop_foreign_dns_allow6", "tcp", "dport", "443" ]) ||
+        !nft_return_lan(table, interface_set, [ "ip6", "daddr", "@forkop_foreign_dns_allow6", "udp", "dport", "443" ])))
+        return false;
+    if (length(blocked4) > 0 && (
+        !nft_create_ipv4_host_set(table, "forkop_foreign_dns4") ||
+        !nft_add_set_elements(table, "forkop_foreign_dns4", join(",", blocked4)) ||
+        !nft_reject_lan(table, interface_set, [ "ip", "daddr", "@forkop_foreign_dns4", "tcp", "dport", "443" ]) ||
+        !nft_reject_lan(table, interface_set, [ "ip", "daddr", "@forkop_foreign_dns4", "udp", "dport", "443" ])))
+        return false;
+    if (length(blocked6) > 0 && (
+        !nft_create_ipv6_host_set(table, "forkop_foreign_dns6") ||
+        !nft_add_set_elements(table, "forkop_foreign_dns6", join(",", blocked6)) ||
+        !nft_reject_lan(table, interface_set, [ "ip6", "daddr", "@forkop_foreign_dns6", "tcp", "dport", "443" ]) ||
+        !nft_reject_lan(table, interface_set, [ "ip6", "daddr", "@forkop_foreign_dns6", "udp", "dport", "443" ])))
+        return false;
+    return nft_reject_lan(table, interface_set, [ "tcp", "dport", "853" ]) &&
+        nft_reject_lan(table, interface_set, [ "udp", "dport", "853" ]);
+}
+
 function xray_disable_quic_needed() {
     if (!engine.is_xray_primary())
         return false;
@@ -1349,6 +1409,9 @@ function nft_create_runtime_base(table, localv4_set, common_set, port_set, ip_po
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "saddr", "@" + PAUSED6_SET, "counter", "return" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip", "daddr", "@" + as_string(localv4_set), "return" ]) ||
         !nft_add_rule(table, "mangle", [ "iifname", "@" + as_string(interface_set), "ip6", "daddr", "@" + as_string(localv6_set), "ip6", "daddr", "!=", fakeip6_range, "return" ]))
+        return false;
+
+    if (!nft_install_foreign_dns(table, interface_set))
         return false;
 
     if (xray_disable_quic_needed()) {
@@ -2708,8 +2771,7 @@ function source_aware_dns_values(sections, deferred_sections, settings) {
     }
 
     for (let section in sections) {
-        if (!bool_option(section, "enabled", true) ||
-            deferred_sections[as_string(section[".name"])])
+        if (!bool_option(section, "enabled", true))
             continue;
 
         let action = section_action(section);
@@ -2869,6 +2931,55 @@ function nft_restore_cached_community_subnets(section, table) {
     return true;
 }
 
+function nft_restore_ruleset_subnets(section, table) {
+    if (!section_needs_priority_sets(section))
+        return true;
+    let references = connections.rule_sets_with_subnets(section);
+    if (length(references) == 0)
+        return true;
+    let geodata;
+    try {
+        geodata = require("xray.geodata");
+    }
+    catch (e) {
+        return true;
+    }
+    let ports = section_rule_ports_csv(section);
+    let sets = section_priority_sets(section);
+    let ips = [];
+    let seen = {};
+    for (let reference in references) {
+        let converted = { ok: false, ips: [] };
+        try {
+            converted = geodata.ruleset_matchers(reference);
+        }
+        catch (e2) {
+            converted = { ok: false, ips: [] };
+        }
+        if (type(converted) != "object" || converted.ok != true)
+            continue;
+        let values = converted.ips;
+        if (type(values) != "array")
+            continue;
+        for (let ip in values) {
+            ip = trim(as_string(ip));
+            if (ip == "" || seen[ip])
+                continue;
+            seen[ip] = true;
+            push(ips, ip);
+        }
+    }
+    if (length(ips) == 0)
+        return true;
+    let csv = join(",", ips);
+    let added = ports != ""
+        ? nft_add_csv_chunks_to_family_sets(csv, table, sets.ip_ports, sets.ip6_ports, "ip-port-from-ip", ports, 5000)
+        : nft_add_csv_chunks_to_family_sets(csv, table, sets.subnets, sets.subnets6, "ips", "", 5000);
+    if (!added)
+        log_debug("ruleset subnet nft import failed for " + as_string(section[".name"]));
+    return added;
+}
+
 function nft_populate_runtime_set_for_section(section, deferred_sections, table, common_set, port_set, ip_port_set, common6_set, ip_port6_set) {
     if (!bool_option(section, "enabled", true))
         return true;
@@ -2884,14 +2995,14 @@ function nft_populate_runtime_set_for_section(section, deferred_sections, table,
     if (section_needs_priority_sets(section) && !nft_add_section_excluded_sources(section, table, 5000))
         return false;
 
-    if (deferred_sections[as_string(section[".name"])])
-        return true;
-
     if (section_needs_priority_sets(section)) {
         if (!nft_add_section_fully_routed_sources(section, table, 5000))
             return false;
 
         if (!nft_restore_cached_community_subnets(section, table))
+            return false;
+
+        if (!nft_restore_ruleset_subnets(section, table))
             return false;
 
         if (!nft_add_resolved_section_domains(section, table))

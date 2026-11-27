@@ -52,6 +52,8 @@ define Package/forkop/postinst
 #!/bin/sh
 
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+mkdir -p /lib/upgrade/keep.d /etc/forkop
+printf '%s\n' '/etc/forkop/' > /lib/upgrade/keep.d/forkop
 FORKOP_LIB=/usr/lib/forkop ucode -L /usr/lib/forkop /usr/lib/forkop/config/migration.uc migrate || exit $$?
 /usr/bin/forkop package_postinst
 endef
@@ -74,6 +76,7 @@ define Package/forkop/install
 
 	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
 	$(INSTALL_DATA) ./files/lib/upgrade/keep.d/forkop $(1)/lib/upgrade/keep.d/forkop
+	$(INSTALL_DATA) ./files/lib/upgrade/zz-forkop.sh $(1)/lib/upgrade/zz-forkop.sh
 
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ./files/usr/bin/forkop $(1)/usr/bin/forkop

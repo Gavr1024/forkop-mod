@@ -481,6 +481,7 @@ function pollListDownload(startedAt, failures) {
 
 let listPreviewToken = "";
 let listPreviewView = "domains";
+let listPreviewQuery = "";
 
 function previewHasSubnets(payload) {
   return Boolean(payload && (payload.has_subnets === true || payload.has_subnets === 1 || payload.has_subnets === "1"));
@@ -494,6 +495,7 @@ function closeListPreview() {
   const token = listPreviewToken;
   listPreviewToken = "";
   listPreviewView = "domains";
+  listPreviewQuery = "";
   if (ui && typeof ui.hideModal === "function") {
     ui.hideModal();
   }
@@ -519,7 +521,9 @@ function showListPreview(payload, fallbackName) {
   const titleName = payload.name || fallbackName || "";
   const view = previewViewName(payload.view || listPreviewView);
   const hasSubnets = previewHasSubnets(payload);
+  const appliedQuery = `${payload.query || ""}`;
   listPreviewView = view;
+  listPreviewQuery = appliedQuery;
   if (ui && typeof ui.hideModal === "function") {
     ui.hideModal();
   }
@@ -534,7 +538,7 @@ function showListPreview(payload, fallbackName) {
             : "",
         click: () => {
           if (view !== mode) {
-            loadListPreviewPage(1, titleName, mode);
+            loadListPreviewPage(1, titleName, mode, listPreviewQuery);
           }
         },
       },
@@ -606,15 +610,44 @@ function showListPreview(payload, fallbackName) {
       _("Close"),
     ),
   );
+  const queryInput = E("input", {
+    type: "search",
+    value: appliedQuery,
+    placeholder: _("Search"),
+    style: "flex:1;min-width:10rem;margin:0;",
+    keydown: (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        loadListPreviewPage(1, titleName, view, event.currentTarget.value);
+      }
+    },
+  });
   const body = [
     E(
-      "pre",
-      {
-        style:
-          "max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;",
-      },
-      payload.text || "",
+      "div",
+      { style: "display:flex;gap:0.4rem;margin:0 0 0.75rem;align-items:center;" },
+      [
+        queryInput,
+        E(
+          "button",
+          {
+            class: "btn cbi-button cbi-button-action",
+            click: () => loadListPreviewPage(1, titleName, view, queryInput.value),
+          },
+          _("Search"),
+        ),
+      ],
     ),
+    appliedQuery && Number(payload.total) === 0
+      ? E("p", { style: "margin:0 0 0.75rem;" }, _("Nothing found in this list"))
+      : E(
+          "pre",
+          {
+            style:
+              "max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;",
+          },
+          payload.text || "",
+        ),
     E("div", { class: "right" }, controls),
   ];
   if (hasSubnets) {
@@ -637,13 +670,15 @@ function readListPreviewResult(result) {
   }
 }
 
-function loadListPreviewPage(page, name, view) {
+function loadListPreviewPage(page, name, view, query) {
   const token = listPreviewToken;
   const nextView = previewViewName(view || listPreviewView);
+  const nextQuery = query == null ? listPreviewQuery : `${query || ""}`.trim();
   if (!token || page < 1 || !ui || typeof ui.showModal !== "function") {
     return;
   }
   listPreviewView = nextView;
+  listPreviewQuery = nextQuery;
   if (typeof ui.hideModal === "function") {
     ui.hideModal();
   }
@@ -655,6 +690,7 @@ function loadListPreviewPage(page, name, view) {
     token,
     String(page),
     nextView,
+    nextQuery,
   ])
     .then((result) => {
       showListPreview(readListPreviewResult(result), name);
@@ -675,6 +711,7 @@ function openListPreview(id, name) {
   }
   listPreviewToken = "";
   listPreviewView = "domains";
+  listPreviewQuery = "";
   ui.showModal(`${_("List contents")}: ${name || id}`, [
     E("p", {}, _("Loading...")),
   ]);
@@ -855,6 +892,18 @@ function dnsDetourText(data) {
   return ` ${_("Queries to that server go through section %s.").format(data.dns_detour)}`;
 }
 
+function appendResolvedDns(sentence, data) {
+  if (!data.dns_label) {
+    return sentence;
+  }
+  if (data.dns_via === "full") {
+    return `${sentence} ${_(
+      "DNS section %s answers every name for this device with %s.",
+    ).format(data.dns_label, dnsServerText(data))}${dnsDetourText(data)}`;
+  }
+  return sentence + routeDnsText(data);
+}
+
 function routeDnsText(data) {
   if (data.dns_mode !== "route") {
     return "";
@@ -899,8 +948,12 @@ function limitSentence(data) {
 
 function lookupSentence(data) {
   const sentence = lookupSentenceMain(data);
+  const ports =
+    data && data.ports && data.status !== "unknown" && data.status !== "none" && data.status !== "bad"
+      ? ` ${_("This match is only for ports %s.").format(data.ports)}`
+      : "";
   const limit = limitSentence(data);
-  return limit ? `${sentence} ${limit}` : sentence;
+  return `${sentence}${ports}${limit ? ` ${limit}` : ""}`;
 }
 
 function lookupSentenceMain(data) {
@@ -909,25 +962,24 @@ function lookupSentenceMain(data) {
   }
   if (data.device) {
     const who = lookupDeviceLabel(data.device);
+    if (data.status === "excluded") {
+      return _(
+        "Device %s is fully excluded in settings. Sections do not see its traffic.",
+      ).format(who);
+    }
     if (data.via === "full" && data.status === "match") {
       if (data.reason_kind === "temporary") {
-        return _(
-          "Device %s is sent through section %s for a limited time, including %s, and goes %s. The section settings stay unchanged.",
-        ).format(who, data.label || data.section_id, data.domain, actionText(data.action));
+        return appendResolvedDns(
+          _(
+            "Device %s is sent through section %s for a limited time, including %s, and goes %s. The section settings stay unchanged.",
+          ).format(who, data.label || data.section_id, data.domain, actionText(data.action)),
+          data,
+        );
       }
       let sentence = _(
         "Device %s goes to section %s, including %s, and is sent %s. This is full routing, so the site list does not matter.",
       ).format(who, data.label || data.section_id, data.domain, actionText(data.action));
-      if (data.dns_label) {
-        sentence +=
-          " " +
-          _("DNS section %s answers every name for this device with %s.").format(
-            data.dns_label,
-            dnsServerText(data),
-          );
-        sentence += dnsDetourText(data);
-      }
-      return sentence;
+      return appendResolvedDns(sentence, data);
     }
     if (data.status === "dns" && data.dns_mode === "real") {
       const sentence =
@@ -975,17 +1027,7 @@ function lookupSentenceMain(data) {
       reasonText(data.reason_kind, data.reason_value),
       actionText(data.action),
     );
-    if (data.dns_via === "full" && data.dns_label) {
-      sentence +=
-        " " +
-        _("DNS section %s answers every name for this device with %s.").format(
-          data.dns_label,
-          dnsServerText(data),
-        );
-      sentence += dnsDetourText(data);
-    } else {
-      sentence += routeDnsText(data);
-    }
+    sentence = appendResolvedDns(sentence, data);
     return sentence;
   }
   if (data.status === "dns" && data.dns_mode === "real") {
@@ -1046,7 +1088,7 @@ function lookupSentenceMain(data) {
         reasonText(data.fallback_reason_kind, data.fallback_reason_value),
       );
   }
-  sentence += routeDnsText(data);
+  sentence = appendResolvedDns(sentence, data);
   return withForced(sentence, data);
 }
 
@@ -1056,6 +1098,7 @@ function renderDomainLookup() {
     { id: "forkop-domain-lookup-result", style: "margin-top:0.6rem" },
     _("Enter a site, for example youtube.com"),
   );
+  let lookupToken = 0;
   const input = E("input", {
     type: "text",
     class: "cbi-input-text",
@@ -1091,10 +1134,14 @@ function renderDomainLookup() {
         const selected = device.getValue();
         const raw = `${Array.isArray(selected) ? selected[0] || "" : selected || ""}`.trim();
         result.textContent = _("Checking…");
+        const token = (lookupToken += 1);
         localDevices
           .loadLocalDeviceChoices()
           .catch(() => ({}))
           .then((choices) => {
+            if (token !== lookupToken) {
+              return null;
+            }
             lookupDeviceNames = choices || {};
             let ip = "";
             if (raw) {
@@ -1108,25 +1155,58 @@ function renderDomainLookup() {
               }
               ip = targets[0];
             }
-            return fs.exec("/usr/bin/forkop", ["lookup_domain", domain, ip]);
+            return fs.exec("/usr/bin/forkop", ["lookup_domain_start", domain, ip]);
           })
           .then((response) => {
-            if (!response) {
+            if (!response || token !== lookupToken) {
               return;
             }
             const text = `${response && response.stdout ? response.stdout : ""}`.trim();
-            if (!text) {
+            let started = null;
+            try {
+              started = JSON.parse(text);
+            } catch (_error) {
+              started = null;
+            }
+            if (!started || !started.id || started.failed) {
               result.textContent = _("Could not check this site");
               return;
             }
-            try {
-              result.textContent = lookupSentence(JSON.parse(text));
-            } catch (_error) {
-              result.textContent = _("Could not check this site");
-            }
+            const poll = () => {
+              fs.exec("/usr/bin/forkop", ["lookup_domain_status", started.id])
+                .then((status) => {
+                  if (token !== lookupToken) {
+                    return;
+                  }
+                  const body = `${status && status.stdout ? status.stdout : ""}`.trim();
+                  let data = null;
+                  try {
+                    data = JSON.parse(body);
+                  } catch (_error) {
+                    data = null;
+                  }
+                  if (!data || data.failed) {
+                    result.textContent = _("Could not check this site");
+                    return;
+                  }
+                  if (data.running) {
+                    window.setTimeout(poll, 1000);
+                    return;
+                  }
+                  result.textContent = lookupSentence(data);
+                })
+                .catch(() => {
+                  if (token === lookupToken) {
+                    result.textContent = _("Could not check this site");
+                  }
+                });
+            };
+            poll();
           })
           .catch(() => {
-            result.textContent = _("Could not check this site");
+            if (token === lookupToken) {
+              result.textContent = _("Could not check this site");
+            }
           });
       },
     },

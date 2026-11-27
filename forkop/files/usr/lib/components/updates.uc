@@ -3119,8 +3119,8 @@ function print_list_cache_show(id) {
     print(sprintf("%J", result), "\n");
 }
 
-function print_list_cache_show_page(token, page, view) {
-    let result = list_cache.preview_page(token, page, view);
+function print_list_cache_show_page(token, page, view, query) {
+    let result = list_cache.preview_page(token, page, view, query);
     if (type(result) != "object")
         result = { ok: false, error: "unreadable" };
     print(sprintf("%J", result), "\n");
@@ -3133,11 +3133,16 @@ function print_list_cache_show_close(token) {
     print(sprintf("%J", result), "\n");
 }
 
+function schedule_service_reload() {
+    let command = "( setsid " + shell_quote(SERVICE_INIT) + " reload >/dev/null 2>&1 & )";
+    return system(command) == 0;
+}
+
 function finish_list_edit(result) {
     if (type(result) != "object")
         result = { ok: false, error: "missing" };
     if (result.ok == true && result.used == true && getenv("FORKOP_USER_LIST_RELOAD") != "0")
-        result.reloaded = command_success_from_args([ SERVICE_INIT, "reload" ]);
+        result.reloaded = schedule_service_reload();
     print(sprintf("%J", result), "\n");
     exit(0);
 }
@@ -3282,7 +3287,7 @@ else if (mode == "list-cache-status")
 else if (mode == "list-cache-show")
     print_list_cache_show(ARGV[1]);
 else if (mode == "list-cache-show-page")
-    print_list_cache_show_page(ARGV[1], ARGV[2], ARGV[3]);
+    print_list_cache_show_page(ARGV[1], ARGV[2], ARGV[3], ARGV[4]);
 else if (mode == "list-cache-show-close")
     print_list_cache_show_close(ARGV[1]);
 else if (mode == "list-cache-persist")

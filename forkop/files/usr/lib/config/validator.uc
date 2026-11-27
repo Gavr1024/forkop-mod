@@ -13,6 +13,7 @@ let core_ip = require("core.ip");
 let rule_config = require("config.rule");
 let connections = require("config.connections");
 let engine = require("core.engine");
+let foreign_dns = require("routing.foreign_dns");
 
 const CONFIG_NAME = getenv("FORKOP_CONFIG_NAME") || "forkop";
 const DEFAULT_LATENCY_TEST_URL = "https://www.gstatic.com/generate_204";
@@ -1062,6 +1063,9 @@ function validate_dns_settings(settings, sections, context) {
     for (let value in bootstrap_servers)
         if (!dns_server_value_valid(value))
             fail_validation("Invalid Bootstrap DNS server '" + value + "'. Aborted.");
+    for (let value in foreign_dns.entered_exceptions(settings))
+        if (!foreign_dns.name_valid(value))
+            fail_validation("DNS exception '" + value + "' must be a domain name like dns.example.net. Aborted.");
     if (!dns_hostname_valid(option(settings, "dns_certificate_name", "")))
         fail_validation("DNS certificate name must be a domain like dns.example.net. Aborted.");
 

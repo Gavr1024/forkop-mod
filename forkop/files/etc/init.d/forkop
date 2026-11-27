@@ -18,6 +18,11 @@ initd_ucode() {
         ucode -L "$FORKOP_LIB" "$FORKOP_INITD_UC" "$@"
 }
 
+ensure_forkop_backup() {
+    mkdir -p /lib/upgrade/keep.d /etc/forkop 2>/dev/null || return 0
+    printf '%s\n' '/etc/forkop/' > /lib/upgrade/keep.d/forkop 2>/dev/null || return 0
+}
+
 sync_service_triggers() {
     _procd_call sync_service_triggers_payload
 }
@@ -30,6 +35,7 @@ sync_service_triggers_payload() {
 }
 
 start_service() {
+    ensure_forkop_backup
     initd_ucode start-service "$1" "$$"
     FORKOP_LAST_START_STATUS="$?"
     return "$FORKOP_LAST_START_STATUS"

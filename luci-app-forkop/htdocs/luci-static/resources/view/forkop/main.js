@@ -1213,7 +1213,7 @@ async function withTimeout(promise, timeoutMs, operationName, timeoutMessage = _
 
 // src/constants.ts
 var FORKOP_UCI_PACKAGE = "forkop";
-var FORKOP_LUCI_APP_VERSION = "1.0.17";
+var FORKOP_LUCI_APP_VERSION = "1.0.18";
 var FORKOP_ACTION_PROVIDERS_AVAILABILITY_EVENT = "forkop:action-providers-availability";
 var FAKEIP_CHECK_DOMAIN = "fakeip.podkop.fyi";
 var IP_CHECK_DOMAIN = "ip.podkop.fyi";
@@ -2377,7 +2377,7 @@ function renderDefaultState({
       outboundSwitching ? "fkp_dashboard-page__outbound-grid__item--switching" : "",
       latencyProbeClass(latencyProgress, outbound.code)
     ].filter(Boolean).join(" ");
-    const urlTestSelected = String(outbound.urlTestInfo?.selectedName || "").trim();
+    const urlTestSelected = String(outbound.urlTestInfo?.selectedName || outbound.balancerInfo?.selectedName || "").trim();
     const showUrlTestSelected = urlTestSelected !== "" && urlTestSelected !== String(outbound.displayName || "").trim();
     return E(
       "div",
@@ -4501,6 +4501,41 @@ function balancerProbeInterval(section) {
   const interval = String(section?.xray_probe_interval || "").trim();
   return /^[0-9]+(ms|s|m|h)$/.test(interval) ? interval : "3m";
 }
+function parseDurationMs(value, fallbackMs) {
+  const matched = String(value || "").trim().match(/^([0-9]+)(ms|s|m|h)$/);
+  if (!matched) {
+    return fallbackMs;
+  }
+  const amount = Number(matched[1]);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return fallbackMs;
+  }
+  if (matched[2] === "ms") {
+    return amount;
+  }
+  if (matched[2] === "s") {
+    return amount * 1000;
+  }
+  if (matched[2] === "m") {
+    return amount * 60000;
+  }
+  return amount * 3600000;
+}
+function leastLoadGroupCodes(members, maxRtt, expectedRaw) {
+  const maxMs = parseDurationMs(maxRtt, 1000);
+  const ranked = members.filter((member) => Number(member?.latency) > 0).slice().sort((left, right) => {
+    const diff = Number(left.latency) - Number(right.latency);
+    if (diff !== 0) {
+      return diff;
+    }
+    return String(left.code).localeCompare(String(right.code));
+  });
+  if (maxMs <= 0) {
+    const expected = Math.max(1, Math.min(16, parseInt(expectedRaw, 10) || 1));
+    return ranked.slice(0, expected).map((member) => member.code);
+  }
+  return ranked.filter((member) => Number(member.latency) < maxMs).map((member) => member.code);
+}
 function buildBalancerInfo({
   code,
   displayName,
@@ -4545,6 +4580,13 @@ function buildBalancerInfo({
   const maxRtt = String(section?.xray_leastload_max_rtt || "").trim();
   const tolerance = String(section?.xray_leastload_tolerance || "").trim();
   const expected = String(section?.xray_leastload_expected || "").trim();
+  const maxRttValue = maxRtt || "1s";
+  if (kind === "leastLoad") {
+    const groupCodes = new Set(leastLoadGroupCodes(outbounds, maxRttValue, expected || "1"));
+    outbounds.forEach((member) => {
+      member.inGroup = groupCodes.has(member.code);
+    });
+  }
   return {
     kind,
     code,
@@ -4554,7 +4596,7 @@ function buildBalancerInfo({
     url: balancerProbeUrl(section),
     interval: balancerProbeInterval(section),
     expected: kind === "leastLoad" ? expected || "1" : void 0,
-    maxRtt: kind === "leastLoad" ? maxRtt || "1s" : void 0,
+    maxRtt: kind === "leastLoad" ? maxRttValue : void 0,
     tolerance: kind === "leastLoad" ? tolerance || "0.5" : void 0,
     outbounds
   };
@@ -8806,7 +8848,8 @@ function handleShowUrlTestInfo(outbound) {
     renderUrlTestInfoModal(outbound)
   );
 }
-function renderBalancerMemberRows(info) {
+function renderBalancerMemberRows(info, emptyText, options) {
+  const showGroupMark = options?.showGroupMark !== false;
   return info.outbounds.length ? info.outbounds.map(
     (member) => E(
       "div",
@@ -8827,6 +8870,13 @@ function renderBalancerMemberRows(info) {
                 "span",
                 { class: "fkp_dashboard-page__urltest-details__row-type" },
                 member.type
+              )
+            ] : [],
+            ...member.inGroup && showGroupMark ? [
+              E(
+                "span",
+                { class: "fkp_dashboard-page__urltest-details__row-type" },
+                _("In group")
               )
             ] : []
           ]
@@ -8854,7 +8904,7 @@ function renderBalancerMemberRows(info) {
     E(
       "div",
       { class: "fkp_dashboard-page__urltest-details__empty" },
-      _("Node list is empty")
+      emptyText || _("Node list is empty")
     )
   ];
 }
@@ -8865,7 +8915,7 @@ function renderBalancerInfoModal(outbound) {
   }
   const fields = [
     {
-      label: _("Selected"),
+      label: info.kind === "leastLoad" ? _("Last connection") : _("Selected"),
       children: [renderUrlTestSelectedValue(info)]
     },
     { label: _("Probe address"), children: [renderDetailsUrl(info.url)] },
@@ -8892,9 +8942,38 @@ function renderBalancerInfoModal(outbound) {
       )
     ),
     E("div", { class: "fkp_dashboard-page__urltest-details__outbounds" }, [
+      ...info.kind === "leastLoad" ? [
+        E(
+          "div",
+          { class: "fkp_dashboard-page__urltest-details__outbounds-title" },
+          _("Least load group")
+        ),
+        E(
+          "div",
+          { class: "fkp_dashboard-page__urltest-details__group-note" },
+          parseDurationMs(info.maxRtt, 1000) <= 0
+            ? _("With a zero max RTT, only the fastest servers up to the group size are used.")
+            : _("Every server faster than the max RTT. The group size does not remove faster servers.")
+        ),
+        E(
+          "div",
+          { class: "fkp_dashboard-page__urltest-details__table" },
+          renderBalancerMemberRows(
+            { outbounds: info.outbounds.filter((member) => member.inGroup) },
+            info.outbounds.some((member) => Number(member.latency) > 0)
+              ? _("No server is inside the delay limit yet")
+              : _("Servers have not been checked yet"),
+            { showGroupMark: false }
+          )
+        )
+      ] : [],
       E(
         "div",
-        { class: "fkp_dashboard-page__urltest-details__outbounds-title" },
+        {
+          class: info.kind === "leastLoad"
+            ? "fkp_dashboard-page__urltest-details__outbounds-title fkp_dashboard-page__urltest-details__outbounds-title--follow"
+            : "fkp_dashboard-page__urltest-details__outbounds-title"
+        },
         _("Nodes")
       ),
       E(
@@ -10423,6 +10502,17 @@ var styles = `
 .fkp_dashboard-page__urltest-details__outbounds-title {
     margin-bottom: 8px;
     font-weight: 600;
+}
+
+.fkp_dashboard-page__urltest-details__group-note {
+    margin: -4px 0 8px;
+    color: var(--text-color-medium, #666);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.fkp_dashboard-page__urltest-details__outbounds-title--follow {
+    margin-top: 14px;
 }
 
 .fkp_dashboard-page__urltest-details__table {

@@ -789,6 +789,52 @@ function createSettingsContent(section, capabilities) {
 
   o = section.option(
     form.Flag,
+    "block_foreign_dns",
+    _("Block other DNS"),
+    _(
+      "From devices on the local network, close DNS port 853 and the usual protected DNS servers such as dns.google and cloudflare-dns.com. The router's own DNS is left as it is. Names in the exception list stay reachable.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+
+  o = section.option(
+    form.DynamicList,
+    "block_foreign_dns_except",
+    _("DNS exceptions"),
+    _(
+      "Names to leave alone, for example dns.nextdns.io. A name also covers its subdomains.",
+    ),
+  );
+  o.depends("block_foreign_dns", "1");
+  o.rmempty = true;
+  o.placeholder = "dns.nextdns.io";
+  o.validate = function (_section_id, value) {
+    const items = Array.isArray(value) ? value : value ? [value] : [];
+    for (const item of items) {
+      const name = String(item || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\.$/, "");
+      if (!name || /^[0-9.]+$/.test(name) || name.indexOf(":") >= 0) {
+        if (!name) {
+          continue;
+        }
+        return _("Exception must be a domain name like dns.example.net.");
+      }
+      if (
+        !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+          name,
+        )
+      ) {
+        return _("Exception must be a domain name like dns.example.net.");
+      }
+    }
+    return true;
+  };
+
+  o = section.option(
+    form.Flag,
     "ipv6_lan_relay",
     _("Share the provider IPv6"),
     _(

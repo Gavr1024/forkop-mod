@@ -165,7 +165,7 @@ for (const [key, engine] of [
   }
 }
 
-for (const key of ["disable_quic", "log_level", "exclude_bittorrent", "dns_strategy", "dns_rewrite_ttl", "config_path", "cache_path"]) {
+for (const key of ["disable_quic", "block_foreign_dns", "block_foreign_dns_except", "log_level", "exclude_bittorrent", "dns_strategy", "dns_rewrite_ttl", "config_path", "cache_path"]) {
   const at = settings.indexOf('"' + key + '"');
   if (at < 0) throw new Error("missing settings option " + key);
   const window = settings.slice(at, at + 700);

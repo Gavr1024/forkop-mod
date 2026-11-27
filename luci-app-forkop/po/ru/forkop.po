@@ -821,6 +821,9 @@ msgstr "Для %s секция DNS %s отдаёт для %s подставно�
 msgid "For %s, no section takes %s. It goes outside the rules."
 msgstr "Для %s ни одна секция не забирает %s. Он идёт мимо правил."
 
+msgid "Device %s is fully excluded in settings. Sections do not see its traffic."
+msgstr "Устройство %s полностью исключено в настройках. Секции его трафик не видят."
+
 msgid "For %s, section %s is higher than the others, but %s. Until that is fixed, the result is unknown."
 msgstr "Для %s секция %s выше остальных, но %s. Пока это не исправлено, ответ неизвестен."
 
@@ -880,6 +883,9 @@ msgstr "Секция %s заберёт %s из‑за %s и отправит е�
 
 msgid "This match is only for devices selected in that section."
 msgstr "Это только для устройств, выбранных в этой секции."
+
+msgid "This match is only for ports %s."
+msgstr "Это только для портов %s."
 
 msgid "Other devices go to %s because of %s."
 msgstr "Остальные устройства идут в %s из‑за %s."
@@ -1141,6 +1147,21 @@ msgstr "Отключить QUIC"
 
 msgid "Disable the QUIC protocol to improve compatibility or fix issues with video streaming"
 msgstr "Отключить QUIC протокол для улучшения совместимости или исправления видео стриминга"
+
+msgid "Block other DNS"
+msgstr "Не пускать чужой DNS"
+
+msgid "From devices on the local network, close DNS port 853 and the usual protected DNS servers such as dns.google and cloudflare-dns.com. The router's own DNS is left as it is. Names in the exception list stay reachable."
+msgstr "С телефонов и компьютеров закрывает порт 853 и известные защищённые DNS вроде dns.google и cloudflare-dns.com. DNS самого роутера не меняется. Имена из списка исключений остаются доступны."
+
+msgid "DNS exceptions"
+msgstr "Исключения DNS"
+
+msgid "Names to leave alone, for example dns.nextdns.io. A name also covers its subdomains."
+msgstr "Имена, которые не трогать, например dns.nextdns.io. Имя захватывает и свои поддомены."
+
+msgid "Exception must be a domain name like dns.example.net."
+msgstr "Исключение должно быть именем вроде dns.example.net."
 
 msgid "Disabled"
 msgstr "Отключено"
@@ -2084,6 +2105,9 @@ msgstr "Содержимое списка"
 msgid "Could not read this list"
 msgstr "Не удалось прочитать этот список"
 
+msgid "Nothing found in this list"
+msgstr "В этом списке ничего не найдено"
+
 msgid "Showing the first entries. The list is longer."
 msgstr "Показаны первые записи. Список длиннее."
 
@@ -2594,6 +2618,78 @@ msgstr "Сохранить"
 msgid "Save current config"
 msgstr "Сохранить текущий конфиг"
 
+msgid "Reserves keep extra profiles. Auto-switch never selects them. Applying one replaces the live config, turns auto-switch off, and leaves the online and offline slots unchanged."
+msgstr "Резервы хранят дополнительные профили. Автопереключение их не выбирает. Применение заменяет текущие настройки, выключает автопереключение и не меняет онлайн и офлайн слоты."
+
+msgid "Reserve"
+msgstr "Резерв"
+
+msgid "Reserves"
+msgstr "Резервы"
+
+msgid "Show contents"
+msgstr "Состав"
+
+msgid "Hide contents"
+msgstr "Скрыть состав"
+
+msgid "Save name"
+msgstr "Сохранить имя"
+
+msgid "This profile is not used by auto-switch."
+msgstr "Автопереключение этот профиль не использует."
+
+msgid "Manual only"
+msgstr "Только вручную"
+
+msgid "Short name"
+msgstr "Короткое имя"
+
+msgid "Apply this reserve? The live config will be replaced and auto-switch will be turned off. The online and offline slots stay as they are."
+msgstr "Применить этот резерв? Текущие настройки будут заменены, автопереключение выключится. Онлайн и офлайн слоты останутся как есть."
+
+msgid "Reserve name saved"
+msgstr "Имя резерва сохранено"
+
+msgid "Proxy"
+msgstr "Прокси"
+
+msgid "Block"
+msgstr "Блокировка"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "Lists"
+msgstr "Списки"
+
+msgid "Devices"
+msgstr "Устройства"
+
+msgid "Full routing"
+msgstr "Полная маршрутизация"
+
+msgid "Empty reserve"
+msgstr "Резерв пуст"
+
+msgid "No sections"
+msgstr "Секций нет"
+
+msgid "Loading"
+msgstr "Загрузка"
+
+msgid "Showing the first 80 sections."
+msgstr "Показаны первые 80 секций."
+
+msgid "Goes to"
+msgstr "Куда ведёт"
+
+msgid "Subscription"
+msgstr "Подписка"
+
+msgid "With subnets"
+msgstr "С подсетями"
+
 msgid "Save selected lists locally"
 msgstr "Сохранять выбранные списки локально"
 
@@ -2805,7 +2901,7 @@ msgid "Show servers whose names match the expression."
 msgstr "Показывать серверы, имена которых совпадают с выражением."
 
 msgid "Show sing-box config"
-msgstr "Показать sing-box конфигурацию"
+msgstr "Показать конфигурацию sing-box"
 
 msgid "Show Xray config"
 msgstr "Показать конфигурацию Xray"
@@ -3056,8 +3152,8 @@ msgstr "Есть правила использующие Zapret"
 msgid "There are rules using Zapret2"
 msgstr "Есть правила, использующие Zapret2"
 
-msgid "These switch settings are written into the live config and every saved slot at the same time."
-msgstr "Эти параметры переключения записываются и в текущий конфиг, и во все сохранённые слоты сразу."
+msgid "These switch settings are written into the live config and the online and offline slots, not into reserves."
+msgstr "Эти параметры переключения записываются в текущий конфиг и в слоты онлайн и офлайн, но не в резервы."
 
 msgid "This field is required"
 msgstr "Заполните это поле"
@@ -3359,6 +3455,27 @@ msgstr "Детали Least ping"
 msgid "Least load details"
 msgstr "Детали Least load"
 
+msgid "Least load group"
+msgstr "Группа least load"
+
+msgid "Last connection"
+msgstr "Последнее соединение"
+
+msgid "In group"
+msgstr "В группе"
+
+msgid "Every server faster than the max RTT. The group size does not remove faster servers."
+msgstr "Все серверы быстрее максимального RTT. Размер группы не убирает более быстрые."
+
+msgid "No server is inside the delay limit yet"
+msgstr "Пока нет сервера внутри предела задержки"
+
+msgid "Servers have not been checked yet"
+msgstr "Серверы ещё не проверялись"
+
+msgid "With a zero max RTT, only the fastest servers up to the group size are used."
+msgstr "При нулевом максимальном RTT берутся только самые быстрые, не больше размера группы."
+
 msgid "One server or the balancer of another Xray section, used when the rest are dead. Only Xray sections can be selected. Available only with Least ping and Least load."
 msgstr "Один сервер или балансировщик другой секции Xray, если остальные не отвечают. Можно выбрать только секции Xray. Только для Least ping и Least load."
 
@@ -3400,6 +3517,9 @@ msgstr "Используйте IP-адрес для прослушивания"
 
 msgid "Use another section as an intermediate hop to connect to servers in this section. Does not apply to network interfaces or JSON outbounds."
 msgstr "Использовать другую секцию как промежуточный узел подключения к серверам этой секции. Не применяется к сетевым интерфейсам и JSON outbound."
+
+msgid "Use another section as an intermediate hop to connect to servers in this section. Does not apply to network interfaces."
+msgstr "Использовать другую секцию как промежуточный узел подключения к серверам этой секции. Не применяется к сетевым интерфейсам."
 
 msgid "Use CIDR prefixes like 192.168.1.0/24 or 2001:db8::/32"
 msgstr "Используйте CIDR-префиксы, например 192.168.1.0/24 или 2001:db8::/32"
@@ -4147,6 +4267,27 @@ msgstr "пусто"
 
 msgid "Do not connect to the WARP MASQUE server over IPv6."
 msgstr "Не подключаться к серверу WARP MASQUE по IPv6."
+
+msgid "Register through"
+msgstr "Регистрация через"
+
+msgid "Only device registration goes through the selected section. The MASQUE tunnel stays direct. Directly means the router registers itself. Leave the section cascade off: that also sends the tunnel through the other section."
+msgstr "Через выбранную секцию уходит только регистрация устройства. Туннель MASQUE остаётся прямым. «Напрямую» значит, что роутер регистрируется сам. Каскад секции не включайте: он уводит через другую секцию и туннель."
+
+msgid "Directly"
+msgstr "Напрямую"
+
+msgid "HTTP/2"
+msgstr "HTTP/2"
+
+msgid "Connect with HTTP/2 instead of QUIC. From the outside this looks like ordinary HTTPS."
+msgstr "Подключаться по HTTP/2 вместо QUIC. Снаружи это похоже на обычный HTTPS."
+
+msgid "Server name for HTTP/2. Leave empty for consumer-masque.cloudflareclient.com."
+msgstr "Имя сервера для HTTP/2. Пусто — consumer-masque.cloudflareclient.com."
+
+msgid "Enter a domain name, or leave empty"
+msgstr "Введите домен или оставьте пустым"
 
 msgid "Use a different name for each WARP MASQUE profile"
 msgstr "У каждого профиля WARP MASQUE должно быть своё имя"

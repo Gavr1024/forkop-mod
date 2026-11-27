@@ -99,6 +99,52 @@ grep -q 'mode == "run-deferred-bootstrap"' "$CACHE_UC" ||
   fail "subscription/cache.uc must expose deferred bootstrap owner mode"
 grep -Fq 'xray_socks_proxy_url' "$CACHE_UC" ||
   fail "subscription downloads must use Xray section SOCKS when Xray is the routing plane"
+proxy_source="$(sed -n '/^function get_subscription_download_proxy_address(/,/^}/p' "$CACHE_UC")"
+grep -Fq 'xray_section_socks_proxy_url' <<<"$proxy_source" ||
+  fail "subscription download must use only the named Xray entrance"
+if grep -Fq 'xray_socks_proxy_url(' <<<"$proxy_source"; then
+  fail "subscription download must not borrow another Xray entrance"
+fi
+grep -Fq 'download_target_uses_singbox_proxy' <<<"$proxy_source" ||
+  fail "a sing-box download section must keep its own sing-box proxy while Xray is the routing plane"
+grep -Fq 'direct_download_bypass' "$CACHE_UC" ||
+  fail "a later direct subscription retry must bypass the blocked section"
+grep -Fq 'Retrying subscription rule(s) directly' "$CACHE_UC" ||
+  fail "direct subscription rules must be retried without waiting for a proxy"
+grep -Fq "Failed to download subscription for rule '" "$CACHE_UC" ||
+  fail "a missing subscription file must be logged as a download failure"
+grep -Fq 'it will be retried when the network is ready' "$CACHE_UC" ||
+  fail "a missing subscription file must say it will be retried"
+if ! grep -Fq 'No compatible subscription request profile produced valid proxy entries' "$CACHE_UC"; then
+  fail "an invalid downloaded subscription must still report that no profile matched"
+fi
+assert_eq "cdn.example.com 8443" \
+  "$(cache_ucode subscription-url-endpoint 'https://user:secret@cdn.example.com:8443/sub?token=1')" \
+  "subscription endpoint keeps the host and explicit port"
+assert_eq "2001:db8::10 443" \
+  "$(cache_ucode subscription-url-endpoint 'https://[2001:db8::10]/path')" \
+  "subscription endpoint accepts a bracketed IPv6 host"
+assert_eq "1.2.3.4" \
+  "$(cache_ucode lookup-address-token 'Address: 1.2.3.4')" \
+  "lookup address token"
+assert_eq "1.2.3.4" \
+  "$(cache_ucode lookup-address-token 'Address 1: 1.2.3.4 extra')" \
+  "busybox lookup address token"
+assert_eq "77.88.8.8" \
+  "$(cache_ucode lookup-address-token 'Address: 77.88.8.8:53')" \
+  "lookup address token drops an ipv4 port"
+assert_eq "nft -a -e insert rule inet ForkopTable mangle_output ip daddr 1.2.3.4 udp dport 53 meta mark set 0x08000000" \
+  "$(cache_ucode nft-mark-echo-args 1.2.3.4 udp)" \
+  "bootstrap DNS bypass rule"
+assert_eq "nft -a -e insert rule inet ForkopTable mangle_output ip6 daddr 2001:db8::10 meta mark set 0x08000000" \
+  "$(cache_ucode nft-mark-echo-args '2001:db8::10' '')" \
+  "destination bypass rule"
+assert_eq "$(printf '%s\n' \
+  --resolve 'example.com:8443:[2001:db8::1]' \
+  --resolve 'example.com:443:[2001:db8::1]' \
+  --resolve 'example.com:80:[2001:db8::1]')" \
+  "$(cache_ucode curl-resolve-preview example.com 8443 '2001:db8::1')" \
+  "direct retry pins the resolved address, including http and https"
 grep -Fq 'curl_proxy_spec' "$CACHE_UC" ||
   fail "subscription curl must pass socks5h:// as-is, not prefix http://"
 grep -q 'mode == "stop-deferred-bootstrap-worker"' "$CACHE_UC" ||

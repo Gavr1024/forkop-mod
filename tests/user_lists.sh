@@ -19,9 +19,16 @@ FORKOP_UCI_STATE_FILE="$WORKDIR/uci" \
 FORKOP_LIB="$LIB" \
 ucode -L "$LIB" -e '
 let lists = require("routing.user_lists");
+let fs = require("fs");
 let saved = lists.save("", "News", "example.com\n# skip\n1.2.3.0/24\nexample.com\n");
 if (saved.ok != true) {
   warn("save failed\n");
+  exit(1);
+}
+fs.writefile(saved.path + ".rev", "3\n");
+let kept = lists.save(saved.id, "News", "example.com\n1.2.3.0/24\n");
+if (kept.ok != true || fs.stat(saved.path + ".rev") != null) {
+  warn("rev file created\n");
   exit(1);
 }
 let again = lists.read(saved.id);
@@ -49,5 +56,6 @@ if (removed.ok != true) {
   exit(1);
 }
 ' || fail "ucode user lists"
+grep -Fq 'setsid " + shell_quote(SERVICE_INIT) + " reload' "$ROOT/forkop/files/usr/lib/components/updates.uc" || fail "list save must not wait for reload"
 grep -Fq 'https://example.test/new.lst' "$WORKDIR/uci" || fail "section address was not updated"
 echo "user lists checks passed"

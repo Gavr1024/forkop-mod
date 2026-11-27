@@ -69,6 +69,16 @@ require_text "$PO_SRC" "Слоты конфига"
 require_text "$PO_PKG" "Слоты конфига"
 require_text "$PO_SRC" "Включить автопереключение"
 require_text "$PO_PKG" "Включить автопереключение"
+require_text "$SLOTS_UC" "reload_package"
+require_text "$SLOTS_UC" "function preview_slot"
+require_text "$SLOTS_UC" "function set_reserve_label"
+require_text "$BIN" "slot_preview"
+require_text "$BIN" "slot_label"
+require_text "$SLOTS_JS" "data-slot-preview"
+require_text "$SLOTS_JS" "Show contents"
+require_text "$SLOTS_JS" "Apply this reserve?"
+require_text "$PO_SRC" "Состав"
+require_text "$PO_PKG" "Состав"
 
 python3 - "$SLOTS_UC" <<'PY' || fail "ucode binds callee names at definition time; slot functions must not call later functions"
 import re, sys
@@ -137,3 +147,154 @@ require_text "$SLOTS_UC" "start.busy"
 require_text "$SLOTS_UC" "stop.busy"
 require_text "$SLOTS_UC" "FORKOP_SLOT_RESTART"
 require_text "$SLOTS_UC" "sync_cron_only"
+
+if command -v ucode >/dev/null 2>&1; then
+  WORK="$(mktemp -d)"
+  cat >"$WORK/r1" <<'EOF'
+package forkop
+
+config section 'yt'
+	option label 'it'\''s'
+	option enabled '1'
+	option action 'connection'
+	option domain 'youtube.com
+www.youtube.com
+keyword:music
+full:exact.com
+one
+two'
+	option domain_keyword 'legacy-word'
+	list community_lists 'youtube'
+	list rule_set 'https://example.com/a.srs'
+	list rule_set 'https://example.com/c.srs'
+	list rule_set 'https://example.com/d.srs'
+	list rule_set 'https://example.com/e.srs'
+	list rule_set 'https://example.com/f.srs'
+	list rule_set 'https://example.com/g.srs'
+	list rule_set 'https://example.com/h.srs'
+	list rule_set_with_subnets '/etc/forkop/b.srs'
+	list fully_routed_ips '192.168.1.10'
+	option ip_cidr '1.1.1.1
+10.0.0.0/8'
+	list ports '443'
+	list ports '80-90'
+	option proxy_core 'xray'
+	option dns_type 'doh'
+	option dns_server 'https://dns.example/dns-query'
+	option dns_answer 'route'
+	option dns_detour_enabled '1'
+	option dns_detour_section 'off'
+	option xray_fallback_target 'off\t__balancer__'
+	list selector_proxy_links 'vless://uuid-secret@node.example:443?flow=xtls#Name'
+	option password 'hidden'
+	option xray_mux_enabled '1'
+	option xray_finalmask '1'
+	option outbound_detour_enabled '1'
+	option outbound_detour_section 'off'
+	list outbound_jsons '{"tag":"json-a","password":"secret-json"}'
+	list xdrive_outbounds '{"name":"drive-a","refresh_token":"token-secret"}'
+
+config settings 'settings'
+	option slots_ping_host '1.1.1.1'
+
+config section_interface 'if1'
+	option section 'yt'
+	option name 'wan'
+
+config warp 'w1'
+	option section 'yt'
+	option name 'home'
+	option private_key 'secret-key'
+
+config openconnect 'oc1'
+	option section 'yt'
+	option name 'work'
+	option password 'secret-pass'
+
+config openvpn 'ov1'
+	option section 'yt'
+	option name 'office'
+
+config section 'off'
+	option label 'Spare'
+	option enabled '0'
+	option action 'bypass'
+	list domain 'example.com'
+
+config subscription_url 'sub1'
+	option section 'yt'
+	option url 'https://user:token@sub.example/path/secret'
+
+config section 'esc'
+	option action 'connection'
+	option domain 'a.com\nb.com'
+	option mixed_proxy_enabled '1'
+	option resolve_real_ip_for_routing '1'
+	option sort_by_latency '1'
+	option dashboard_filter_mode 'include'
+
+config urltest 'u1'
+	option section 'esc'
+	option name 'fast'
+
+config priority_group 'p1'
+	option section 'esc'
+	option name 'main'
+
+config masque 'm1'
+	option section 'esc'
+	option name 'cloud'
+	option license 'secret-license'
+EOF
+  EXPECT_LABEL="$(printf "it\\047s")"
+  FORKOP_SLOTS_DIR="$WORK" EXPECT_LABEL="$EXPECT_LABEL" ucode -L "$ROOT_DIR/forkop/files/usr/lib" -e '
+let slots = require("config.slots");
+let preview = slots.preview_slot("r1");
+if (preview == null || length(preview.sections) != 3)
+    exit(1);
+let first = preview.sections[0];
+if (first.label != getenv("EXPECT_LABEL"))
+    exit(1);
+if (first.domains[0] != "youtube.com" || first.domains[2] != "keyword:music" || first.domains[3] != "full:exact.com")
+    exit(1);
+if (first.domain_count != 7)
+    exit(1);
+if (first.lists[0] != "youtube" || first.lists[1] != "https://example.com/a.srs" || first.list_count != 8 || length(first.lists) != 8)
+    exit(1);
+if (first.subnet_lists[0] != "/etc/forkop/b.srs" || first.subnet_count != 1)
+    exit(1);
+if (first.core != "xray" || first.dns_type != "doh" || first.dns_server != "dns.example" || first.dns_answer != "route")
+    exit(1);
+if (first.dns_via != "Spare" || first.fallback != "Spare" || first.fallback_tag != "__balancer__")
+    exit(1);
+if (first.servers[0] != "vless node.example:443" || first.subscriptions[0] != "sub.example")
+    exit(1);
+if (first.full[0] != "192.168.1.10")
+    exit(1);
+if (first.ip_count != 2 || first.ips[0] != "1.1.1.1" || first.ips[1] != "10.0.0.0/8")
+    exit(1);
+if (first.port_count != 2 || first.ports[0] != "443" || first.ports[1] != "80-90")
+    exit(1);
+if (first.interfaces[0] != "wan" || first.warp[0] != "home" || first.openconnect[0] != "work" || first.openvpn[0] != "office")
+    exit(1);
+if (first.jsons[0] != "json-a" || first.xdrives[0] != "drive-a" || first.mux != true || first.finalmask != true || first.cascade != "Spare")
+    exit(1);
+if (preview.sections[2].mixed != true || preview.sections[2].realip != true || preview.sections[2].sort != true || preview.sections[2].dashboard != "include")
+    exit(1);
+if (preview.sections[2].urltest[0] != "fast" || preview.sections[2].priority[0] != "main" || preview.sections[2].masque[0] != "cloud")
+    exit(1);
+let dumped = sprintf("%J", preview);
+if (index(dumped, "hidden") >= 0 || index(dumped, "nope") >= 0)
+    exit(1);
+if (index(dumped, "uuid-secret") >= 0 || index(dumped, "token") >= 0 || index(dumped, "flow=xtls") >= 0)
+    exit(1);
+if (index(dumped, "secret-json") >= 0 || index(dumped, "secret-key") >= 0 || index(dumped, "secret-pass") >= 0 || index(dumped, "secret-license") >= 0)
+    exit(1);
+if (preview.sections[1].domains[0] != "example.com" || preview.sections[1].enabled != false)
+    exit(1);
+if (preview.sections[2].domain_count != 2 || preview.sections[2].domains[1] != "b.com" || preview.sections[2].core != "settings")
+    exit(1);
+' || fail "reserve preview must keep wrapped domains and custom lists"
+  rm -rf "$WORK"
+fi
+

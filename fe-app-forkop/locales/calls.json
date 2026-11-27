@@ -5163,8 +5163,8 @@
     ]
   },
   {
-    "call": "These switch settings are written into the live config and every saved slot at the same time.",
-    "key": "These switch settings are written into the live config and every saved slot at the same time.",
+    "call": "These switch settings are written into the live config and the online and offline slots, not into reserves.",
+    "key": "These switch settings are written into the live config and the online and offline slots, not into reserves.",
     "places": [
       "../luci-app-forkop/htdocs/luci-static/resources/view/forkop/slots.js:238"
     ]

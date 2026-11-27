@@ -8,6 +8,7 @@
 
 let slotsBusy = false;
 let slotsSnapshot = null;
+let reservesOpen = null;
 let lastActAt = 0;
 let lastActKey = "";
 
@@ -104,6 +105,59 @@ function slotCard(kind, item, active) {
       <div><dt>${escapeHtml(_("Updated"))}</dt><dd>${escapeHtml(formatTime(item && item.mtime))}</dd></div>
     </dl>
     <div class="fkp-slots__actions">${saveBtn}${applyBtn}</div>
+  </article>`;
+}
+
+function reserveAt(payload, id) {
+  const list = payload && Array.isArray(payload.reserves) ? payload.reserves : [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] && list[i].name === id) return list[i];
+  }
+  return { name: id, saved: false, size: 0, mtime: 0, label: "" };
+}
+
+function reserveCard(item, active) {
+  const id = item && item.name ? item.name : "r1";
+  const saved = Boolean(item && item.saved);
+  const isActive = active === id;
+  const number = id === "r1" ? "1" : id === "r2" ? "2" : "3";
+  const title = item && item.label ? item.label : _("Reserve") + " " + number;
+  const saveBtn = slotButton(
+    `data-slot-save="${id}"${slotsBusy ? " disabled" : ""}`,
+    _("Save current config"),
+    "primary",
+  );
+  const applyBtn = slotButton(
+    `data-slot-apply="${id}"${slotsBusy || !saved ? " disabled" : ""}`,
+    _("Apply now"),
+    "ghost",
+  );
+  const previewBtn = slotButton(
+    `data-slot-preview="${id}"${slotsBusy || !saved ? " disabled" : ""}`,
+    _("Show contents"),
+    "ghost",
+  );
+  const nameBtn = slotButton(
+    `data-slot-rename="${id}" data-slot-label="${escapeHtml((item && item.label) || "")}"${slotsBusy ? " disabled" : ""}`,
+    _("Save name"),
+    "save",
+  );
+  return `<article class="fkp-slots__card ${isActive ? "is-active" : ""} ${saved ? "is-saved" : ""}">
+    <div class="fkp-slots__card-top">
+      <div>
+        <div class="fkp-slots__kicker">${escapeHtml(_("Reserve") + " " + number)}</div>
+        <h3>${escapeHtml(title)}</h3>
+      </div>
+      <span class="fkp-slots__badge ${isActive ? "is-on" : ""}"><span class="fkp-slots__dot ${isActive ? "is-on" : ""}"></span>${escapeHtml(isActive ? _("Slot is active") : _("Manual only"))}</span>
+    </div>
+    <p class="fkp-slots__hint">${escapeHtml(_("This profile is not used by auto-switch."))}</p>
+    <dl class="fkp-slots__meta">
+      <div><dt>${escapeHtml(_("Status"))}</dt><dd>${escapeHtml(saved ? _("Saved") : _("Empty"))}</dd></div>
+      <div><dt>${escapeHtml(_("Size"))}</dt><dd>${escapeHtml(formatBytes(item && item.size))}</dd></div>
+      <div><dt>${escapeHtml(_("Updated"))}</dt><dd>${escapeHtml(formatTime(item && item.mtime))}</dd></div>
+    </dl>
+    <div class="fkp-slots__actions">${nameBtn}${saveBtn}${applyBtn}${previewBtn}</div>
+    <div class="fkp-slots__preview" data-reserve-body="${escapeHtml(id)}"></div>
   </article>`;
 }
 
@@ -399,8 +453,50 @@ function renderSlots(payload) {
       .fkp-slots__radios .fkp-slots__check { margin: 0; }
       .fkp-slots__field--wide { grid-column: 1 / -1; }
       .fkp-slots__switch .fkp-slots__hint { margin: 10px 0; }
+      .fkp-slots__reserve-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 0 0 10px;
+      }
+      .fkp-slots__fold {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 16px;
+        padding: 12px 14px;
+        border: 1px solid var(--fkp-s-line);
+        border-radius: 8px;
+        background: var(--fkp-s-fill);
+        color: inherit;
+        font: inherit;
+        font-weight: 600;
+        text-align: left;
+        cursor: pointer;
+      }
+      .fkp-slots__reserves[hidden] { display: none; }
+      .fkp-slots__reserves { margin-top: 10px; }
+      .fkp-slots__reserves .fkp-slots__lead { margin-top: 0; }
+      .fkp-slots__preview {
+        margin-top: 10px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .fkp-slots__preview article {
+        margin: 0 0 8px;
+        padding-top: 6px;
+        border-top: 1px solid var(--fkp-s-line);
+      }
+      .fkp-slots__preview h4 {
+        margin: 0 0 4px;
+        font-size: 13px;
+      }
+      .fkp-slots__preview p { margin: 0 0 3px; }
       @media (max-width: 960px) {
         .fkp-slots__grid,
+        .fkp-slots__reserve-grid,
         .fkp-slots__form,
         .fkp-slots__meta { grid-template-columns: 1fr; }
         .fkp-slots__switch-head,
@@ -463,17 +559,223 @@ function renderSlots(payload) {
           <p class="fkp-slots__hint">${escapeHtml(_("Worker runs only while Forkop is started and does not spam syslog. Cron keeps checking every minute even if Forkop is stopped; BusyBox logs each run as cron.err."))}</p>
         </div>
       </div>
-      <p class="fkp-slots__hint">${escapeHtml(_("These switch settings are written into the live config and every saved slot at the same time."))}</p>
+      <p class="fkp-slots__hint">${escapeHtml(_("These switch settings are written into the live config and the online and offline slots, not into reserves."))}</p>
       <div class="fkp-slots__actions">
         ${slotButton(`data-slot-configure="1"${slotsBusy ? " disabled" : ""}`, _("Save switch settings"), "save")}
         ${slotButton(`data-slot-probe="1"${slotsBusy ? " disabled" : ""}`, _("Check ping now"), "ghost")}
       </div>
     </section>
+    ${reserveFold(payload)}
   </div>`;
 }
 
+function reserveSavedCount(payload) {
+  let count = 0;
+  ["r1", "r2", "r3"].forEach(function (id) {
+    const item = reserveAt(payload, id);
+    if (item && item.saved) count++;
+  });
+  return count;
+}
+
+function reservesOpenNow(payload) {
+  if (reservesOpen === true || reservesOpen === false) return reservesOpen;
+  const active = payload && payload.active;
+  return active === "r1" || active === "r2" || active === "r3";
+}
+
+function reserveFold(payload) {
+  const open = reservesOpenNow(payload);
+  const saved = reserveSavedCount(payload);
+  const title = _("Reserves") + (saved ? " · " + saved : "");
+  return `<button type="button" class="fkp-slots__fold" data-slot-reserves="1" aria-expanded="${open ? "true" : "false"}" onclick="return window.__forkopSlotsAct(this)">
+    <span>${escapeHtml(title)}</span>
+    <span data-reserve-mark="1">${open ? "–" : "+"}</span>
+  </button>
+  <div class="fkp-slots__reserves" data-reserve-panel="1"${open ? "" : " hidden"}>
+    <p class="fkp-slots__lead">${escapeHtml(_("Reserves keep extra profiles. Auto-switch never selects them. Applying one replaces the live config, turns auto-switch off, and leaves the online and offline slots unchanged."))}</p>
+    <div class="fkp-slots__reserve-grid">
+      ${reserveCard(reserveAt(payload, "r1"), payload.active)}
+      ${reserveCard(reserveAt(payload, "r2"), payload.active)}
+      ${reserveCard(reserveAt(payload, "r3"), payload.active)}
+    </div>
+  </div>`;
+}
+
+function toggleReserves(button) {
+  const root = button && button.closest ? button.closest(".fkp-slots") : null;
+  const panel = root ? root.querySelector("[data-reserve-panel]") : null;
+  if (!panel) return;
+  const open = panel.hasAttribute("hidden");
+  if (open) panel.removeAttribute("hidden");
+  else panel.setAttribute("hidden", "");
+  reservesOpen = open;
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  const mark = button.querySelector("[data-reserve-mark]");
+  if (mark) mark.textContent = open ? "–" : "+";
+}
+
+function actionLabel(action) {
+  if (action === "connection") return _("Proxy");
+  if (action === "bypass") return _("Direct");
+  if (action === "block" || action === "reject") return _("Block");
+  if (action === "dns") return _("DNS");
+  return action || "—";
+}
+
+function previewLine(title, values, count) {
+  const shown = Array.isArray(values) ? values.filter(Boolean) : [];
+  const total = Number(count) > 0 ? Number(count) : shown.length;
+  if (!total) return "";
+  let text = shown.join(", ");
+  if (total > shown.length) text += " +" + (total - shown.length);
+  return `<p><strong>${escapeHtml(title)}:</strong> ${escapeHtml(text)}</p>`;
+}
+
+function dnsAnswerLabel(value) {
+  if (value === "route") return _("Through sections below");
+  if (value === "real") return _("Real address");
+  return "";
+}
+
+function coreLabel(value) {
+  if (value === "xray") return "Xray";
+  if (value === "sing-box") return "sing-box";
+  if (value === "settings") return _("Same as routing engine");
+  return "";
+}
+
+function fallbackLabel(section) {
+  const name = section && section.fallback ? String(section.fallback) : "";
+  const tag = section && section.fallback_tag ? String(section.fallback_tag) : "";
+  if (!name && !tag) return "";
+  if (tag === "__balancer__") {
+    const balancer = _("Section balancer");
+    return name ? name + " — " + balancer : balancer;
+  }
+  if (!tag) return name;
+  return name ? name + " — " + tag : tag;
+}
+
+function dashboardLabel(value) {
+  if (value === "exclude") return _("All except selected");
+  if (value === "include") return _("Only selected");
+  if (value === "mixed") return _("Only selected except exclusions");
+  return "";
+}
+
+function previewText(title, value) {
+  const text = value == null ? "" : String(value);
+  if (!text) return "";
+  return `<p><strong>${escapeHtml(title)}:</strong> ${escapeHtml(text)}</p>`;
+}
+
+function renderReservePreview(data) {
+  if (!data || data.empty) return `<p>${escapeHtml(_("Empty reserve"))}</p>`;
+  const sections = Array.isArray(data.sections) ? data.sections : [];
+  if (!sections.length) return `<p>${escapeHtml(_("No sections"))}</p>`;
+  let html = "";
+  sections.forEach(function (section) {
+    const name = section.label || section.id || "—";
+    const state = section.enabled === false ? " · " + _("Off") : "";
+    html += `<article><h4>${escapeHtml(name + state)}</h4>`;
+    html += `<p>${escapeHtml(actionLabel(section.action))}</p>`;
+    html += previewText(_("Proxy core"), coreLabel(section.core));
+    html += previewText(_("DNS server"), [section.dns_type, section.dns_server].filter(Boolean).join(" "));
+    html += previewText(_("DNS answer"), dnsAnswerLabel(section.dns_answer));
+    html += previewText(_("DNS requests through section"), section.dns_via);
+    html += previewLine(_("Goes to"), section.servers, section.server_count);
+    html += previewLine(_("Subscription"), section.subscriptions, section.subscription_count);
+    html += previewText(_("Fallback server"), fallbackLabel(section));
+    html += previewLine(_("Network Interface"), section.interfaces, section.interfaces && section.interfaces.length);
+    html += previewLine("OpenConnect", section.openconnect, section.openconnect && section.openconnect.length);
+    html += previewLine("OpenVPN", section.openvpn, section.openvpn && section.openvpn.length);
+    html += previewLine("WARP", section.warp, section.warp && section.warp.length);
+    html += previewLine("MASQUE", section.masque, section.masque && section.masque.length);
+    html += previewLine(_("JSON outbound"), section.jsons, section.jsons && section.jsons.length);
+    html += previewLine("XDRIVE", section.xdrives, section.xdrives && section.xdrives.length);
+    html += previewLine("URLTest", section.urltest, section.urltest && section.urltest.length);
+    html += previewLine(_("Priority"), section.priority, section.priority && section.priority.length);
+    html += previewText(_("Cascade connection"), section.cascade);
+    html += previewText(_("Mux"), section.mux ? _("Yes") : "");
+    html += previewText(_("FinalMask"), section.finalmask ? _("Yes") : "");
+    html += previewText(_("Sort by latency"), section.sort ? _("Yes") : "");
+    html += previewText(_("Enable Mixed Proxy"), section.mixed ? _("Yes") : "");
+    html += previewText(_("Resolve real IP for routing"), section.realip ? _("Yes") : "");
+    html += previewText(_("Servers on dashboard"), dashboardLabel(section.dashboard));
+    html += previewLine(_("Domains"), section.domains, section.domain_count);
+    html += previewLine(_("IPs"), section.ips, section.ip_count);
+    html += previewLine(_("Ports"), section.ports, section.port_count);
+    html += previewLine(_("Lists"), section.lists, section.list_count);
+    html += previewLine(_("With subnets"), section.subnet_lists, section.subnet_count);
+    html += previewLine(_("Devices"), section.devices, section.device_count);
+    html += previewLine(_("Excluded"), section.excluded, section.excluded_count);
+    html += previewLine(_("Full routing"), section.full, section.full_count);
+    html += `</article>`;
+  });
+  if (data.truncated) html += `<p>${escapeHtml(_("Showing the first 80 sections."))}</p>`;
+  return html;
+}
+
+function reserveBody(button) {
+  const card = button && button.closest ? button.closest("article") : null;
+  if (!card) return null;
+  return card.querySelector("[data-reserve-body]");
+}
+
+function showReservePreview(button) {
+  const id = button.getAttribute("data-slot-preview");
+  const box = reserveBody(button);
+  if (!id || !box) return;
+  if (box.getAttribute("data-open") === "1") {
+    box.innerHTML = "";
+    box.removeAttribute("data-open");
+    button.textContent = _("Show contents");
+    return;
+  }
+  box.innerHTML = `<p>${escapeHtml(_("Loading"))}</p>`;
+  fs.exec("/usr/bin/forkop", ["slot_preview", id]).then(
+    function (result) {
+      let data = null;
+      try {
+        data = JSON.parse(result && result.stdout ? String(result.stdout) : "");
+      } catch (_error) {
+        data = null;
+      }
+      if (!data) {
+        box.innerHTML = `<p>${escapeHtml(_("Slot action failed"))}</p>`;
+        return;
+      }
+      box.innerHTML = renderReservePreview(data);
+      box.setAttribute("data-open", "1");
+      button.textContent = _("Hide contents");
+    },
+    function () {
+      box.innerHTML = `<p>${escapeHtml(_("Slot action failed"))}</p>`;
+    },
+  );
+}
+
+function renameReserve(button) {
+  const id = button.getAttribute("data-slot-rename");
+  const current = button.getAttribute("data-slot-label") || "";
+  let name = null;
+  try {
+    name = window.prompt(_("Short name"), current);
+  } catch (_error) {
+    name = null;
+  }
+  if (name == null) return;
+  runAction(["slot_label", id, name], _("Reserve name saved"));
+}
+
 function confirmSlotSave(kind) {
-  const slotName = kind === "online" ? _("Online slot") : _("Offline slot");
+  const slotName =
+    kind === "online"
+      ? _("Online slot")
+      : kind === "offline"
+        ? _("Offline slot")
+        : _("Reserve");
   const question = _("Overwrite this slot with the current Forkop config?");
   let ok = false;
   try {
@@ -541,7 +843,10 @@ function closestSlotControl(node) {
       el.hasAttribute("data-slot-save") ||
       el.hasAttribute("data-slot-apply") ||
       el.hasAttribute("data-slot-configure") ||
-      el.hasAttribute("data-slot-probe")
+      el.hasAttribute("data-slot-probe") ||
+      el.hasAttribute("data-slot-preview") ||
+      el.hasAttribute("data-slot-rename") ||
+      el.hasAttribute("data-slot-reserves")
     )) {
       return el;
     }
@@ -556,6 +861,9 @@ function activateSlotControl(el) {
   const key = [
     el.getAttribute("data-slot-save") || "",
     el.getAttribute("data-slot-apply") || "",
+    el.getAttribute("data-slot-preview") || "",
+    el.getAttribute("data-slot-rename") || "",
+    el.hasAttribute("data-slot-reserves") ? "reserves" : "",
     el.hasAttribute("data-slot-configure") ? "cfg" : "",
     el.hasAttribute("data-slot-probe") ? "probe" : "",
   ].join("|");
@@ -563,12 +871,36 @@ function activateSlotControl(el) {
   if (key && key === lastActKey && now - lastActAt < 500) return false;
   lastActAt = now;
   lastActKey = key;
+  if (el.hasAttribute("data-slot-reserves")) {
+    toggleReserves(el);
+    return true;
+  }
   if (el.hasAttribute("data-slot-save")) {
     confirmSlotSave(el.getAttribute("data-slot-save"));
     return true;
   }
   if (el.hasAttribute("data-slot-apply")) {
-    runAction(["slot_apply", el.getAttribute("data-slot-apply")], _("Slot applied. Forkop is reloading in the background."));
+    const kind = el.getAttribute("data-slot-apply");
+    if (kind === "r1" || kind === "r2" || kind === "r3") {
+      let ok = false;
+      try {
+        ok = window.confirm(
+          _("Apply this reserve? The live config will be replaced and auto-switch will be turned off. The online and offline slots stay as they are."),
+        );
+      } catch (_error) {
+        ok = true;
+      }
+      if (!ok) return true;
+    }
+    runAction(["slot_apply", kind], _("Slot applied. Forkop is reloading in the background."));
+    return true;
+  }
+  if (el.hasAttribute("data-slot-preview")) {
+    showReservePreview(el);
+    return true;
+  }
+  if (el.hasAttribute("data-slot-rename")) {
+    renameReserve(el);
     return true;
   }
   if (el.hasAttribute("data-slot-configure")) {

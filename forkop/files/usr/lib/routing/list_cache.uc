@@ -578,6 +578,17 @@ function read_xray_ports() {
     return type(data) == "object" ? data : {};
 }
 
+function xray_section_socks_proxy_url(section_name) {
+    section_name = trim_string(section_name);
+    if (section_name == "")
+        return "";
+    let ports = read_xray_ports();
+    let port = int(ports[section_name] || 0);
+    if (port <= 0)
+        return "";
+    return "socks5h://" + SB_SERVICE_MIXED_INBOUND_ADDRESS + ":" + port;
+}
+
 function xray_socks_proxy_url(section_name) {
     section_name = trim_string(section_name);
     let ports = read_xray_ports();
@@ -892,7 +903,7 @@ function curl_fetch(url, output_path, proxy_address, timeout_seconds) {
     let args = [
         "curl", "-sS", "-L", "--fail", "--retry", "2",
         "--max-time", "" + int(timeout_seconds || 45),
-        "-A", "forkop-list-cache/1.0.17",
+        "-A", "forkop-list-cache/1.0.18",
         "-o", output_path,
         "--url", as_string(url)
     ];
@@ -1500,14 +1511,41 @@ function preview_view_name(view, dir) {
     return "domains";
 }
 
-function preview_page(token, page, view) {
+function preview_query_text(query) {
+    query = replace(trim_string(query), /[\r\n]/g, "");
+    if (length(query) > 200)
+        query = substr(query, 0, 200);
+    return query;
+}
+
+function preview_page(token, page, view, query) {
     let dir = preview_dir(token);
     if (dir == "" || file_size(dir + "/lines.txt") == 0)
         return { ok: false, error: "missing" };
     let has_subnets = preview_has_subnets(dir);
     view = preview_view_name(view, dir);
     let lines_path = view == "subnets" ? dir + "/subnets.txt" : dir + "/lines.txt";
-    let total = count_text_lines(lines_path);
+    if (file_size(lines_path) == 0)
+        return { ok: false, error: "missing" };
+    query = preview_query_text(query);
+    let total = query == "" ? count_text_lines(lines_path) : int(trim_string(capture_command(
+        "grep -F -i -c -e " + shell_quote(query) + " " + shell_quote(lines_path)
+    )));
+    let name = trim_string(fs.readfile(dir + "/name") || "");
+    if (query != "" && total <= 0)
+        return {
+            ok: true,
+            token,
+            name,
+            page: 1,
+            pages: 1,
+            total: 0,
+            page_size: PREVIEW_PAGE_SIZE,
+            view,
+            has_subnets,
+            query,
+            text: ""
+        };
     if (total <= 0)
         return { ok: false, error: "missing" };
     let pages = int((total + PREVIEW_PAGE_SIZE - 1) / PREVIEW_PAGE_SIZE);
@@ -1520,19 +1558,23 @@ function preview_page(token, page, view) {
         page = pages;
     let start = (page - 1) * PREVIEW_PAGE_SIZE + 1;
     let end = page * PREVIEW_PAGE_SIZE;
-    let text = capture_command(
-        "sed -n " + shell_quote(sprintf("%d,%dp", start, end)) + " " + shell_quote(lines_path)
-    );
+    let text = query == ""
+        ? capture_command("sed -n " + shell_quote(sprintf("%d,%dp", start, end)) + " " + shell_quote(lines_path))
+        : capture_command(
+            "grep -F -i -e " + shell_quote(query) + " " + shell_quote(lines_path) +
+            " | sed -n " + shell_quote(sprintf("%d,%dp", start, end))
+        );
     return {
         ok: true,
         token,
-        name: trim_string(fs.readfile(dir + "/name") || ""),
+        name,
         page,
         pages,
         total,
         page_size: PREVIEW_PAGE_SIZE,
         view,
         has_subnets,
+        query,
         text
     };
 }
@@ -1974,6 +2016,7 @@ function module_exports() {
         lists_proxy_address,
         download_proxy_address,
         xray_socks_proxy_url,
+        xray_section_socks_proxy_url,
         curl_proxy_spec,
         status_object,
         section_list_warnings,

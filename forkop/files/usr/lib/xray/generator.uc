@@ -12,6 +12,7 @@ let xray_outbound = require("xray.outbound");
 let xray_servers = require("xray.servers");
 let xray_geodata = require("xray.geodata");
 let engine = require("core.engine");
+let foreign_dns = require("routing.foreign_dns");
 let device_route = require("service.device_route");
 let hostresolve = require("core.hostresolve");
 let sb_constants = require("singbox.constants");
@@ -1057,6 +1058,23 @@ function apply_section_egress_mark(config, section, tags) {
     }
 }
 
+function subscription_download_pending(section) {
+    let urls = connections.subscription_urls(section);
+    if (length(urls) == 0)
+        return false;
+    let section_name = as_string(section[".name"]);
+    for (let i = 0; i < length(urls); i++) {
+        if (runtime_subscription.source_cache_is_current(
+            runtime_subscription.source_id(section_name, i + 1),
+            urls[i],
+            connections.subscription_user_agent(section, urls[i]),
+            connections.subscription_hwid(section, urls[i])
+        ))
+            return false;
+    }
+    return true;
+}
+
 function add_section(config, taken, section, ports, index, xray_sections, connection_sections, cascade, deferred, nodes_map, node_seq, fallback_requests) {
     let section_name = as_string(section[".name"]);
     let tags = [];
@@ -1082,9 +1100,12 @@ function add_section(config, taken, section, ports, index, xray_sections, connec
     }
 
     if (length(tags) == 0) {
-        if (connections.outbound_excluded_signature(section) == "")
+        let waiting = subscription_download_pending(section);
+        if (connections.outbound_excluded_signature(section) == "" && !waiting)
             generate_fail("xray section '" + section_name + "' has no usable outbounds");
-        let tag = unique_tag(section_name + "-excluded", taken);
+        if (waiting)
+            warn("xray: section '" + section_name + "' has no downloaded subscription yet; matching traffic will be blocked until it is downloaded\n");
+        let tag = unique_tag(section_name + (waiting ? "-waiting" : "-excluded"), taken);
         taken[tag] = true;
         push(config.outbounds, { tag: tag, protocol: "blackhole", settings: {} });
         push(tags, tag);
@@ -1308,6 +1329,7 @@ function section_converted_lists(section) {
     let domains = [];
     let ips = [];
     let unmapped = false;
+    let ruleset_refs = [];
     for (let community in connections.community_lists(section)) {
         let converted = { ok: false, domains: [], ips: [] };
         try {
@@ -1325,7 +1347,11 @@ function section_converted_lists(section) {
                 push_unique(ips, value);
         }
     }
-    for (let reference in connections.rule_sets(section)) {
+    for (let reference in connections.rule_sets(section))
+        push(ruleset_refs, reference);
+    for (let reference in connections.rule_sets_with_subnets(section))
+        push(ruleset_refs, reference);
+    for (let reference in ruleset_refs) {
         let converted = { ok: false, domains: [], ips: [] };
         try {
             converted = xray_geodata.ruleset_matchers(reference);
@@ -2205,6 +2231,10 @@ function primary_dns_config(sections) {
         "mask.icloud.com": "127.0.0.1",
         "mask-h2.icloud.com": "127.0.0.1"
     };
+    if (foreign_dns.enabled(settings_section())) {
+        for (let name in foreign_dns.sinkhole_names(settings_section()))
+            hosts[name] = "127.0.0.1";
+    }
     let resolver_hosts = [];
     let lookup_names = {};
     let settings_cert = option(settings_section(), "dns_certificate_name", "");
@@ -2410,6 +2440,214 @@ function section_policy_tproxy_target(section) {
     return null;
 }
 
+function usable_source_token(value) {
+    value = trim(as_string(value));
+    let hash = index(value, "#");
+    if (hash >= 0)
+        value = trim(substr(value, 0, hash));
+    let slash = index(value, "//");
+    if (slash >= 0)
+        value = trim(substr(value, 0, slash));
+    if (match(value, /^[0-9A-Fa-f:.]+(\/[0-9]+)?$/) == null)
+        return "";
+    return value;
+}
+
+function section_source_list(section, key) {
+    let result = [];
+    for (let value in csv_values(section, key, "subnets"))
+        push_unique(result, usable_source_token(value));
+    for (let value in list_values(section, key))
+        push_unique(result, usable_source_token(value));
+    for (let value in list_values(section, key + "_text"))
+        push_unique(result, usable_source_token(value));
+    return result;
+}
+
+function source_list_without(sources, denied) {
+    let skip = {};
+    for (let item in denied)
+        skip[trim(as_string(item))] = true;
+    let result = [];
+    for (let item in sources) {
+        if (skip[trim(as_string(item))])
+            continue;
+        push(result, item);
+    }
+    return result;
+}
+
+function source_host(value) {
+    value = trim(as_string(value));
+    let slash = index(value, "/");
+    if (slash >= 0)
+        value = trim(substr(value, 0, slash));
+    return value;
+}
+
+function source_prefix(value, fallback) {
+    value = trim(as_string(value));
+    let slash = index(value, "/");
+    if (slash < 0)
+        return fallback;
+    let raw = trim(substr(value, slash + 1));
+    if (match(raw, /^[0-9]+$/) == null)
+        return -1;
+    return int(raw);
+}
+
+function ipv4_number(text) {
+    let parts = split(trim(text), ".");
+    if (length(parts) != 4)
+        return -1;
+    let value = 0;
+    for (let part in parts) {
+        if (match(part, /^[0-9]+$/) == null)
+            return -1;
+        let n = int(part);
+        if (n < 0 || n > 255)
+            return -1;
+        value = value * 256 + n;
+    }
+    return value;
+}
+
+function ipv4_in_cidr(ip, rule) {
+    let bits = source_prefix(rule, 32);
+    let host = ipv4_number(ip);
+    let network = ipv4_number(source_host(rule));
+    if (host < 0 || network < 0 || bits < 0 || bits > 32)
+        return false;
+    if (bits == 0)
+        return true;
+    let shift = 32 - bits;
+    return (host >> shift) == (network >> shift);
+}
+
+function hex_value(text) {
+    text = lc(trim(text));
+    if (text == "" || length(text) > 4)
+        return -1;
+    let digits = "0123456789abcdef";
+    let value = 0;
+    let i = 0;
+    while (i < length(text)) {
+        let pos = index(digits, substr(text, i, 1));
+        if (pos < 0)
+            return -1;
+        value = value * 16 + pos;
+        i++;
+    }
+    return value;
+}
+
+function ipv6_hextets(text) {
+    text = lc(trim(text));
+    let zone = index(text, "%");
+    if (zone >= 0)
+        text = substr(text, 0, zone);
+    if (text == "" || index(text, ".") >= 0)
+        return [];
+    let dbl = index(text, "::");
+    let head = [];
+    let tail = [];
+    if (dbl >= 0) {
+        if (index(substr(text, dbl + 2), "::") >= 0)
+            return [];
+        let left = dbl == 0 ? "" : substr(text, 0, dbl);
+        let right = substr(text, dbl + 2);
+        if (left != "")
+            head = split(left, ":");
+        if (right != "")
+            tail = split(right, ":");
+    }
+    else
+        head = split(text, ":");
+    let missing = dbl >= 0 ? 8 - length(head) - length(tail) : 0;
+    if (missing < 0 || (dbl < 0 && length(head) != 8))
+        return [];
+    let out = [];
+    for (let part in head) {
+        let n = hex_value(part);
+        if (n < 0)
+            return [];
+        push(out, n);
+    }
+    let i = 0;
+    while (i < missing) {
+        push(out, 0);
+        i++;
+    }
+    for (let part in tail) {
+        let n = hex_value(part);
+        if (n < 0)
+            return [];
+        push(out, n);
+    }
+    if (length(out) != 8)
+        return [];
+    return out;
+}
+
+function ipv6_in_cidr(ip, rule) {
+    let bits = source_prefix(rule, 128);
+    let host = ipv6_hextets(ip);
+    let network = ipv6_hextets(source_host(rule));
+    if (length(host) != 8 || length(network) != 8 || bits < 0 || bits > 128)
+        return false;
+    let i = 0;
+    while (i < 8) {
+        let take = bits - i * 16;
+        if (take >= 16) {
+            if (host[i] != network[i])
+                return false;
+        }
+        else if (take > 0) {
+            let shift = 16 - take;
+            return (host[i] >> shift) == (network[i] >> shift);
+        }
+        else
+            return true;
+        i++;
+    }
+    return true;
+}
+
+function source_listed(candidate, rules) {
+    candidate = usable_source_token(candidate);
+    if (candidate == "")
+        return false;
+    let host = source_host(candidate);
+    let v6 = index(host, ":") >= 0;
+    for (let rule in rules) {
+        rule = usable_source_token(rule);
+        if (rule == "")
+            continue;
+        let rule_host = source_host(rule);
+        if ((index(rule_host, ":") >= 0) != v6)
+            continue;
+        if (v6) {
+            if (ipv6_in_cidr(host, rule))
+                return true;
+        }
+        else if (ipv4_in_cidr(host, rule))
+            return true;
+    }
+    return false;
+}
+
+function sources_accepted_by(candidates, allow, deny) {
+    let result = [];
+    for (let ip in candidates) {
+        if (source_listed(ip, deny))
+            continue;
+        if (length(allow) > 0 && !source_listed(ip, allow))
+            continue;
+        push_unique(result, ip);
+    }
+    return result;
+}
+
 function apply_section_tproxy_matchers(config, section, target) {
     if (target == null)
         return;
@@ -2421,12 +2659,364 @@ function apply_section_tproxy_matchers(config, section, target) {
         push_tproxy_rule(config, target, { ip: ips });
 }
 
+function matcher_plan(section, target) {
+    if (target == null)
+        return null;
+    let domains = section_domain_matchers(section);
+    let ips = section_ip_matchers(section);
+    if (length(domains) == 0 && length(ips) == 0)
+        return null;
+    return {
+        section: section,
+        target: target,
+        domains: domains,
+        ips: ips,
+        allow: section_source_list(section, "source_ip_cidr"),
+        deny: section_source_list(section, "excluded_source_ips")
+    };
+}
+
+function push_scoped_matcher(config, target, kind, values, sources) {
+    if (length(values) == 0)
+        return;
+    let extra = {};
+    extra[kind] = values;
+    if (sources != null) {
+        if (length(sources) == 0)
+            return;
+        extra.source = sources;
+    }
+    push_tproxy_rule(config, target, extra);
+}
+
+function emit_source_catch(config, target, sources) {
+    if (target == null || length(sources) == 0)
+        return;
+    // Throw this device's temporary DNS addresses away before the catch-all.
+    // Otherwise the section would dial 198.18 and the connection breaks.
+    push_tproxy_rule(config, { outboundTag: xray_constants.BLACKHOLE_TAG }, {
+        source: sources,
+        ip: [ xray_constants.FAKEIP_INET4_RANGE, xray_constants.FAKEIP_INET6_RANGE ]
+    });
+    push_tproxy_rule(config, target, { source: sources });
+}
+
+// A full route that sits at this plan already owns some of the excluded
+// devices. Send those devices there now, so this section's domain rule
+// cannot keep them and they are not forced straight to direct.
+function emit_captured_walls(config, pending, walls, at_plan) {
+    let left = [];
+    for (let ip in pending)
+        push(left, ip);
+    for (let wall in walls) {
+        if (wall.before != at_plan)
+            continue;
+        let taken = [];
+        let kept = [];
+        for (let ip in left) {
+            if (source_listed(ip, wall.sources))
+                push(taken, ip);
+            else
+                push(kept, ip);
+        }
+        emit_source_catch(config, wall.target, taken);
+        left = kept;
+        if (length(left) == 0)
+            return left;
+    }
+    return left;
+}
+
+// only_index emits one plan. later plans stay visible so an excluded device
+// can be copied forward. walls are full routes that already captured a source:
+// the copy must not jump over them to a section below.
+function emit_matcher_plans(config, plans, only_index, walls) {
+    let total = length(plans);
+    let i = 0;
+    let stop = total;
+    if (only_index != null) {
+        i = only_index;
+        stop = only_index + 1;
+        if (i < 0 || i >= total)
+            return;
+    }
+    walls = array_or_empty(walls);
+    while (i < stop) {
+        let plan = plans[i];
+        let deny = plan.deny;
+        if (length(deny) > 0) {
+            let pending = deny;
+            let j = i + 1;
+            while (j <= total && length(pending) > 0) {
+                pending = emit_captured_walls(config, pending, walls, j);
+                if (j >= total || length(pending) == 0)
+                    break;
+                let later = plans[j];
+                let accepted = sources_accepted_by(pending, later.allow, later.deny);
+                if (length(accepted) > 0) {
+                    push_scoped_matcher(config, later.target, "domain", later.domains, accepted);
+                    push_scoped_matcher(config, later.target, "ip", later.ips, accepted);
+                }
+                j++;
+            }
+            let fallback = { outboundTag: plane_fallback_tag() };
+            push_scoped_matcher(config, fallback, "domain", plan.domains, pending);
+            push_scoped_matcher(config, fallback, "ip", plan.ips, pending);
+        }
+        if (length(plan.allow) > 0) {
+            let allow = source_list_without(plan.allow, deny);
+            push_scoped_matcher(config, plan.target, "domain", plan.domains, allow);
+            push_scoped_matcher(config, plan.target, "ip", plan.ips, allow);
+        }
+        else
+            apply_section_tproxy_matchers(config, plan.section, plan.target);
+        i++;
+    }
+}
+
+// One IPv4 address removed from a prefix needs at most 32 pieces
+// (128 for IPv6). Several devices in a wide network need more, so the
+// guard is higher. Past it the original network is kept unchanged.
+const SOURCE_PUNCH_LIMIT = 512;
+
+function copy_words(words) {
+    let out = [];
+    for (let word in words)
+        push(out, word);
+    return out;
+}
+
+function mask_words(words, bits) {
+    let out = copy_words(words);
+    let i = 0;
+    while (i < 8) {
+        let start = i * 16;
+        if (bits <= start)
+            out[i] = 0;
+        else if (bits < start + 16) {
+            let shift = 16 - (bits - start);
+            out[i] = (out[i] >> shift) << shift;
+        }
+        i++;
+    }
+    return out;
+}
+
+function parse_source_prefix(value) {
+    value = usable_source_token(value);
+    if (value == "")
+        return null;
+    let host = source_host(value);
+    let v6 = index(host, ":") >= 0;
+    let maxbits = v6 ? 128 : 32;
+    let bits = source_prefix(value, maxbits);
+    if (bits < 0 || bits > maxbits)
+        return null;
+    if (v6) {
+        let words = ipv6_hextets(host);
+        if (length(words) != 8)
+            return null;
+        return {
+            v6: true,
+            bits: bits,
+            words: mask_words(words, bits)
+        };
+    }
+    let addr = ipv4_number(host);
+    if (addr < 0)
+        return null;
+    if (bits == 0)
+        addr = 0;
+    else
+        addr = (addr >> (32 - bits)) << (32 - bits);
+    return {
+        v6: false,
+        bits: bits,
+        addr: addr
+    };
+}
+
+function prefix_same(a, b, bits) {
+    if (a.v6) {
+        let i = 0;
+        while (i < 8) {
+            let start = i * 16;
+            if (bits <= start)
+                return true;
+            if (bits >= start + 16) {
+                if (a.words[i] != b.words[i])
+                    return false;
+            }
+            else {
+                let shift = 16 - (bits - start);
+                return (a.words[i] >> shift) == (b.words[i] >> shift);
+            }
+            i++;
+        }
+        return true;
+    }
+    if (bits <= 0)
+        return true;
+    if (bits >= 32)
+        return a.addr == b.addr;
+    let shift = 32 - bits;
+    return (a.addr >> shift) == (b.addr >> shift);
+}
+
+function prefix_overlaps(a, b) {
+    if (a.v6 != b.v6)
+        return false;
+    if (a.bits <= b.bits)
+        return prefix_same(a, b, a.bits);
+    return prefix_same(a, b, b.bits);
+}
+
+function prefix_covers(outer, inner) {
+    if (outer.v6 != inner.v6)
+        return false;
+    if (inner.bits < outer.bits)
+        return false;
+    return prefix_same(outer, inner, outer.bits);
+}
+
+function split_source_prefix(base) {
+    if (base.v6) {
+        if (base.bits >= 128)
+            return [];
+        let bit = base.bits;
+        let right_words = copy_words(base.words);
+        let word = int(bit / 16);
+        let offset = bit % 16;
+        right_words[word] = right_words[word] | (1 << (15 - offset));
+        return [
+            { v6: true, bits: bit + 1, words: copy_words(base.words) },
+            { v6: true, bits: bit + 1, words: right_words }
+        ];
+    }
+    if (base.bits >= 32)
+        return [];
+    let child = base.bits + 1;
+    let half = 1 << (32 - child);
+    return [
+        { v6: false, bits: child, addr: base.addr },
+        { v6: false, bits: child, addr: base.addr + half }
+    ];
+}
+
+function format_source_prefix(prefix) {
+    if (prefix.v6) {
+        let text = "";
+        let i = 0;
+        for (let word in prefix.words) {
+            if (i > 0)
+                text = text + ":";
+            text = text + sprintf("%x", word);
+            i++;
+        }
+        if (prefix.bits == 128)
+            return text;
+        return text + "/" + prefix.bits;
+    }
+    let text = ((prefix.addr >> 24) & 255) + "." +
+        ((prefix.addr >> 16) & 255) + "." +
+        ((prefix.addr >> 8) & 255) + "." +
+        (prefix.addr & 255);
+    if (prefix.bits == 32)
+        return text;
+    return text + "/" + prefix.bits;
+}
+
+function append_prefix_minus(pieces, base, hole, limit) {
+    if (!prefix_overlaps(base, hole)) {
+        if (length(pieces) >= limit)
+            return false;
+        push(pieces, base);
+        return true;
+    }
+    if (prefix_covers(hole, base))
+        return true;
+    let children = split_source_prefix(base);
+    if (length(children) != 2) {
+        if (length(pieces) >= limit)
+            return false;
+        push(pieces, base);
+        return true;
+    }
+    if (!append_prefix_minus(pieces, children[0], hole, limit))
+        return false;
+    return append_prefix_minus(pieces, children[1], hole, limit);
+}
+
+// Xray source lists cannot say "this network except these addresses".
+// Exact matches are already removed. A narrower exclusion inside a fully
+// routed network is punched out here. No exclusions, or none inside the
+// network, leaves the original text untouched.
+function sources_punched_by_exclusions(sources, denied) {
+    if (length(denied) == 0 || length(sources) == 0)
+        return sources;
+    let holes = [];
+    for (let item in denied) {
+        let hole = parse_source_prefix(item);
+        if (hole != null)
+            push(holes, hole);
+    }
+    if (length(holes) == 0)
+        return sources;
+    let result = [];
+    for (let source in sources) {
+        let base = parse_source_prefix(source);
+        if (base == null) {
+            push_unique(result, source);
+            continue;
+        }
+        let pieces = [ base ];
+        let failed = false;
+        for (let hole in holes) {
+            if (hole.v6 != base.v6)
+                continue;
+            let next = [];
+            for (let piece in pieces) {
+                if (!append_prefix_minus(next, piece, hole, SOURCE_PUNCH_LIMIT)) {
+                    failed = true;
+                    break;
+                }
+            }
+            if (failed || length(next) > SOURCE_PUNCH_LIMIT) {
+                failed = true;
+                break;
+            }
+            pieces = next;
+        }
+        if (failed) {
+            warn("forkop: fully routed ", source, " was not split: excluding addresses inside it needs more than ", SOURCE_PUNCH_LIMIT, " pieces\n");
+            push_unique(result, source);
+            continue;
+        }
+        if (length(pieces) == 1 && pieces[0].bits == base.bits) {
+            push_unique(result, source);
+            continue;
+        }
+        for (let piece in pieces)
+            push_unique(result, format_source_prefix(piece));
+    }
+    return result;
+}
+
+function section_tproxy_source_list(section) {
+    let sources = [];
+    for (let value in list_values(section, "fully_routed_ips"))
+        push_unique(sources, value);
+    for (let extra in device_route.ips_for(option(section, ".name", "")))
+        push_unique(sources, extra);
+    let denied = section_source_list(section, "excluded_source_ips");
+    sources = source_list_without(sources, denied);
+    return sources_punched_by_exclusions(sources, denied);
+}
+
 function apply_section_tproxy_sources(config, section, target) {
     if (target == null)
         return;
-    let sources = list_values(section, "fully_routed_ips");
-    for (let extra in device_route.ips_for(option(section, ".name", "")))
-        push(sources, extra);
+    let sources = section_tproxy_source_list(section);
     if (length(sources) == 0)
         return;
     // SOCKS into the shared sing-box inbound hides the LAN address, so a
@@ -2435,11 +3025,11 @@ function apply_section_tproxy_sources(config, section, target) {
         let spec = engine.fullroute_sidecar_spec(option(section, ".name", ""));
         if (spec != null) {
             ensure_singbox_fullroute_outbound(config, spec);
-            push_tproxy_rule(config, { outboundTag: spec.outbound_tag }, { source: sources });
+            emit_source_catch(config, { outboundTag: spec.outbound_tag }, sources);
             return;
         }
     }
-    push_tproxy_rule(config, target, { source: sources });
+    emit_source_catch(config, target, sources);
 }
 
 function tproxy_pin_inbound(tag, listen, port) {
@@ -2492,17 +3082,57 @@ function apply_section_resolved_pins(config) {
 
 function apply_primary_tproxy_routes(config, xray_sections) {
     apply_section_resolved_pins(config);
-    for (let section in enabled_sections_any())
-        apply_section_tproxy_matchers(config, section, section_policy_tproxy_target(section));
+    // Sections run in the order they appear in the list. At each section a
+    // fully routed device is taken, service addresses first, and only then
+    // that section's domains. A lower section does not see the device.
+    let queue = [];
+    let saw_connection = false;
+    for (let section in enabled_sections_any()) {
+        let target = section_policy_tproxy_target(section);
+        if (target == null && connections.is_connections_action(option(section, "action", ""))) {
+            saw_connection = true;
+            target = section_tproxy_target(config, section);
+        }
+        if (target != null)
+            push(queue, [ section, target ]);
+    }
+    if (!saw_connection) {
+        for (let section in array_or_empty(xray_sections)) {
+            let name = option(section, ".name", "");
+            if (name == "")
+                continue;
+            let target = section_tproxy_target(config, section);
+            if (target != null)
+                push(queue, [ section, target ]);
+        }
+    }
 
-    let sections = enabled_connection_sections();
-    if (length(sections) == 0)
-        sections = array_or_empty(xray_sections);
-    for (let section in sections) {
-        let name = option(section, ".name", "");
-        if (name == "")
-            continue;
-        apply_section_tproxy_matchers(config, section, section_tproxy_target(config, section));
+    let plans = [];
+    let plan_index = [];
+    let walls = [];
+    for (let item in queue) {
+        let sources = section_tproxy_source_list(item[0]);
+        let plan = matcher_plan(item[0], item[1]);
+        let at = -1;
+        if (plan != null) {
+            at = length(plans);
+            push(plans, plan);
+        }
+        push(plan_index, at);
+        if (length(sources) > 0) {
+            let before = at;
+            if (before < 0)
+                before = length(plans);
+            push(walls, { before: before, sources: sources, target: item[1] });
+        }
+    }
+
+    let i = 0;
+    while (i < length(queue)) {
+        apply_section_tproxy_sources(config, queue[i][0], queue[i][1]);
+        if (plan_index[i] >= 0)
+            emit_matcher_plans(config, plans, plan_index[i], walls);
+        i++;
     }
 
     push(config.routing.rules, {
@@ -2512,14 +3142,6 @@ function apply_primary_tproxy_routes(config, xray_sections) {
         outboundTag: xray_constants.BLACKHOLE_TAG
     });
 
-    for (let section in enabled_sections_any())
-        apply_section_tproxy_sources(config, section, section_policy_tproxy_target(section));
-    for (let section in sections) {
-        let name = option(section, ".name", "");
-        if (name == "")
-            continue;
-        apply_section_tproxy_sources(config, section, section_tproxy_target(config, section));
-    }
     push(config.routing.rules, {
         type: "field",
         inboundTag: tproxy_inbound_tags(),

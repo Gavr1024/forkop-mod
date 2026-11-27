@@ -590,6 +590,8 @@ prefer_ipv6
 wan
 [settings.disable_quic]
 1
+[settings.block_foreign_dns]
+0
 [settings.update_interval]
 2h
 [settings.cache_path]

@@ -3107,6 +3107,37 @@ function notifyWarp(message, type) {
   }
 }
 
+function cascadeHint(engine) {
+  if (settings.isXrayRoutingEngine(engine)) {
+    return _(
+      "Use another section as an intermediate hop to connect to servers in this section. Does not apply to network interfaces.",
+    );
+  }
+  return _(
+    "Use another section as an intermediate hop to connect to servers in this section. Does not apply to network interfaces or JSON outbounds.",
+  );
+}
+
+function applyCascadeHint(option, sectionId) {
+  if (!option) {
+    return;
+  }
+  const text = cascadeHint(effectiveSectionEngine(option, sectionId));
+  option.description = text;
+  if (typeof document === "undefined" || typeof option.cbid !== "function") {
+    return;
+  }
+  const fieldId = option.cbid(sectionId);
+  if (!fieldId || typeof document.querySelectorAll !== "function") {
+    return;
+  }
+  document
+    .querySelectorAll(`[data-field="${fieldId}"] .cbi-value-description`)
+    .forEach((node) => {
+      node.textContent = text;
+    });
+}
+
 function connectionUrlHint(engine) {
   if (settings.isXrayRoutingEngine(engine)) {
     return _(
@@ -3152,6 +3183,9 @@ function refreshSectionEngineFields(option, sectionId) {
         connectionListNode(owner),
         effectiveSectionEngine(child, owner),
       );
+    }
+    if (child && child.forkopCascadeHint) {
+      applyCascadeHint(child, owner);
     }
     if (
       !child ||
@@ -5960,6 +5994,9 @@ const MASQUE_SETTING_KEYS = [
   "ipv4_only",
   "l4_proxy",
   "handshake_timeout",
+  "register_via",
+  "use_http2",
+  "server_name",
 ];
 
 function defaultMasqueSettings() {
@@ -5970,13 +6007,17 @@ function defaultMasqueSettings() {
     ipv4_only: "1",
     l4_proxy: "0",
     handshake_timeout: "",
+    register_via: "",
+    use_http2: "0",
+    server_name: "",
   };
 }
 
 function masqueStatusText(draft) {
   const license = `${draft.license || ""}`.trim();
   const port = `${draft.endpoint_port || "443"}`.trim() || "443";
-  return [(license ? _("WARP+") : _("Free")), `${_("Port")}: ${port}`].join(". ");
+  const mode = `${draft.use_http2}` === "1" ? "HTTP/2" : "QUIC";
+  return [(license ? _("WARP+") : _("Free")), mode, `${_("Port")}: ${port}`].join(". ");
 }
 
 function addMasqueItemOptions(itemSection, context) {
@@ -6049,6 +6090,44 @@ function addMasqueItemOptions(itemSection, context) {
   option.rmempty = false;
 
   option = itemSection.option(
+    form.Flag,
+    "use_http2",
+    _("HTTP/2"),
+    _(
+      "Connect with HTTP/2 instead of QUIC. From the outside this looks like ordinary HTTPS.",
+    ),
+  );
+  option.default = "0";
+  option.rmempty = false;
+  option.onchange = function (_event, _section_id, value) {
+    uiState.draft.use_http2 = value === "1" || value === true ? "1" : "0";
+    if (uiState.statusNode) {
+      uiState.statusNode.textContent = masqueStatusText(uiState.draft);
+    }
+  };
+
+  option = itemSection.option(
+    form.Value,
+    "server_name",
+    _("SNI"),
+    _("Server name for HTTP/2. Leave empty for consumer-masque.cloudflareclient.com."),
+  );
+  option.depends("use_http2", "1");
+  option.rmempty = true;
+  option.optional = true;
+  option.placeholder = "consumer-masque.cloudflareclient.com";
+  option.validate = function (_section_id, value) {
+    const raw = `${value || ""}`.trim();
+    if (!raw) {
+      return true;
+    }
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(raw)) {
+      return _("Enter a domain name, or leave empty");
+    }
+    return true;
+  };
+
+  option = itemSection.option(
     form.Value,
     "handshake_timeout",
     _("Handshake timeout, seconds"),
@@ -6070,6 +6149,28 @@ function addMasqueItemOptions(itemSection, context) {
     }
     return true;
   };
+
+  option = itemSection.option(
+    form.ListValue,
+    "register_via",
+    _("Register through"),
+    _(
+      "Only device registration goes through the selected section. The MASQUE tunnel stays direct. Directly means the router registers itself. Leave the section cascade off: that also sends the tunnel through the other section.",
+    ),
+  );
+  option.rmempty = true;
+  const parentId = context.parentSectionId();
+  refreshOutboundDetourSectionOptionValues(option, parentId);
+  const registerKeys = (option.keylist || []).slice();
+  const registerLabels = (option.vallist || []).slice();
+  option.keylist = [];
+  option.vallist = [];
+  option.value("", _("Directly"));
+  registerKeys.forEach((key, index) => {
+    if (key) {
+      option.value(key, registerLabels[index]);
+    }
+  });
 }
 
 function showMasqueSettingsModal(
@@ -12882,10 +12983,17 @@ function createSectionContent(section) {
       "Use another section as an intermediate hop to connect to servers in this section. Does not apply to network interfaces or JSON outbounds.",
     ),
   );
+  o.forkopCascadeHint = true;
   o.default = "0";
   o.rmempty = false;
   o.depends("action", "connection");
   o.modalonly = true;
+  const cascadeHintRender = o.render;
+  o.render = function () {
+    const section_id = arguments.length >= 2 ? arguments[1] : arguments[0];
+    applyCascadeHint(this, section_id);
+    return cascadeHintRender.apply(this, arguments);
+  };
   o.write = function (section_id, value) {
     if (value === "1") {
       const currentValue =

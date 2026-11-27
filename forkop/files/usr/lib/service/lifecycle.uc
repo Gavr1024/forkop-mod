@@ -209,6 +209,17 @@ function stop_sing_box_service() {
     return command_status_from_args([ "/etc/init.d/sing-box", "stop" ]);
 }
 
+function drop_stale_fakeip_connections() {
+    if (engine.is_xray_primary())
+        return;
+    if (system("command -v conntrack >/dev/null 2>&1") != 0)
+        return;
+    let v4 = system("conntrack -D -d 198.18.0.0 --mask-dst 255.254.0.0 >/dev/null 2>&1");
+    let v6 = system("conntrack -D -f ipv6 -d fc00:: --mask-dst ffff:c000:: >/dev/null 2>&1");
+    if (v4 == 0 || v6 == 0)
+        log_message("Dropped unfinished connections to temporary DNS addresses", "info");
+}
+
 function external_config_fingerprint() {
     let data = fs.readfile(CONFIG_FILE);
     if (data == null)
@@ -870,8 +881,14 @@ function start_main() {
     log_message("Xray configuration is ready", "debug");
 
     if (need_sidecar) {
-        if (!module_success(XRAY_UC, [ "start-runtime" ])) {
-            log_message("Failed to start Xray before the sing-box configuration. Aborted.", "fatal");
+        let xray_started = module_status_output(XRAY_UC, [ "start-runtime" ]);
+        if (xray_started.status != 0) {
+            let detail = failure_detail(xray_started.output);
+            log_message(
+                "Failed to start Xray before the sing-box configuration" +
+                (detail != "" ? ": " + detail : "") + ". Aborted.",
+                "fatal"
+            );
             return 1;
         }
         status = singbox_init_config();
@@ -904,14 +921,24 @@ function start_main() {
             stop_sing_box_service();
             log_message("Routing plane is Xray; sing-box sidecar is not required", "info");
         }
-        if (!module_success(XRAY_UC, [ "start-runtime" ])) {
-            log_message("Failed to start Xray routing plane. Aborted.", "fatal");
+        let xray_started = module_status_output(XRAY_UC, [ "start-runtime" ]);
+        if (xray_started.status != 0) {
+            let detail = failure_detail(xray_started.output);
+            log_message(
+                "Failed to start Xray routing plane" + (detail != "" ? ": " + detail : "") + ". Aborted.",
+                "fatal"
+            );
             return 1;
         }
     }
     else {
-        if (!module_success(XRAY_UC, [ "start-runtime" ])) {
-            log_message("Failed to start Xray sidecar. Aborted.", "fatal");
+        let xray_started = module_status_output(XRAY_UC, [ "start-runtime" ]);
+        if (xray_started.status != 0) {
+            let detail = failure_detail(xray_started.output);
+            log_message(
+                "Failed to start Xray sidecar" + (detail != "" ? ": " + detail : "") + ". Aborted.",
+                "fatal"
+            );
             return 1;
         }
 
@@ -940,6 +967,8 @@ function start_main() {
         log_message("Routing plane did not reach a stable running state after start. Aborted.", "fatal");
         return status;
     }
+    if (!xray_primary)
+        drop_stale_fakeip_connections();
 
     let openconnect_repair = module_status(SINGBOX_GENERATOR_UC, [ "repair-openconnect-auth" ]);
     if (openconnect_repair == 2) {
@@ -948,6 +977,7 @@ function start_main() {
             log_message("Failed to reload sing-box after the OpenConnect helper. Aborted.", "fatal");
             return 1;
         }
+        drop_stale_fakeip_connections();
     }
 
     status = nft_sync_router_output_intercept();

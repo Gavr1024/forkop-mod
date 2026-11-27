@@ -4,6 +4,7 @@ let common = require("core.common");
 let connections = require("config.connections");
 let runtime_constants = require("singbox.constants");
 let engine = require("core.engine");
+let foreign_dns = require("routing.foreign_dns");
 
 let option = common.option;
 let bool_option = common.bool_option;
@@ -52,6 +53,15 @@ function config(settings, runtime) {
     if (!engine.is_xray_primary()) {
         push(result.rules, { action: "hijack-dns", port: 53 });
         push(result.rules, { action: "hijack-dns", protocol: "dns" });
+    }
+    if (foreign_dns.enabled(settings)) {
+        let names = foreign_dns.blocked_names(settings);
+        if (length(names) > 0)
+            push(result.rules, {
+                action: "reject",
+                inbound: sniff_inbounds,
+                domain_suffix: names
+            });
     }
 
     if (output_network_interface != "")

@@ -564,6 +564,12 @@ function reload_sing_box_runtime(previous_pid, config_hash_before, config_hash_a
         command_success_from_args([ "logger", "-t", "forkop", "[fatal] sing-box reload did not replace the running process. Aborted." ]);
         exit(1);
     }
+    if (!engine.is_xray_primary() && system("command -v conntrack >/dev/null 2>&1") == 0) {
+        let v4 = system("conntrack -D -d 198.18.0.0 --mask-dst 255.254.0.0 >/dev/null 2>&1");
+        let v6 = system("conntrack -D -f ipv6 -d fc00:: --mask-dst ffff:c000:: >/dev/null 2>&1");
+        if (v4 == 0 || v6 == 0)
+            command_success_from_args([ "logger", "-t", "forkop", "[info] Dropped unfinished connections to temporary DNS addresses" ]);
+    }
 }
 
 function sing_box_service_running() {
@@ -738,17 +744,21 @@ function option(section, key, fallback) {
     return as_string(value);
 }
 
+function list_file_mark(path) {
+    let line = trim(command_output_from_args([ "md5sum", path ]));
+    return length(line) >= 32 ? substr(line, 0, 32) : "";
+}
+
 function local_list_stamp(value) {
     let stamps = [];
     for (let part in whitespace_fields(value)) {
         if (substr(part, 0, 12) != "/etc/forkop/" || index(part, "..") >= 0)
             continue;
         let stat = fs.stat(part);
-        let rev = trim(as_string(fs.readfile(part + ".rev") || ""));
         if (stat == null)
-            push(stamps, part + ":missing:" + rev);
+            push(stamps, part + ":missing");
         else
-            push(stamps, part + ":" + int(stat.size || 0) + ":" + int(stat.mtime || 0) + ":" + rev);
+            push(stamps, part + ":" + int(stat.size || 0) + ":" + int(stat.mtime || 0) + ":" + list_file_mark(part));
     }
     return join(" ", stamps);
 }
@@ -1198,7 +1208,10 @@ function masque_signature(section) {
             endpoint_port: option(client, "endpoint_port", ""),
             ipv4_only: bool_option(client, "ipv4_only", true) ? "1" : "0",
             l4_proxy: bool_option(client, "l4_proxy", false) ? "1" : "0",
-            handshake_timeout: option(client, "handshake_timeout", "")
+            handshake_timeout: option(client, "handshake_timeout", ""),
+            register_via: option(client, "register_via", ""),
+            use_http2: bool_option(client, "use_http2", false) ? "1" : "0",
+            server_name: option(client, "server_name", "")
         });
     }
     return sprintf("%J", result);
@@ -1710,6 +1723,9 @@ function sing_box_signature_body(settings, sections, servers, mwan3_active) {
     body = signature_add_value(body, "settings.dns_rewrite_ttl", option(settings, "dns_rewrite_ttl", "60"));
     body = signature_add_value(body, "settings.output_network_interface", option(settings, "output_network_interface", ""));
     body = signature_add_value(body, "settings.disable_quic", bool_option_value(settings, "disable_quic", false));
+    body = signature_add_value(body, "settings.block_foreign_dns", bool_option_value(settings, "block_foreign_dns", false));
+    for (let value in list_option(settings, "block_foreign_dns_except"))
+        body = signature_add_value(body, "settings.block_foreign_dns_except", value);
     if (sing_box_signature_has_remote_ruleset_sources(sections))
         body = signature_add_value(body, "settings.update_interval", settings_update_interval(settings));
     body = signature_add_value(body, "settings.cache_path", option(settings, "cache_path", "/tmp/sing-box/cache.db"));

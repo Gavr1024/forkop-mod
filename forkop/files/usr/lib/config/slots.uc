@@ -127,8 +127,22 @@ function slot_name(value) {
     return "";
 }
 
+function reserve_id(value) {
+    value = trim_string(value);
+    if (value == "r1" || value == "r2" || value == "r3")
+        return value;
+    return "";
+}
+
+function stored_slot(value) {
+    let name = slot_name(value);
+    if (name != "")
+        return name;
+    return reserve_id(value);
+}
+
 function slot_path(name) {
-    name = slot_name(name);
+    name = stored_slot(name);
     if (name == "")
         return "";
     return SLOTS_DIR + "/" + name;
@@ -281,7 +295,7 @@ function slot_info(name) {
 }
 
 function save_slot(name) {
-    name = slot_name(name);
+    name = stored_slot(name);
     if (name == "")
         return false;
     if (file_size(CONFIG_FILE) <= 0) {
@@ -344,61 +358,12 @@ function restart_after_apply(mode) {
     return system("FORKOP_SLOT_RESTART=1 " + command_from_args([ SERVICE_INIT, "restart" ]) + " >/dev/null 2>&1 1000>&- &") == 0;
 }
 
-function apply_slot(name, reason, restart_mode) {
-    name = slot_name(name);
-    if (name == "")
-        return false;
-    let path = slot_path(name);
-    if (file_size(path) <= 0) {
-        log_message("slot " + name + " is empty", "error");
-        return false;
-    }
-
-    let snapshot = settings_section();
-    if (!copy_file(path, CONFIG_FILE)) {
-        log_message("failed to apply slot " + name, "error");
-        return false;
-    }
-
-    restore_control_options({
-        slots_auto_switch: option(snapshot, "slots_auto_switch", "0"),
-        slots_ping_host: option(snapshot, "slots_ping_host", "1.1.1.1"),
-        slots_ping_host_backup: option(snapshot, "slots_ping_host_backup", ""),
-        slots_check_interval: option(snapshot, "slots_check_interval", "30"),
-        slots_fail_count: option(snapshot, "slots_fail_count", "2"),
-        slots_probe_backend: option(snapshot, "slots_probe_backend", "worker"),
-        slots_active: name
-    });
-
-    let state = read_state();
-    state.active = name;
-    write_state(state);
-
-    log_message("applied slot " + name + (reason != "" ? " (" + as_string(reason) + ")" : ""), "info");
-    restart_after_apply(restart_mode);
-    return true;
-}
-
 function current_active_slot() {
     let settings = settings_section();
     let active = slot_name(option(settings, "slots_active", ""));
     if (active != "")
         return active;
     return slot_name(as_string(read_state().active));
-}
-
-function try_fallback_slot() {
-    let settings = settings_section();
-    if (!bool_option(settings, "slots_auto_switch", false))
-        return false;
-
-    let active = current_active_slot();
-    let fallback = active == "offline" ? "online" : "offline";
-    if (file_size(slot_path(fallback)) <= 0) {
-        log_message("start failed and fallback slot " + fallback + " is empty", "warn");
-        return false;
-    }
-    return apply_slot(fallback, "start failed, switching slot", "none");
 }
 
 function cron_line() {
@@ -505,6 +470,67 @@ function sync_scheduler() {
     else
         stop_worker();
     return true;
+}
+
+function apply_slot(name, reason, restart_mode) {
+    name = stored_slot(name);
+    if (name == "")
+        return false;
+    let path = slot_path(name);
+    if (file_size(path) <= 0) {
+        log_message("slot " + name + " is empty", "error");
+        return false;
+    }
+
+    let reserve = reserve_id(name) != "";
+    let snapshot = settings_section();
+    if (reserve) {
+        stop_worker();
+        sync_cron(false);
+    }
+    if (!copy_file(path, CONFIG_FILE)) {
+        log_message("failed to apply slot " + name, "error");
+        return false;
+    }
+    if (!uci_core.reload_package(CONFIG_NAME))
+        log_message("failed to reread the config after applying slot " + name, "warn");
+
+    restore_control_options({
+        slots_auto_switch: reserve ? "0" : option(snapshot, "slots_auto_switch", "0"),
+        slots_ping_host: option(snapshot, "slots_ping_host", "1.1.1.1"),
+        slots_ping_host_backup: option(snapshot, "slots_ping_host_backup", ""),
+        slots_check_interval: option(snapshot, "slots_check_interval", "30"),
+        slots_fail_count: option(snapshot, "slots_fail_count", "2"),
+        slots_probe_backend: option(snapshot, "slots_probe_backend", "worker"),
+        slots_active: name
+    });
+
+    let state = read_state();
+    state.active = name;
+    write_state(state);
+
+    if (reserve) {
+        log_message("auto-switch turned off because reserve " + name + " was applied", "info");
+        sync_scheduler();
+    }
+
+    log_message("applied slot " + name + (reason != "" ? " (" + as_string(reason) + ")" : ""), "info");
+    restart_after_apply(restart_mode);
+    return true;
+}
+
+function try_fallback_slot() {
+    let settings = settings_section();
+    if (!bool_option(settings, "slots_auto_switch", false))
+        return false;
+
+    let active = current_active_slot();
+    let fallback = active == "offline" ? "online" : "offline";
+    if (file_size(slot_path(fallback)) <= 0) {
+        log_message("start failed and fallback slot " + fallback + " is empty", "warn");
+        return false;
+    }
+    return apply_slot(fallback, "start failed, switching slot", "none");
 }
 
 function sync_cron_only() {
@@ -806,6 +832,658 @@ function configure(values) {
     return true;
 }
 
+function reserve_labels_path() {
+    return SLOTS_DIR + "/reserve-labels.json";
+}
+
+function read_reserve_labels() {
+    let data = read_json_file(reserve_labels_path());
+    return type(data) == "object" ? data : {};
+}
+
+function clean_reserve_label(value) {
+    value = trim_string(value);
+    let out = "";
+    let i = 0;
+    while (i < length(value) && length(out) < 40) {
+        let ch = substr(value, i, 1);
+        if (ch != "\n" && ch != "\r" && ch != "\t")
+            out += ch;
+        i++;
+    }
+    return trim_string(out);
+}
+
+function set_reserve_label(id, label) {
+    id = reserve_id(id);
+    if (id == "")
+        return false;
+    if (!ensure_dir(SLOTS_DIR))
+        return false;
+    let labels = read_reserve_labels();
+    labels[id] = clean_reserve_label(label);
+    return write_json_file(reserve_labels_path(), labels);
+}
+
+function reserve_card(id) {
+    let info = slot_info(id);
+    let labels = read_reserve_labels();
+    info.label = clean_reserve_label(labels[id]);
+    return info;
+}
+
+function preview_skip_gap(text, i) {
+    let n = length(text);
+    while (i < n) {
+        let ch = substr(text, i, 1);
+        if (ch == " " || ch == "\t" || ch == "\n" || ch == "\r") {
+            i++;
+            continue;
+        }
+        if (ch == "#") {
+            while (i < n && substr(text, i, 1) != "\n")
+                i++;
+            continue;
+        }
+        break;
+    }
+    return i;
+}
+
+function preview_read_word(text, i) {
+    let n = length(text);
+    let out = "";
+    while (i < n) {
+        let ch = substr(text, i, 1);
+        if (ch == " " || ch == "\t" || ch == "\n" || ch == "\r" || ch == "#" || ch == "'" || ch == "\"")
+            break;
+        out += ch;
+        i++;
+    }
+    return { value: out, next: i };
+}
+
+function preview_read_value(text, i) {
+    let n = length(text);
+    while (i < n) {
+        let ch = substr(text, i, 1);
+        if (ch == " " || ch == "\t") {
+            i++;
+            continue;
+        }
+        break;
+    }
+    if (i >= n)
+        return { value: "", next: i, present: false };
+    let ch = substr(text, i, 1);
+    if (ch == "\n" || ch == "\r" || ch == "#")
+        return { value: "", next: i, present: false };
+    if (ch == "'" || ch == "\"") {
+        let quote = ch;
+        let out = "";
+        i++;
+        while (i < n) {
+            ch = substr(text, i, 1);
+            if (ch == quote) {
+                if (quote == "'" && i + 3 < n && substr(text, i, 4) == "'\\''") {
+                    out += "'";
+                    i += 4;
+                    continue;
+                }
+                i++;
+                break;
+            }
+            if (ch == "\\" && i + 1 < n) {
+                let nxt = substr(text, i + 1, 1);
+                if (nxt == "n") {
+                    out += "\n";
+                    i += 2;
+                    continue;
+                }
+                if (nxt == "t") {
+                    out += "\t";
+                    i += 2;
+                    continue;
+                }
+                if (nxt == "\\" || nxt == quote) {
+                    out += nxt;
+                    i += 2;
+                    continue;
+                }
+            }
+            out += ch;
+            i++;
+        }
+        return { value: out, next: i, present: true };
+    }
+    let out = "";
+    while (i < n) {
+        ch = substr(text, i, 1);
+        if (ch == " " || ch == "\t" || ch == "\n" || ch == "\r" || ch == "#")
+            break;
+        out += ch;
+        i++;
+    }
+    return { value: out, next: i, present: true };
+}
+
+function preview_skip_tail(text, i) {
+    let n = length(text);
+    while (i < n) {
+        let ch = substr(text, i, 1);
+        if (ch == "\n")
+            return i + 1;
+        i++;
+    }
+    return i;
+}
+
+function preview_words(value) {
+    let out = [];
+    let current = "";
+    let text = as_string(value);
+    let i = 0;
+    while (i < length(text)) {
+        let ch = substr(text, i, 1);
+        if (ch == " " || ch == "\t" || ch == "," || ch == "\n" || ch == "\r") {
+            if (current != "")
+                push(out, current);
+            current = "";
+        }
+        else
+            current += ch;
+        i++;
+    }
+    if (current != "")
+        push(out, current);
+    return out;
+}
+
+function preview_bucket(key) {
+    if (key == "domain" || key == "domains" || key == "domain_suffix" || key == "domain_keyword" || key == "domain_regex" || key == "domain_suffix_text" || key == "domain_keyword_text" || key == "domain_regex_text" || key == "domain_text")
+        return "domains";
+    if (key == "community_lists" || key == "rule_set" || key == "rule_sets" || key == "local_domain_lists" || key == "domain_ip_lists" || key == "user_lists")
+        return "lists";
+    if (key == "rule_set_with_subnets" || key == "rule_sets_with_subnets")
+        return "subnet_lists";
+    if (key == "source_ip_cidr" || key == "source_ip_cidr_text")
+        return "devices";
+    if (key == "excluded_source_ips" || key == "excluded_source_ips_text")
+        return "excluded";
+    if (key == "fully_routed_ips" || key == "fully_routed_ips_text")
+        return "full";
+    if (key == "ip_cidr" || key == "ip_cidr_text")
+        return "ips";
+    if (key == "ports" || key == "ports_text")
+        return "ports";
+    return "";
+}
+
+function preview_secret_key(key) {
+    if (preview_bucket(key) != "")
+        return false;
+    key = lc(trim_string(key));
+    if (key == "")
+        return true;
+    if (index(key, "pass") >= 0 || index(key, "secret") >= 0 || index(key, "token") >= 0)
+        return true;
+    if (index(key, "uuid") >= 0 || index(key, "encrypt") >= 0 || index(key, "login") >= 0)
+        return true;
+    if (index(key, "cookie") >= 0 || index(key, "cert") >= 0 || index(key, "xdrive") >= 0)
+        return true;
+    if (index(key, "key") >= 0)
+        return true;
+    return false;
+}
+
+function preview_push_unique(list, value) {
+    value = trim_string(value);
+    if (value == "")
+        return;
+    for (let item in list)
+        if (item == value)
+            return;
+    push(list, value);
+}
+
+function preview_take(values) {
+    let shown = [];
+    let i = 0;
+    while (i < length(values) && i < 6) {
+        push(shown, values[i]);
+        i++;
+    }
+    return shown;
+}
+
+function blank_preview_section(id) {
+    return {
+        id: id,
+        label: "",
+        enabled: true,
+        action: "",
+        domains: [],
+        lists: [],
+        devices: [],
+        excluded: [],
+        full: [],
+        ips: [],
+        ports: [],
+        subnet_lists: [],
+        servers: [],
+        subscriptions: [],
+        interfaces: [],
+        openconnect: [],
+        openvpn: [],
+        warp: [],
+        masque: [],
+        jsons: [],
+        xdrives: [],
+        urltest: [],
+        priority: [],
+        core: "",
+        dns_type: "",
+        dns_server: "",
+        dns_answer: "",
+        dns_detour_on: false,
+        dns_via: "",
+        fallback: "",
+        mux: false,
+        finalmask: false,
+        sort: false,
+        mixed: false,
+        realip: false,
+        cascade_on: false,
+        cascade: "",
+        dashboard: ""
+    };
+}
+
+function preview_uses_core(action) {
+    action = lc(trim_string(action));
+    return action == "connection" || action == "proxy" || action == "outbound" || action == "vpn";
+}
+
+function finish_preview_section(section) {
+    if (section == null)
+        return null;
+    return {
+        id: section.id,
+        label: section.label,
+        enabled: section.enabled ? true : false,
+        action: section.action,
+        domains: preview_take(section.domains),
+        domain_count: length(section.domains),
+        lists: section.lists,
+        list_count: length(section.lists),
+        devices: preview_take(section.devices),
+        device_count: length(section.devices),
+        excluded: preview_take(section.excluded),
+        excluded_count: length(section.excluded),
+        full: preview_take(section.full),
+        full_count: length(section.full),
+        ips: preview_take(section.ips),
+        ip_count: length(section.ips),
+        ports: preview_take(section.ports),
+        port_count: length(section.ports),
+        subnet_lists: section.subnet_lists,
+        subnet_count: length(section.subnet_lists),
+        servers: preview_take(section.servers),
+        server_count: length(section.servers),
+        subscriptions: preview_take(section.subscriptions),
+        subscription_count: length(section.subscriptions),
+        interfaces: section.interfaces,
+        openconnect: section.openconnect,
+        openvpn: section.openvpn,
+        warp: section.warp,
+        masque: section.masque,
+        jsons: section.jsons,
+        xdrives: section.xdrives,
+        urltest: section.urltest,
+        priority: section.priority,
+        core: section.core != "" ? section.core : (preview_uses_core(section.action) ? "settings" : ""),
+        dns_type: section.dns_type,
+        dns_server: section.dns_server,
+        dns_answer: section.dns_answer,
+        dns_via: section.dns_detour_on ? section.dns_via : "",
+        fallback: section.fallback,
+        mux: section.mux ? true : false,
+        finalmask: section.finalmask ? true : false,
+        sort: section.sort ? true : false,
+        mixed: section.mixed ? true : false,
+        realip: section.realip ? true : false,
+        cascade: section.cascade_on ? section.cascade : "",
+        dashboard: section.dashboard
+    };
+}
+
+function preview_cut_at(value, mark) {
+    let cut = index(value, mark);
+    if (cut >= 0)
+        return substr(value, 0, cut);
+    return value;
+}
+
+function preview_public_target(value) {
+    value = trim_string(value);
+    if (value == "")
+        return "";
+    let scheme = "";
+    let rest = value;
+    let sep = index(value, "://");
+    if (sep > 0 && sep < 12) {
+        scheme = lc(substr(value, 0, sep));
+        rest = substr(value, sep + 3);
+    }
+    let at = index(rest, "@");
+    if (at >= 0)
+        rest = substr(rest, at + 1);
+    rest = preview_cut_at(rest, "?");
+    rest = preview_cut_at(rest, "#");
+    rest = preview_cut_at(rest, "/");
+    rest = trim_string(rest);
+    if (rest == "")
+        return scheme;
+    if (index(rest, ".") < 0 && index(rest, ":") < 0 && index(rest, "[") < 0)
+        return scheme;
+    if (scheme == "" || scheme == "http" || scheme == "https")
+        return rest;
+    return scheme + " " + rest;
+}
+
+function preview_json_label(value, key, fallback) {
+    value = as_string(value);
+    let needle = "\"" + key + "\"";
+    let at = index(value, needle);
+    if (at < 0)
+        return fallback;
+    let i = at + length(needle);
+    let n = length(value);
+    while (i < n) {
+        let ch = substr(value, i, 1);
+        if (ch != " " && ch != "\t" && ch != "\n" && ch != "\r" && ch != ":")
+            break;
+        i++;
+    }
+    if (i >= n || substr(value, i, 1) != "\"")
+        return fallback;
+    i++;
+    let out = "";
+    while (i < n && length(out) < 60) {
+        let ch = substr(value, i, 1);
+        if (ch == "\"")
+            break;
+        if (ch == "\\") {
+            i++;
+            if (i >= n)
+                break;
+            ch = substr(value, i, 1);
+        }
+        out += ch;
+        i++;
+    }
+    out = trim_string(out);
+    if (out == "" || index(out, "\n") >= 0)
+        return fallback;
+    return out;
+}
+
+function preview_add_items(section, key, value, kind) {
+    if (key == "outbound_jsons" || key == "outbound_json") {
+        preview_push_unique(section.jsons, preview_json_label(value, "tag", "JSON"));
+        return;
+    }
+    if (key == "xdrive_outbounds") {
+        preview_push_unique(section.xdrives, preview_json_label(value, "name", "XDRIVE"));
+        return;
+    }
+    if (preview_secret_key(key))
+        return;
+    if (key == "label")
+        section.label = value;
+    else if (key == "action")
+        section.action = value;
+    else if (key == "enabled")
+        section.enabled = value != "0";
+    else if (key == "proxy_core") {
+        let core = lc(trim_string(value));
+        if (core == "xray" || core == "xray-core")
+            section.core = "xray";
+        else if (core == "sing-box" || core == "singbox")
+            section.core = "sing-box";
+    }
+    else if (key == "dns_type") {
+        let kind_name = lc(trim_string(value));
+        if (kind_name != "" && length(kind_name) < 16 && index(kind_name, "/") < 0 && index(kind_name, "@") < 0)
+            section.dns_type = kind_name;
+    }
+    else if (key == "dns_server")
+        section.dns_server = preview_public_target(value);
+    else if (key == "dns_answer") {
+        let answer = lc(trim_string(value));
+        if (answer == "real" || answer == "route")
+            section.dns_answer = answer;
+    }
+    else if (key == "dns_detour_enabled")
+        section.dns_detour_on = value == "1";
+    else if (key == "dns_detour_section" || key == "xray_fallback_target") {
+        let target = trim_string(value);
+        if (key == "dns_detour_section")
+            section.dns_via = target;
+        else
+            section.fallback = target;
+    }
+    else if (key == "selector_proxy_links") {
+        let target = preview_public_target(value);
+        if (target != "")
+            preview_push_unique(section.servers, target);
+    }
+    else if (key == "xray_mux_enabled")
+        section.mux = value == "1";
+    else if (key == "xray_finalmask")
+        section.finalmask = value == "1";
+    else if (key == "sort_by_latency")
+        section.sort = value == "1";
+    else if (key == "mixed_proxy_enabled")
+        section.mixed = value == "1";
+    else if (key == "resolve_real_ip_for_routing")
+        section.realip = value == "1";
+    else if (key == "outbound_detour_enabled")
+        section.cascade_on = value == "1";
+    else if (key == "outbound_detour_section")
+        section.cascade = trim_string(value);
+    else if (key == "dashboard_filter_mode") {
+        let mode = lc(trim_string(value));
+        if (mode == "include" || mode == "exclude" || mode == "mixed")
+            section.dashboard = mode;
+    }
+    else {
+        let bucket = preview_bucket(key);
+        if (bucket == "")
+            return;
+        let items = kind == "list" ? [ value ] : preview_words(value);
+        for (let item in items)
+            preview_push_unique(section[bucket], item);
+    }
+}
+
+function preview_named(sections, id) {
+    id = trim_string(id);
+    if (id == "")
+        return "";
+    for (let section in sections) {
+        if (section.id != id)
+            continue;
+        let label = trim_string(section.label);
+        if (label != "")
+            return label;
+        return section.id;
+    }
+    return id;
+}
+
+function preview_fallback_parts(sections, value) {
+    value = trim_string(value);
+    let tab = index(value, "\t");
+    let id = value;
+    let tag = "";
+    if (tab >= 0) {
+        id = trim_string(substr(value, 0, tab));
+        tag = trim_string(substr(value, tab + 1));
+    }
+    return {
+        name: preview_named(sections, id),
+        tag: tag
+    };
+}
+
+function preview_child_bucket(kind) {
+    if (kind == "subscription_url")
+        return "subscriptions";
+    if (kind == "section_interface")
+        return "interfaces";
+    if (kind == "openconnect")
+        return "openconnect";
+    if (kind == "openvpn")
+        return "openvpn";
+    if (kind == "warp")
+        return "warp";
+    if (kind == "masque")
+        return "masque";
+    if (kind == "urltest")
+        return "urltest";
+    if (kind == "priority_group")
+        return "priority";
+    return "";
+}
+
+function preview_child_fallback(bucket) {
+    if (bucket == "openconnect")
+        return "OpenConnect";
+    if (bucket == "openvpn")
+        return "OpenVPN";
+    if (bucket == "warp")
+        return "WARP";
+    if (bucket == "masque")
+        return "MASQUE";
+    if (bucket == "urltest")
+        return "URLTest";
+    if (bucket == "priority")
+        return "Priority";
+    return "";
+}
+
+function preview_slot(id) {
+    id = reserve_id(id);
+    if (id == "")
+        return null;
+    let path = slot_path(id);
+    let text = "";
+    if (file_size(path) > 0)
+        text = as_string(fs.readfile(path));
+    let raw = [];
+    let children = [];
+    let current = null;
+    let child = null;
+    let seen = 0;
+    let i = 0;
+    let n = length(text);
+    while (i < n) {
+        i = preview_skip_gap(text, i);
+        if (i >= n)
+            break;
+        let word = preview_read_word(text, i);
+        i = word.next;
+        if (word.value == "config") {
+            if (current != null && seen <= 80)
+                push(raw, current);
+            if (child != null)
+                push(children, child);
+            current = null;
+            child = null;
+            i = preview_skip_gap(text, i);
+            let kind = preview_read_word(text, i);
+            i = kind.next;
+            let name = preview_read_value(text, i);
+            i = preview_skip_tail(text, name.next);
+            if (kind.value == "section") {
+                seen++;
+                if (seen > 80)
+                    continue;
+                let title = name.present ? trim_string(name.value) : "";
+                if (title == "")
+                    title = "#" + seen;
+                current = blank_preview_section(title);
+            }
+            else if (preview_child_bucket(kind.value) != "")
+                child = { bucket: preview_child_bucket(kind.value), owner: "", label: "", url: "" };
+            continue;
+        }
+        if (word.value == "option" || word.value == "list") {
+            i = preview_skip_gap(text, i);
+            let key = preview_read_word(text, i);
+            i = key.next;
+            let value = preview_read_value(text, i);
+            i = preview_skip_tail(text, value.next);
+            if (!value.present)
+                continue;
+            if (current != null)
+                preview_add_items(current, key.value, value.value, word.value);
+            else if (child != null) {
+                if (key.value == "section")
+                    child.owner = trim_string(value.value);
+                else if (key.value == "url" && child.bucket == "subscriptions")
+                    child.url = value.value;
+                else if (key.value == "name")
+                    child.label = trim_string(value.value);
+            }
+            continue;
+        }
+        i = preview_skip_tail(text, i);
+    }
+    if (current != null && seen <= 80)
+        push(raw, current);
+    if (child != null)
+        push(children, child);
+    for (let item in children) {
+        if (item.owner == "")
+            continue;
+        if (item.bucket == "subscriptions") {
+            let host = preview_public_target(item.url);
+            if (host == "")
+                continue;
+            for (let section in raw)
+                if (section.id == item.owner)
+                    preview_push_unique(section.subscriptions, host);
+            continue;
+        }
+        let label = trim_string(item.label);
+        if (label == "")
+            label = preview_child_fallback(item.bucket);
+        if (label == "")
+            continue;
+        for (let section in raw)
+            if (section.id == item.owner)
+                preview_push_unique(section[item.bucket], label);
+    }
+    let sections = [];
+    for (let section in raw)
+        push(sections, finish_preview_section(section));
+    for (let section in sections) {
+        section.dns_via = preview_named(sections, section.dns_via);
+        section.cascade = preview_named(sections, section.cascade);
+        let fallback = preview_fallback_parts(sections, section.fallback);
+        section.fallback = fallback.name;
+        section.fallback_tag = fallback.tag;
+    }
+    return {
+        id: id,
+        empty: file_size(path) <= 0,
+        truncated: seen > 80,
+        sections: sections
+    };
+}
+
 function status_object() {
     let settings = settings_section();
     let state = read_state();
@@ -823,7 +1501,12 @@ function status_object() {
         streak_ok: int(state.streak_ok || 0),
         streak_fail: int(state.streak_fail || 0),
         online: slot_info("online"),
-        offline: slot_info("offline")
+        offline: slot_info("offline"),
+        reserves: [
+            reserve_card("r1"),
+            reserve_card("r2"),
+            reserve_card("r3")
+        ]
     };
 }
 
@@ -856,6 +1539,8 @@ function module_exports() {
         configure,
         status_object,
         print_status_json,
+        set_reserve_label,
+        preview_slot,
         sync_cron,
         sync_cron_from_uci,
         sync_scheduler,
@@ -876,6 +1561,15 @@ else if (mode == "save")
     exit(save_slot(ARGV[1]) ? 0 : 1);
 else if (mode == "apply")
     exit(apply_slot(ARGV[1], "manual") ? 0 : 1);
+else if (mode == "label")
+    exit(set_reserve_label(ARGV[1], ARGV[2]) ? 0 : 1);
+else if (mode == "preview") {
+    let preview = preview_slot(ARGV[1]);
+    if (preview == null)
+        exit(1);
+    print(sprintf("%J", preview), "\n");
+    exit(0);
+}
 else if (mode == "probe")
     exit(probe(true, parse_configure_args()) ? 0 : 1);
 else if (mode == "probe-if-due")

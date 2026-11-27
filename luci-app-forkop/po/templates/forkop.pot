@@ -3185,7 +3185,7 @@ msgid "There are rules using Zapret2"
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/slots.js:238
-msgid "These switch settings are written into the live config and every saved slot at the same time."
+msgid "These switch settings are written into the live config and the online and offline slots, not into reserves."
 msgstr ""
 
 #: ../luci-app-forkop/htdocs/luci-static/resources/view/forkop/server.js:1825

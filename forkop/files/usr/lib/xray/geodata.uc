@@ -776,6 +776,18 @@ function supercell_json_path() {
     return cache_dir() + "/supercell.json";
 }
 
+function community_native_path(name) {
+    name = trim(as_string(name));
+    let dir = trim(getenv("FORKOP_XRAY_LIST_CACHE_DIR") || "");
+    if (dir == "")
+        dir = cache_dir();
+    if (name == "supercell")
+        return readable_cache_file(dir + "/supercell.json");
+    if (name == "github")
+        return readable_cache_file(dir + "/github.list");
+    return "";
+}
+
 function github_list_path() {
     return cache_dir() + "/github.list";
 }
@@ -1061,8 +1073,15 @@ function source_json_to_matchers(value) {
     return { domains, ips, ok: true };
 }
 
+function decompile_cache_dir() {
+    let dir = trim(getenv("FORKOP_XRAY_LIST_CACHE_DIR") || "");
+    if (dir == "")
+        return cache_dir();
+    return dir;
+}
+
 function decompile_cache_path(srs_path) {
-    return cache_dir() + "/" + singbox_rulesets.hash12(srs_path) + ".xray.json";
+    return decompile_cache_dir() + "/" + singbox_rulesets.hash12(srs_path) + ".xray.json";
 }
 
 function command_from_args(args) {
@@ -1091,7 +1110,7 @@ function decompile_srs(srs_path) {
     }
     if (!file_exists(SING_BOX_BIN))
         return empty_matchers();
-    if (!ensure_dir(cache_dir()))
+    if (!ensure_dir(decompile_cache_dir()))
         return empty_matchers();
 
     let cached = decompile_cache_path(srs_path);
@@ -1699,10 +1718,101 @@ function ensure_from_uci(settings, proxy_address, force) {
     return ok;
 }
 
+function push_dat_ref(refs, seen, path, code) {
+    path = as_string(path);
+    code = dat_code(lc(trim(as_string(code))));
+    if (path == "" || code == "" || file_size(path) == 0)
+        return;
+    let key = path + "\t" + code;
+    if (seen[key])
+        return;
+    seen[key] = true;
+    push(refs, { path: path, code: code });
+}
+
+function community_dat_refs(name) {
+    let refs = [];
+    let seen = {};
+    name = trim(as_string(name));
+    // One list only. Searching every nearby code made a site from another
+    // list look like it belonged to this one.
+    let ext = resolve_community_ext_tag(name);
+    if (ext != "") {
+        let extra = trim(getenv("FORKOP_ALLOW_DOMAINS_DAT") || "");
+        if (extra != "")
+            push_dat_ref(refs, seen, extra, ext);
+        for (let path in allow_domains_dat_paths())
+            push_dat_ref(refs, seen, path, ext);
+        if (length(refs) > 0)
+            return refs;
+    }
+    if (name == "ads_hagezi_pro") {
+        let extra_ads = trim(getenv("FORKOP_ADLIST_DAT") || "");
+        if (extra_ads != "")
+            push_dat_ref(refs, seen, extra_ads, ADLIST_CODE);
+        push_dat_ref(refs, seen, adlist_dat_path(), ADLIST_CODE);
+        push_dat_ref(refs, seen, ADLIST_DAT, ADLIST_CODE);
+        push_dat_ref(refs, seen, ADLIST_DAT_ETC, ADLIST_CODE);
+        if (length(refs) > 0)
+            return refs;
+    }
+    let v2 = v2fly_geosite_tag(name);
+    if (v2 != "") {
+        let extra_geo = trim(getenv("FORKOP_GEOSITE_DAT") || "");
+        if (extra_geo != "")
+            push_dat_ref(refs, seen, extra_geo, v2);
+        for (let path in geosite_dat_candidates())
+            push_dat_ref(refs, seen, path, v2);
+    }
+    return refs;
+}
+
+function community_xray_source(name) {
+    name = trim(as_string(name));
+    let ext = resolve_community_ext_tag(name);
+    if (ext != "" && dat_matcher_usable("ext:allow-domains.dat:" + ext))
+        return { kind: "dat", path: "" };
+    if (file_size(community_lst_readable(name)) > 0)
+        return { kind: "file", path: community_lst_readable(name) };
+    if (name == "ads_hagezi_pro")
+        return { kind: "ads", path: "" };
+    if (name == "supercell") {
+        let json_path = community_native_path(name);
+        if (json_path != "")
+            return { kind: "file", path: json_path };
+    }
+    let v2 = v2fly_geosite_tag(name);
+    if (v2 != "") {
+        if (dat_matcher_usable("geosite:" + v2))
+            return { kind: "dat", path: "" };
+        let extra = trim(getenv("FORKOP_GEOSITE_DAT") || "");
+        if (file_size(extra) > 0)
+            return { kind: "dat", path: "" };
+        for (let path in geosite_dat_candidates()) {
+            if (file_size(path) > 0 && looks_like_v2fly_dat(path))
+                return { kind: "dat", path: "" };
+        }
+    }
+    if (name == "github") {
+        let list_path = community_native_path(name);
+        if (list_path != "")
+            return { kind: "file", path: list_path };
+    }
+    if (!native_xray_list_name(name)) {
+        let srs_path = cached_srs_path(singbox_rulesets.community_url(name));
+        if (file_size(srs_path) > 0)
+            return { kind: "file", path: srs_path };
+    }
+    return { kind: "none", path: "" };
+}
+
 return {
     community_ext_tag,
+    community_dat_refs,
     community_lst_url,
     community_lst_path,
+    community_native_path,
+    community_xray_source,
     lst_nftset_hosts,
     community_matchers,
     ruleset_matchers,

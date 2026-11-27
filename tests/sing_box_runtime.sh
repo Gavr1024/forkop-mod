@@ -43,6 +43,8 @@ grep -Fq 'cascade SOCKS port is not ready' "$SINGBOX_GENERATOR_UC" ||
   fail "OpenConnect cascade must not start when the SOCKS port is missing"
 grep -Fq 'before the sing-box configuration' "$LIFECYCLE_UC" ||
   fail "Xray must be started before the cascaded OpenConnect cookie is requested"
+grep -Fq 'failure_detail(xray_started.output)' "$LIFECYCLE_UC" ||
+  fail "an Xray start failure must keep the real error text"
 grep -Fq 'prepare-openconnect-cascade' "$ROOT_DIR/forkop/files/usr/lib/service/lifecycle.uc" ||
   fail "OpenConnect must get a sing-box cascade proxy before the configuration is generated"
 grep -Fq 'openconnect-cascade.json' "$SINGBOX_GENERATOR_UC" ||
@@ -279,13 +281,16 @@ cat >"$WORK_DIR/deferred-section-fixture.json" <<'JSON'
   ]
 }
 JSON
-if ! ucode -L "$FORKOP_LIB" "$SINGBOX_GENERATOR_UC" generate-config-fixture \
+mkdir -p "$WORK_DIR/empty-subscriptions"
+if ! TMP_SUBSCRIPTION_FOLDER="$WORK_DIR/empty-subscriptions" \
+  ucode -L "$FORKOP_LIB" "$SINGBOX_GENERATOR_UC" generate-config-fixture \
   "$WORK_DIR/deferred-section-fixture.json" "$WORK_DIR/deferred-section.json" "127.0.0.1" "0" "1" "subscription_only"; then
-  fail "generator must skip subscription-only sections deferred until after sing-box starts"
+  fail "generator must keep a subscription-only section while its file is still downloading"
 fi
-if grep -Fq 'subscription_only-out' "$WORK_DIR/deferred-section.json"; then
-  fail "deferred subscription-only section must not be emitted into the initial config"
-fi
+grep -Fq '"type": "block"' "$WORK_DIR/deferred-section.json" ||
+  fail "a subscription with no downloaded servers must block matching traffic"
+grep -Fq 'subscription_only-blocked' "$WORK_DIR/deferred-section.json" ||
+  fail "the waiting subscription section must stay in the generated config"
 grep -Fq 'deferred_sections' "$SINGBOX_RUNTIME_UC" ||
   fail "singbox/runtime.uc must preserve deferred sections for generator input"
 
@@ -824,6 +829,7 @@ cat >"$WORK_DIR/domain-ip-rulesets-fixture.json" <<JSON
       "action": "outbound",
       "outbound_json": "{\\"type\\":\\"direct\\"}",
       "domain_suffix": [ "example.org" ],
+      "ports": [ "443" ],
       "rule_set_with_subnets": [ "$WORK_DIR/with-subnets.json" ],
       "domain_ip_lists": [ "$WORK_DIR/domain-ip.lst" ]
     }
@@ -1551,6 +1557,7 @@ for (let rule_set in lists.route.rule_set || [])
         local_ruleset = rule_set;
 assert(local_ruleset && local_ruleset.type == "local" && local_ruleset.format == "source", "domain_ip_lists local ruleset");
 assert(route_rule(lists, r => contains(r.rule_set, "proxy-lists-ruleset") && length(as_array(r.rule_set)) >= 2) != null, "domain_ip_lists and rule_set_with_subnets route");
+assert(route_rule(lists, r => contains(r.ip_cidr, "198.51.100.0/24") && r.domain_suffix == null && r.rule_set == null && contains(r.port, 443)) != null, "rule_set_with_subnets IPs keep the section port filter");
 assert(dns_rule(lists, r => contains(r.rule_set, "proxy-lists-ruleset")) != null, "domain_ip_lists fakeip DNS rule");
 
 let generated_list = json(fs.readfile(dir + "/domain-ip-rulesets.json.rulesets/proxy-lists-ruleset.json"));

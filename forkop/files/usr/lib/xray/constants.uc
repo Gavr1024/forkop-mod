@@ -12,6 +12,7 @@ const XRAY_STATE_DIR = "/var/run/forkop/xray";
 const XRAY_PORTS_FILE = "/var/run/forkop/xray-ports.json";
 const XRAY_NODES_FILE = "/var/run/forkop/xray-nodes.json";
 const XRAY_LATENCY_FILE = "/var/run/forkop/xray-latency.json";
+const XRAY_LAST_OUTBOUND_FILE = "/var/run/forkop/xray-last-outbound.json";
 const XRAY_CASCADE_FILE = "/var/run/forkop/xray-cascade.json";
 const XRAY_SELECTED_FILE = "/etc/forkop/xray-selected.json";
 const XRAY_URLTEST_TAG = "__urltest__";
@@ -158,6 +159,7 @@ return {
     XRAY_PORTS_FILE,
     XRAY_NODES_FILE,
     XRAY_LATENCY_FILE,
+    XRAY_LAST_OUTBOUND_FILE,
     XRAY_CASCADE_FILE,
     XRAY_SELECTED_FILE,
     XRAY_URLTEST_TAG,

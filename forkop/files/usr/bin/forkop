@@ -65,7 +65,7 @@ function show_help() {
     print("    list_update_if_due      Update remote lists only when the configured interval has elapsed\n");
     print("    list_cache_status       Show locally cached lists as JSON\n");
     print("    list_cache_show <id>    Show the saved contents of one cached list\n");
-    print("    list_cache_show_page <token> <page> [domains|subnets]\n");
+    print("    list_cache_show_page <token> <page> [domains|subnets] [query]\n");
     print("                            Show one page of an open list preview\n");
     print("    list_cache_show_close <token>\n");
     print("                            Delete a list preview from memory\n");
@@ -80,10 +80,13 @@ function show_help() {
     print("    custom_list_save <id> <text>\n");
     print("                            Save a custom list or its address\n");
     print("    slot_status             Show config slot status as JSON\n");
-    print("    slot_save <online|offline>\n");
+    print("    slot_save <online|offline|r1|r2|r3>\n");
     print("                            Save current config into a slot\n");
-    print("    slot_apply <online|offline>\n");
+    print("    slot_apply <online|offline|r1|r2|r3>\n");
     print("                            Apply a saved slot and reload Forkop\n");
+    print("    slot_preview <r1|r2|r3> Show sections stored in a reserve\n");
+    print("    slot_label <r1|r2|r3> <name>\n");
+    print("                            Name a reserve without applying it\n");
     print("    slot_configure          Save auto-switch settings\n");
     print("    slot_probe              Check ping and switch slots if needed\n");
     print("    slot_probe_if_due       Probe only when the configured interval elapsed\n");
@@ -159,6 +162,10 @@ function show_help() {
     print("    check_dns_available     Check DNS server availability\n");
     print("    lookup_domain <domain> [device-ip]\n");
     print("                            Show which saved section matches a site for one device\n");
+    print("    lookup_domain_start <domain> [device-ip]\n");
+    print("                            Start that check in the background and print its id\n");
+    print("    lookup_domain_status <id>\n");
+    print("                            Read a background site check\n");
     print("    pause_device_list       Show devices temporarily sent around the proxy\n");
     print("    pause_device_add <ip> <minutes> [label]\n");
     print("                            Pause a device; 0 minutes means until cleared\n");
@@ -202,7 +209,7 @@ function command_spec(command) {
         list_update_if_due: [ "components/updates.uc", "list-update-if-due", 0 ],
         list_cache_status: [ "components/updates.uc", "list-cache-status", 0 ],
         list_cache_show: [ "components/updates.uc", "list-cache-show", 1 ],
-        list_cache_show_page: [ "components/updates.uc", "list-cache-show-page", 3 ],
+        list_cache_show_page: [ "components/updates.uc", "list-cache-show-page", 4 ],
         list_cache_show_close: [ "components/updates.uc", "list-cache-show-close", 1 ],
         list_cache_persist: [ "components/updates.uc", "list-cache-persist", 0 ],
         list_cache_prune: [ "components/updates.uc", "list-cache-prune", 0 ],
@@ -215,6 +222,8 @@ function command_spec(command) {
         slot_status: [ "config/slots.uc", "status-json", 0 ],
         slot_save: [ "config/slots.uc", "save", 1 ],
         slot_apply: [ "config/slots.uc", "apply", 1 ],
+        slot_preview: [ "config/slots.uc", "preview", 1 ],
+        slot_label: [ "config/slots.uc", "label", 2 ],
         exclusion_get: [ "config/exclusions.uc", "get", 0 ],
         exclusion_set: [ "config/exclusions.uc", "set", 2 ],
         slot_configure: [ "config/slots.uc", "configure", 6 ],
@@ -284,6 +293,8 @@ function command_spec(command) {
         component_update_check_cache: [ "components/updates.uc", "component-update-check-cache", 0 ],
         check_dns_available: [ "diagnostics/runtime.uc", "check-dns-available", 0 ],
         lookup_domain: [ "diagnostics/domain_lookup.uc", "lookup", 2 ],
+        lookup_domain_start: [ "diagnostics/domain_lookup.uc", "start", 2 ],
+        lookup_domain_status: [ "diagnostics/domain_lookup.uc", "status", 1 ],
         pause_device_list: [ "service/device_pause.uc", "list", 0 ],
         pause_device_add: [ "service/device_pause.uc", "add", 3 ],
         pause_device_clear: [ "service/device_pause.uc", "clear", 1 ],

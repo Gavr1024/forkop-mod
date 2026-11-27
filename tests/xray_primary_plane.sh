@@ -106,6 +106,10 @@ extract_fn "$XRAY_GEN" "xray_balancer_strategy" | grep -F 'return "roundRobin"' 
   fail "Xray balancer must support round robin"
 extract_fn "$XRAY_OUT" "apply_mux" | grep -F 'xudpConcurrency' >/dev/null ||
   fail "Xray Mux must be able to carry UDP"
+extract_fn "$XRAY_OUT" "apply_xdrive_mux" | grep -F 'concurrency: 128' >/dev/null ||
+  fail "XDRIVE must pack 128 connections into one channel"
+extract_fn "$XRAY_OUT" "apply_mux" | grep -F 'concurrency = 8' >/dev/null ||
+  fail "ordinary Mux must stay at 8 connections"
 extract_fn "$XRAY_OUT" "apply_mux" | grep -F 'vision' >/dev/null ||
   fail "VLESS Vision must not be wrapped in Mux"
 extract_fn "$XRAY_GEN" "section_mux_spec" | grep -F 'xray_mux_enabled' >/dev/null ||
@@ -207,8 +211,10 @@ extract_fn "$XRAY_GEN" "section_tproxy_target" | grep -F 'SINGBOX_SIDECAR_TAG' >
   fail "sing-box sections must hand restored FakeDNS names to the sidecar, not 198.18.x"
 extract_fn "$XRAY_GEN" "apply_section_tproxy_matchers" | grep -F 'push_tproxy_rule' >/dev/null ||
   fail "tproxy domain and ip matchers must be separate rules (Xray ANDs fields in one rule)"
-extract_fn "$XRAY_GEN" "apply_section_tproxy_sources" | grep -F 'fully_routed_ips' >/dev/null ||
+extract_fn "$XRAY_GEN" "section_tproxy_source_list" | grep -F 'fully_routed_ips' >/dev/null ||
   fail "Xray tproxy must honor fully_routed_ips as source rules (separate from domain/ip)"
+extract_fn "$XRAY_GEN" "apply_section_tproxy_sources" | grep -F 'section_tproxy_source_list' >/dev/null ||
+  fail "Xray tproxy source rules must use the fully routed source list"
 awk '
   /^function service_exists\(/ { s = NR }
   /^function procd_instance_running\(/ { p = NR }
@@ -281,11 +287,18 @@ awk '
   fail "ucode binds names at definition time; nft_install_resolved_pin_tproxies must be defined before its caller"
 extract_fn "$XRAY_GEN" "tproxy_inbound" | grep -F '"fakedns"' >/dev/null ||
   fail "TPROXY must destOverride FakeIP even on :1602; Xray replaces dest when the IP is in the FakeDNS pool"
+extract_fn "$XRAY_GEN" "apply_section_tproxy_sources" | grep -F 'emit_source_catch' >/dev/null ||
+  fail "fully routed devices must go through the source catch"
+extract_fn "$XRAY_GEN" "emit_source_catch" | awk '
+  /FAKEIP_INET4_RANGE/ { f = NR }
+  f && /source: sources/ { s = NR }
+  END { if (!(f > 0 && s > f)) exit 1 }
+' || fail "fully routed FakeIP must be discarded before the device is sent to the section"
 extract_fn "$XRAY_GEN" "apply_primary_tproxy_routes" | awk '
   /FAKEIP_INET4_RANGE/ { f = NR }
-  /apply_section_tproxy_sources/ { s = NR }
-  END { if (!(f > 0 && s > 0 && f < s)) exit 1 }
-' || fail "unmatched FakeIP must blackhole before BLESS fully_routed sources"
+  /plane_fallback_tag/ { p = NR }
+  END { if (!(f > 0 && p > 0 && f < p)) exit 1 }
+' || fail "unmatched FakeIP must blackhole before the final direct rule"
 extract_fn "$XRAY_GEN" "tproxy_fakeip_inbound" | grep -F '"fakedns"' >/dev/null ||
   fail "FakeIP TPROXY sniff must destOverride FakeIP to the domain"
 extract_fn "$XRAY_GEN" "tproxy_fakeip_inbound" | grep -F '"tls"' >/dev/null ||

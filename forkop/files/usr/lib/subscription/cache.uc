@@ -593,6 +593,23 @@ function command_status_from_args(args) {
     return status > 255 ? int(status / 256) : status;
 }
 
+function command_capture_from_args(args) {
+    let pipe = fs.popen(command_from_args(args) + " 2>&1", "r");
+    if (!pipe)
+        return { status: 1, output: "" };
+
+    let data = pipe.read("all");
+    let status = pipe.close();
+    if (status == null)
+        status = 1;
+    if (status > 255)
+        status = int(status / 256);
+    return {
+        status: int(status),
+        output: data == null ? "" : as_string(data)
+    };
+}
+
 function run_silent(command) {
     system(command + " >/dev/null 2>&1");
 }
@@ -859,10 +876,18 @@ function section_current_usable_cache_by_name(sections, section, default_user_ag
 }
 
 function section_has_non_subscription_connection_sources(section) {
-    return length(connections.connection_urls(section)) > 0 ||
+    if (length(connections.connection_urls(section)) > 0 ||
         length(connections.interfaces(section)) > 0 ||
         length(connections.outbound_jsons(section)) > 0 ||
-        length(connections.xdrive_outbounds(section)) > 0;
+        length(connections.xdrive_outbounds(section)) > 0 ||
+        length(connections.warp_clients(section)) > 0)
+        return true;
+    // OpenConnect, OpenVPN and MASQUE exist only in a sing-box section.
+    if (connections.proxy_core(section) != "sing-box")
+        return false;
+    return length(connections.openconnect_clients(section)) > 0 ||
+        length(connections.openvpn_clients(section)) > 0 ||
+        length(connections.masque_clients(section)) > 0;
 }
 
 function subscription_download_target_section_is_ready(sections, download_section, startup_blocked_sections, default_user_agent) {
@@ -1465,6 +1490,234 @@ function get_subscription_hwid(custom_hwid) {
     return custom_hwid != "" ? custom_hwid : generate_hwid();
 }
 
+let direct_download_bypass = false;
+
+function bootstrap_dns_address() {
+    let values = connections.list_value(uci_named_section("settings"), "bootstrap_dns_server");
+    for (let value in values) {
+        value = trim(as_string(value));
+        if (value != "")
+            return value;
+    }
+    return "77.88.8.8";
+}
+
+function subscription_url_endpoint(url) {
+    url = as_string(url);
+    let scheme = "https";
+    let rest = url;
+    let scheme_at = index(url, "://");
+    if (scheme_at >= 0) {
+        scheme = substr(url, 0, scheme_at);
+        rest = substr(url, scheme_at + 3);
+    }
+    let slash = index(rest, "/");
+    let hostport = slash >= 0 ? substr(rest, 0, slash) : rest;
+    let at = index(hostport, "@");
+    if (at >= 0)
+        hostport = substr(hostport, at + 1);
+    let host = hostport;
+    let port = lc(scheme) == "http" ? "80" : "443";
+    if (substr(hostport, 0, 1) == "[") {
+        let end = index(hostport, "]");
+        if (end >= 0) {
+            host = substr(hostport, 1, end - 1);
+            if (substr(hostport, end + 1, 1) == ":")
+                port = substr(hostport, end + 2);
+        }
+    }
+    else {
+        let colon = index(hostport, ":");
+        if (colon >= 0) {
+            host = substr(hostport, 0, colon);
+            port = substr(hostport, colon + 1);
+        }
+    }
+    return { host: trim(host), port: trim(port) };
+}
+
+function lookup_address_token(line) {
+    line = as_string(line);
+    let matched = match(line, /[Aa]ddress [0-9]+:\s*([0-9A-Fa-f:.]+)/);
+    if (!matched)
+        matched = match(line, /[Aa]ddress:\s*([0-9A-Fa-f:.]+)/);
+    if (!matched)
+        return "";
+    let token = matched[1];
+    let ported = match(token, /^([0-9.]+)[:#][0-9]+$/);
+    if (ported)
+        token = ported[1];
+    return token;
+}
+
+function resolve_host_addresses(host, dns) {
+    host = trim(as_string(host));
+    if (host == "")
+        return [];
+    if (match(host, /^[0-9.]+$/) != null || index(host, ":") >= 0)
+        return [ host ];
+
+    let output = command_output("nslookup " + shell_quote(host) + " " + shell_quote(dns) + " 2>/dev/null");
+    let addresses = [];
+    let seen = {};
+    let named = false;
+    for (let line in split(as_string(output), "\n")) {
+        if (index(line, "Name") >= 0)
+            named = true;
+        if (!named)
+            continue;
+        let address = lookup_address_token(line);
+        if (address == "" || address == dns || seen[address])
+            continue;
+        seen[address] = true;
+        push(addresses, address);
+    }
+    return addresses;
+}
+
+function nft_table_name() {
+    return getenv("NFT_TABLE_NAME") || "ForkopTable";
+}
+
+function nft_outbound_mark() {
+    return getenv("NFT_OUTBOUND_MARK") || "0x08000000";
+}
+
+function nft_mark_args(address, proto) {
+    let family = index(as_string(address), ":") >= 0 ? "ip6" : "ip";
+    let args = [ "nft", "insert", "rule", "inet", nft_table_name(), "mangle_output", family, "daddr", as_string(address) ];
+    if (proto != "") {
+        push(args, proto);
+        push(args, "dport");
+        push(args, "53");
+    }
+    push(args, "meta");
+    push(args, "mark");
+    push(args, "set");
+    push(args, nft_outbound_mark());
+    return args;
+}
+
+function nft_mark_handle(output, address) {
+    let handle = "";
+    let address_text = as_string(address);
+    for (let line in split(as_string(output), "\n")) {
+        if (index(line, address_text) < 0)
+            continue;
+        let matched = match(line, /handle ([0-9]+)/);
+        if (!matched)
+            continue;
+        handle = matched[1];
+        break;
+    }
+    return handle;
+}
+
+function nft_mark_echo_args(address, proto) {
+    let args = nft_mark_args(address, proto);
+    let echoed = [ "nft", "-a", "-e" ];
+    for (let index_value = 1; index_value < length(args); index_value++)
+        push(echoed, args[index_value]);
+    return echoed;
+}
+
+function nft_mark_insert(address, proto) {
+    address = as_string(address);
+    proto = as_string(proto);
+    if (address == "")
+        return null;
+
+    let captured = command_capture_from_args(nft_mark_echo_args(address, proto));
+    if (captured.status != 0) {
+        if (!command_success_from_args(nft_mark_args(address, proto)))
+            return null;
+        return { address, proto, handle: "" };
+    }
+
+    return { address, proto, handle: nft_mark_handle(captured.output, address) };
+}
+
+function nft_mark_delete(rule) {
+    rule = object_or_empty(rule);
+    if (as_string(rule.address) == "")
+        return;
+
+    if (as_string(rule.handle) != "") {
+        command_success_from_args([
+            "nft", "delete", "rule", "inet", nft_table_name(), "mangle_output", "handle", rule.handle
+        ]);
+        return;
+    }
+
+    let args = nft_mark_args(rule.address, as_string(rule.proto));
+    args[1] = "delete";
+    command_success_from_args(args);
+}
+
+function direct_download_guard_open(url) {
+    let endpoint = subscription_url_endpoint(url);
+    let guard = { rules: [], marked: [], endpoint };
+    if (endpoint.host == "")
+        return guard;
+
+    let dns = bootstrap_dns_address();
+    for (let proto in [ "udp", "tcp" ]) {
+        let rule = nft_mark_insert(dns, proto);
+        if (rule != null)
+            push(guard.rules, rule);
+    }
+    guard.marked = [];
+    for (let address in resolve_host_addresses(endpoint.host, dns)) {
+        let rule = nft_mark_insert(address, "");
+        if (rule == null)
+            continue;
+        push(guard.rules, rule);
+        push(guard.marked, address);
+    }
+    return guard;
+}
+
+function direct_download_guard_close(guard) {
+    guard = object_or_empty(guard);
+    for (let rule in array_or_empty(guard.rules))
+        nft_mark_delete(rule);
+}
+
+function curl_resolve_host(address) {
+    address = as_string(address);
+    if (index(address, ":") >= 0)
+        return "[" + address + "]";
+    return address;
+}
+
+function curl_resolve_args(guard) {
+    guard = object_or_empty(guard);
+    let endpoint = object_or_empty(guard.endpoint);
+    let args = [];
+    let host = as_string(endpoint.host);
+    if (host == "")
+        return args;
+
+    let ports = [];
+    let seen_ports = {};
+    for (let port in [ endpoint.port, "443", "80" ]) {
+        port = trim(as_string(port));
+        if (port == "" || seen_ports[port])
+            continue;
+        seen_ports[port] = true;
+        push(ports, port);
+    }
+
+    for (let address in array_or_empty(guard.marked)) {
+        let rendered = curl_resolve_host(address);
+        for (let port in ports) {
+            push(args, "--resolve");
+            push(args, host + ":" + port + ":" + rendered);
+        }
+    }
+    return args;
+}
+
 function download_subscription(url, filepath, http_proxy_address, headers_filepath, effective_user_agent, effective_hwid) {
     let retries = 3;
     let wait_seconds = 2;
@@ -1474,6 +1727,8 @@ function download_subscription(url, filepath, http_proxy_address, headers_filepa
     let tmpfile = filepath + suffix;
     let headers_tmpfile = headers_filepath != "" ? headers_filepath + suffix : "";
     let resolution_failed = false;
+    let guard = http_proxy_address == "" && direct_download_bypass ? direct_download_guard_open(url) : null;
+    let result = 1;
 
     unlink_path(tmpfile);
     if (headers_tmpfile != "")
@@ -1486,6 +1741,10 @@ function download_subscription(url, filepath, http_proxy_address, headers_filepa
             "--speed-time", timeout,
             "--speed-limit", "1"
         ];
+        if (guard != null) {
+            for (let resolve_arg in curl_resolve_args(guard))
+                push(args, resolve_arg);
+        }
 
         if (http_proxy_address != "") {
             push(args, "-x");
@@ -1523,7 +1782,8 @@ function download_subscription(url, filepath, http_proxy_address, headers_filepa
                     unlink_path(headers_tmpfile);
                 }
             }
-            return 0;
+            result = 0;
+            break;
         }
 
         unlink_path(tmpfile);
@@ -1540,6 +1800,10 @@ function download_subscription(url, filepath, http_proxy_address, headers_filepa
 
     unlink_path(tmpfile);
     unlink_path(headers_tmpfile);
+    if (guard != null)
+        direct_download_guard_close(guard);
+    if (result == 0)
+        return 0;
     return resolution_failed ? 6 : 1;
 }
 
@@ -1582,24 +1846,29 @@ function download_section_proxy_ready() {
     return sing_box_service_running();
 }
 
+function download_target_uses_singbox_proxy(sections, download_section) {
+    if (!connections.is_xray_primary())
+        return true;
+    let target = find_section(sections, download_section);
+    return connections.proxy_core(target) == "sing-box";
+}
+
 function get_subscription_download_proxy_address(section_name_value, sections, parsed, phase) {
     let download_section = as_string(object_or_empty(parsed).download_section);
     if (download_section == "" || download_section == as_string(section_name_value))
         return "";
 
-    if (connections.is_xray_primary()) {
-        let socks = list_cache.xray_socks_proxy_url(download_section);
+    if (!download_target_uses_singbox_proxy(sections, download_section)) {
+        let socks = list_cache.xray_section_socks_proxy_url(download_section);
         if (socks != "") {
             log_message("Downloading subscription for rule '" + section_name_value + "' via Xray SOCKS " + socks, "debug");
             return socks;
         }
-        if (!sing_box_service_running()) {
-            if (phase == "startup")
-                log_message("Subscription source for rule '" + section_name_value + "' is configured to download via rule '" + download_section + "', but Xray SOCKS is not ready yet; downloading it directly during startup", "warn");
-            else
-                log_message("Subscription source for rule '" + section_name_value + "' is configured to download via rule '" + download_section + "', but Xray SOCKS is not ready; downloading it directly", "warn");
-            return "";
-        }
+        if (phase == "startup")
+            log_message("Subscription source for rule '" + section_name_value + "' is configured to download via rule '" + download_section + "', but that rule's Xray entrance is not ready yet; downloading it directly during startup", "warn");
+        else
+            log_message("Subscription source for rule '" + section_name_value + "' is configured to download via rule '" + download_section + "', but that rule's Xray entrance is not ready; downloading it directly", "warn");
+        return "";
     }
 
     let port = connections.subscription_download_target_port(sections, download_section, int(SB_SERVICE_MIXED_INBOUND_PORT));
@@ -1632,6 +1901,7 @@ function download_subscription_into_cache(section_name_value, subscription_url, 
     let parser = subscription_parser();
 
     let attempt_index = 0;
+    let received_invalid = false;
     for (let effective_user_agent in user_agent_candidates(subscription_user_agent, cached_user_agent, default_user_agent)) {
         attempt_index++;
         unlink_path(raw_tmpfile);
@@ -1662,6 +1932,7 @@ function download_subscription_into_cache(section_name_value, subscription_url, 
         copy_valid_metadata_output(metadata_tmpfile, metadata_output_path);
 
         if (!parser.normalize_content_validated(raw_tmpfile, normalized_tmpfile)) {
+            received_invalid = true;
             if (metadata_output_path != "")
                 unlink_path(metadata_output_path);
             if (subscription_user_agent != "")
@@ -1754,6 +2025,10 @@ function download_subscription_into_cache(section_name_value, subscription_url, 
     unlink_path(headers_tmpfile);
     unlink_path(normalized_tmpfile);
     unlink_path(metadata_tmpfile);
+    if (!received_invalid) {
+        log_message("Failed to download subscription for rule '" + section_name_value + "'; it will be retried when the network is ready", "warn");
+        return 1;
+    }
     if (subscription_user_agent != "")
         log_message("Configured subscription request profile for rule '" + section_name_value + "' did not produce valid proxy entries", "error");
     else
@@ -2196,13 +2471,10 @@ function prepare_subscription_cache_section(state, section) {
 
     if (total > 0 && ready == 0) {
         if (section_has_non_subscription_connection_sources(section)) {
-            log_message("All subscription sources for rule '" + section_name_value + "' are unavailable; starting with manual proxy links only", "warn");
+            log_message("All subscription sources for rule '" + section_name_value + "' are unavailable; starting with the other saved servers", "warn");
         }
         else {
-            if (state.phase == "startup")
-                log_message("No usable subscription cache for rule '" + section_name_value + "' and no manual proxy links are configured; checking whether startup can be bootstrapped through the selected proxy/VPN rule", "warn");
-            else
-                log_message("No usable subscription cache for rule '" + section_name_value + "' and no manual proxy links are configured; fast runtime generation cannot use this rule", "warn");
+            log_message("No usable subscription cache for rule '" + section_name_value + "' and no other saved servers are configured; matching traffic will be blocked until the subscription is downloaded", "warn");
             state.startup_blocked_sections = append_word_once(state.startup_blocked_sections, section_name_value);
         }
     }
@@ -2256,16 +2528,9 @@ function prepare_subscription_caches(phase, already_prepared, no_refresh) {
         return 0;
     }
 
-    if (phase == "startup" && subscription_bootstrap_download_section_is_ready(sections, state.startup_blocked_sections, get_subscription_user_agent(""))) {
-        log_message("Starting temporarily without subscription-only rule(s): " + state.startup_blocked_sections + ". They will be retried through the download section proxy after the routing plane starts", "warn");
-        print(state.startup_blocked_sections, "\n");
-        return 0;
-    }
-
-    for (let section in whitespace_values(state.startup_blocked_sections))
-        log_message("No usable subscription cache for rule '" + section + "' and no manual proxy links are configured; startup cannot continue", "error");
-
-    return 1;
+    log_message("Subscription-only rule(s) have no downloaded servers yet; matching traffic will be blocked until the subscription is downloaded: " + state.startup_blocked_sections, "warn");
+    print(state.startup_blocked_sections, "\n");
+    return 0;
 }
 
 function current_pid() {
@@ -2292,6 +2557,31 @@ function trigger_subscription_recovery_reload(worker) {
         mark_pending_subscription_recovery_reload();
 }
 
+function section_needs_download_proxy(section) {
+    let name = section_name(section);
+    for (let entry in connections.subscription_urls(section)) {
+        let parsed = subscription_source_profile(section, entry);
+        let download_section = as_string(object_or_empty(parsed).download_section);
+        if (download_section != "" && download_section != name)
+            return true;
+    }
+    return false;
+}
+
+function split_deferred_sections(deferred_sections) {
+    let sections = uci_sections();
+    let direct = "";
+    let via_proxy = "";
+    for (let name in whitespace_values(deferred_sections)) {
+        let section = find_section(sections, name);
+        if (section_needs_download_proxy(section))
+            via_proxy = append_word_once(via_proxy, name);
+        else
+            direct = append_word_once(direct, name);
+    }
+    return { direct, via_proxy };
+}
+
 function subscription_bootstrap_retry_result(deferred_sections) {
     let sections = uci_sections();
     let default_user_agent = get_subscription_user_agent("");
@@ -2299,16 +2589,21 @@ function subscription_bootstrap_retry_result(deferred_sections) {
         recovered: "",
         remaining: ""
     };
+    let previous_bypass = direct_download_bypass;
 
     for (let section in whitespace_values(deferred_sections)) {
         let value = find_section(sections, section);
+        direct_download_bypass = !section_needs_download_proxy(value);
         if (!section_is_subscription_proxy(value)) {
             log_message("Deferred subscription rule '" + section + "' no longer has subscription proxy sources; removing it from bootstrap retry list", "warn");
             result.recovered = append_word_once(result.recovered, section);
             continue;
         }
 
-        log_message("Retrying deferred subscription rule '" + section + "' through the service proxy", "info");
+        if (section_needs_download_proxy(value))
+            log_message("Retrying deferred subscription rule '" + section + "' through the service proxy", "info");
+        else
+            log_message("Retrying deferred subscription rule '" + section + "' directly", "info");
         let update_result = subscription_update_section(value, true);
         if (update_result == 0 || update_result == 2) {
             result.recovered = append_word_once(result.recovered, section);
@@ -2322,9 +2617,10 @@ function subscription_bootstrap_retry_result(deferred_sections) {
         }
 
         result.remaining = append_word_once(result.remaining, section);
-        log_message("Deferred subscription rule '" + section + "' is still unavailable; keeping it disabled for this startup", "warn");
+        log_message("Deferred subscription rule '" + section + "' is still unavailable; matching traffic stays blocked", "warn");
     }
 
+    direct_download_bypass = previous_bypass;
     return result;
 }
 
@@ -2356,7 +2652,9 @@ function worker_env() {
         SB_VERSION_STATE_FILE,
         ZAPRET_PROVIDER_NFQWS_BIN,
         ZAPRET2_PROVIDER_NFQWS2_BIN,
-        BYEDPI_BIN
+        BYEDPI_BIN,
+        NFT_TABLE_NAME: nft_table_name(),
+        NFT_OUTBOUND_MARK: nft_outbound_mark()
     };
 }
 
@@ -2393,37 +2691,58 @@ function stop_deferred_subscription_bootstrap_retry_worker() {
     unlink_path(FORKOP_SUBSCRIPTION_BOOTSTRAP_RETRY_PID_FILE);
 }
 
+function note_bootstrap_retry(summary, result) {
+    for (let name in whitespace_values(result.recovered))
+        summary.recovered = append_word_once(summary.recovered, name);
+    for (let name in whitespace_values(result.remaining))
+        summary.remaining = append_word_once(summary.remaining, name);
+}
+
+function finish_bootstrap_retry(summary) {
+    if (summary.recovered != "") {
+        log_message("Recovered deferred subscription rule(s): " + summary.recovered + "; scheduling Forkop reload", "info");
+        trigger_subscription_recovery_reload(false);
+    }
+    if (summary.remaining != "") {
+        log_message("Some subscription rule(s) are still blocked for this startup: " + summary.remaining, "warn");
+        start_deferred_subscription_bootstrap_retry_worker(summary.remaining);
+    }
+}
+
 function run_deferred_subscription_bootstrap(deferred_sections) {
     deferred_sections = trim(as_string(deferred_sections));
     if (deferred_sections == "")
         return;
 
-    log_message("Waiting for download section proxy before retrying deferred subscription rule(s): " + deferred_sections, "info");
-    let ready = false;
-    for (let attempt = 1; attempt <= 10; attempt++) {
-        if (download_section_proxy_ready()) {
-            ready = true;
-            break;
+    let split = split_deferred_sections(deferred_sections);
+    let summary = { recovered: "", remaining: "" };
+
+    if (split.direct != "") {
+        log_message("Retrying subscription rule(s) directly: " + split.direct, "info");
+        note_bootstrap_retry(summary, subscription_bootstrap_retry_result(split.direct));
+    }
+
+    if (split.via_proxy != "") {
+        log_message("Waiting for download section proxy before retrying deferred subscription rule(s): " + split.via_proxy, "info");
+        let ready = false;
+        for (let attempt = 1; attempt <= 10; attempt++) {
+            if (download_section_proxy_ready()) {
+                ready = true;
+                break;
+            }
+            system("sleep 1");
         }
-        system("sleep 1");
+
+        if (!ready) {
+            log_message("Download section proxy did not become ready in time; subscription rule(s) stay blocked until a later download succeeds: " + split.via_proxy, "warn");
+            for (let name in whitespace_values(split.via_proxy))
+                summary.remaining = append_word_once(summary.remaining, name);
+        }
+        else
+            note_bootstrap_retry(summary, subscription_bootstrap_retry_result(split.via_proxy));
     }
 
-    if (!ready) {
-        log_message("Download section proxy did not become ready in time; deferred subscription rule(s) will remain disabled until the next successful subscription update", "warn");
-        start_deferred_subscription_bootstrap_retry_worker(deferred_sections);
-        return;
-    }
-
-    let result = subscription_bootstrap_retry_result(deferred_sections);
-    if (result.recovered != "") {
-        log_message("Recovered deferred subscription rule(s): " + result.recovered + "; scheduling Forkop reload", "info");
-        trigger_subscription_recovery_reload(false);
-    }
-
-    if (result.remaining != "") {
-        log_message("Some deferred subscription rule(s) are still disabled for this startup: " + result.remaining, "warn");
-        start_deferred_subscription_bootstrap_retry_worker(result.remaining);
-    }
+    finish_bootstrap_retry(summary);
 }
 
 function deferred_subscription_bootstrap_retry_worker(remaining_sections) {
@@ -2431,10 +2750,20 @@ function deferred_subscription_bootstrap_retry_worker(remaining_sections) {
 
     while (remaining_sections != "") {
         system("sleep 30");
-        if (!download_section_proxy_ready()) {
+        let split = split_deferred_sections(remaining_sections);
+        let proxy_ready = download_section_proxy_ready();
+        if (split.direct == "" && !proxy_ready) {
             log_message("Stopping subscription bootstrap retry worker because the download section proxy is not running", "warn");
             break;
         }
+
+        let batch = split.direct;
+        if (proxy_ready) {
+            for (let name in whitespace_values(split.via_proxy))
+                batch = append_word_once(batch, name);
+        }
+        if (batch == "")
+            continue;
 
         ensure_runtime_dirs();
         if (!state_ucode_status([ "acquire-runtime-dir-lock", FORKOP_SUBSCRIPTION_UPDATE_LOCK_DIR, current_pid() ])) {
@@ -2442,7 +2771,7 @@ function deferred_subscription_bootstrap_retry_worker(remaining_sections) {
             continue;
         }
 
-        let result = subscription_bootstrap_retry_result(remaining_sections);
+        let result = subscription_bootstrap_retry_result(batch);
         state_ucode_status([ "release-runtime-dir-lock", FORKOP_SUBSCRIPTION_UPDATE_LOCK_DIR ]);
 
         if (result.recovered != "") {
@@ -2450,7 +2779,13 @@ function deferred_subscription_bootstrap_retry_worker(remaining_sections) {
             trigger_subscription_recovery_reload(true);
         }
 
-        remaining_sections = result.remaining;
+        remaining_sections = "";
+        if (!proxy_ready) {
+            for (let name in whitespace_values(split.via_proxy))
+                remaining_sections = append_word_once(remaining_sections, name);
+        }
+        for (let name in whitespace_values(result.remaining))
+            remaining_sections = append_word_once(remaining_sections, name);
     }
 
     unlink_path(FORKOP_SUBSCRIPTION_BOOTSTRAP_RETRY_PID_FILE);
@@ -2590,6 +2925,22 @@ else if (mode == "json-length") {
 }
 else if (mode == "subscription-import-stats") {
     print(subscription_import_stats_text(ARGV[1]), "\n");
+}
+else if (mode == "subscription-url-endpoint") {
+    let endpoint = subscription_url_endpoint(ARGV[1] || "");
+    print(endpoint.host, " ", endpoint.port, "\n");
+}
+else if (mode == "lookup-address-token") {
+    print(lookup_address_token(ARGV[1] || ""), "\n");
+}
+else if (mode == "nft-mark-echo-args") {
+    print(join(" ", nft_mark_echo_args(ARGV[1] || "", ARGV[2] || "")), "\n");
+}
+else if (mode == "curl-resolve-preview") {
+    print(join("\n", curl_resolve_args({
+        endpoint: { host: ARGV[1] || "", port: ARGV[2] || "" },
+        marked: [ ARGV[3] || "" ]
+    })), "\n");
 }
 else if (mode == "subscription-source-summary") {
     print(subscription_source_summary(ARGV[1], ARGV[2], ARGV[3], ARGV[4]), "\n");

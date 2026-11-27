@@ -198,6 +198,45 @@ function fullroute_sidecar_spec(section_name) {
     return null;
 }
 
+function singbox_pin_action(action) {
+    action = as_string(action);
+    return connections.is_connections_action(action) ||
+        action == "byedpi" || action == "zapret" || action == "zapret2";
+}
+
+function singbox_section_pin_specs() {
+    if (!is_singbox_primary() || !uci_core.available())
+        return [];
+    let specs = [];
+    for (let section in uci_core.section_objects("forkop", "section")) {
+        section = object_or_empty(section);
+        let enabled = section.enabled == null ? "1" : as_string(section.enabled);
+        if (enabled == "0")
+            continue;
+        if (!singbox_pin_action(option(section, "action", "")))
+            continue;
+        let name = as_string(section[".name"] || "");
+        if (name == "")
+            continue;
+        let index = length(specs);
+        push(specs, {
+            name: name,
+            port: 17120 + index,
+            inbound_tag: "pin-in-" + name,
+            inbound6_tag: "pin6-in-" + name
+        });
+    }
+    return specs;
+}
+
+function singbox_section_pin_spec(section_name) {
+    section_name = as_string(section_name);
+    for (let spec in singbox_section_pin_specs())
+        if (spec.name == section_name)
+            return spec;
+    return null;
+}
+
 function module_exports() {
     return {
         normalize_engine,
@@ -212,7 +251,9 @@ function module_exports() {
         need_singbox,
         need_xray,
         fullroute_sidecar_specs,
-        fullroute_sidecar_spec
+        fullroute_sidecar_spec,
+        singbox_section_pin_specs,
+        singbox_section_pin_spec
     };
 }
 

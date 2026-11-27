@@ -1103,11 +1103,20 @@ function start_runtime() {
     let output = trim(read_file(log_path));
     remove_file(log_path);
     if (status != 0) {
+        let detail = trim(output);
+        if (length(detail) > 400)
+            detail = substr(detail, 0, 400);
         log_message(
-            "Failed to start xray" + (output != "" ? ": " + output : "") + ". Aborted.",
+            "Failed to start xray" + (detail != "" ? ": " + detail : "") + ". Aborted.",
             "fatal"
         );
         return 1;
+    }
+    try {
+        clear_last_outbounds();
+    }
+    catch (e) {
+        log_message("Could not mark the Xray access log: " + e, "warn");
     }
 
     let limit = engine.is_xray_primary() ? int(getenv("FORKOP_XRAY_START_VERIFY_TIMEOUT") || "60") : 8;
@@ -1198,6 +1207,7 @@ function reload_runtime(force) {
             return 0;
         }
         command_success_from_args([ xray_constants.XRAY_SERVICE_INIT, "restart" ]);
+        clear_last_outbounds();
         clear_stopped_outbounds();
         apply_saved_balancer_overrides();
         return 0;
@@ -1997,19 +2007,171 @@ function lowest_delay_tag(list) {
     return best;
 }
 
+function access_token(value) {
+    value = trim(as_string(value));
+    let space = index(value, " ");
+    if (space >= 0)
+        value = substr(value, 0, space);
+    return trim(value);
+}
+
+function access_line_route(line) {
+    line = as_string(line);
+    let detour_pos = index(line, "detour: ");
+    if (detour_pos >= 0)
+        return { inbound: "", outbound: access_token(substr(line, detour_pos + 8)) };
+    if (index(line, "accepted") < 0)
+        return { inbound: "", outbound: "" };
+    let arrow = index(line, " ==> ");
+    let width = 5;
+    if (arrow < 0) {
+        arrow = index(line, " -> ");
+        width = 4;
+    }
+    if (arrow < 0) {
+        arrow = index(line, " >> ");
+        width = 4;
+    }
+    if (arrow < 0) {
+        arrow = index(line, "->");
+        width = 2;
+    }
+    if (arrow < 0) {
+        arrow = index(line, ">>");
+        width = 2;
+    }
+    if (arrow < 0)
+        return { inbound: "", outbound: "" };
+    let open = -1;
+    let cursor = arrow;
+    while (cursor >= 0) {
+        if (substr(line, cursor, 1) == "[") {
+            open = cursor;
+            break;
+        }
+        cursor--;
+    }
+    if (open < 0)
+        return { inbound: "", outbound: "" };
+    let tail = substr(line, arrow);
+    let close_rel = index(tail, "]");
+    if (close_rel < 0)
+        return { inbound: "", outbound: "" };
+    let inbound = trim(substr(line, open + 1, arrow - open - 1));
+    if (inbound == "")
+        return { inbound: "", outbound: "" };
+    let outbound = trim(substr(tail, width, close_rel - width));
+    if (index(outbound, "balancer-") == 0)
+        outbound = "";
+    return { inbound: inbound, outbound: outbound };
+}
+
+function access_line_outbound(line) {
+    let route = access_line_route(line);
+    return as_string(route.outbound || "");
+}
+
+function is_node_probe_inbound(inbound) {
+    return match(as_string(inbound), /^socks-in-[A-Za-z0-9_]+-[0-9]+$/) != null;
+}
+
+function file_size(path) {
+    let st = fs.stat(path);
+    if (st == null)
+        return 0;
+    let size = int(st.size || 0);
+    return size > 0 ? size : 0;
+}
+
+function read_last_state() {
+    let raw = read_json_object(xray_constants.XRAY_LAST_OUTBOUND_FILE);
+    if (type(raw.servers) == "object")
+        return { since: int(raw.since || 0), servers: raw.servers };
+    let servers = {};
+    for (let key in raw) {
+        let tag = as_string(raw[key] || "");
+        if (tag != "")
+            servers[as_string(key)] = tag;
+    }
+    return { since: 0, servers: servers };
+}
+
+function write_last_state(state) {
+    state = object_or_empty(state);
+    let path = xray_constants.XRAY_LAST_OUTBOUND_FILE;
+    let slash = rindex(path, "/");
+    let parent = slash > 0 ? substr(path, 0, slash) : "";
+    if (parent != "" && parent != "." && !ensure_dir(parent))
+        return false;
+    return write_file(path, sprintf("%J\n", {
+        since: int(state.since || 0),
+        servers: object_or_empty(state.servers)
+    })) != null;
+}
+
+function read_last_outbounds() {
+    return object_or_empty(read_last_state().servers);
+}
+
+function clear_last_outbounds() {
+    return write_last_state({
+        since: file_size(xray_constants.XRAY_ACCESS_LOG),
+        servers: {}
+    });
+}
+
+function remember_section_outbound(section_name, tag) {
+    section_name = as_string(section_name);
+    tag = as_string(tag);
+    if (section_name == "" || tag == "")
+        return false;
+    let state = read_last_state();
+    let servers = object_or_empty(state.servers);
+    if (as_string(servers[section_name] || "") == tag)
+        return true;
+    servers[section_name] = tag;
+    state.servers = servers;
+    return write_last_state(state);
+}
+
+function remembered_section_outbound(section_name, list) {
+    let tag = as_string(object_or_empty(read_last_outbounds())[section_name] || "");
+    if (tag == "" || tag_is_stopped(tag))
+        return "";
+    for (let node in list)
+        if (as_string(object_or_empty(node).tag || "") == tag)
+            return tag;
+    return "";
+}
+
+function access_log_read_command(path, since) {
+    path = as_string(path);
+    since = int(since || 0);
+    if (since <= 0)
+        return "tail -n 2000 " + shell_quote(path) + " 2>/dev/null";
+    return "tail -c +" + as_string(since + 1) + " " + shell_quote(path) + " 2>/dev/null | tail -n 2000";
+}
+
+function access_log_since() {
+    let state = read_last_state();
+    let since = int(state.since || 0);
+    let size = file_size(xray_constants.XRAY_ACCESS_LOG);
+    if (since > size) {
+        since = 0;
+        state.since = 0;
+        write_last_state(state);
+    }
+    return since;
+}
+
 function latest_detour_index() {
     let index_by_tag = {};
     let next = 0;
-    let data = command_output("tail -n 400 " + shell_quote(xray_constants.XRAY_ACCESS_LOG) + " 2>/dev/null");
+    let data = command_output(access_log_read_command(xray_constants.XRAY_ACCESS_LOG, access_log_since()));
     for (let line in split(as_string(data), "\n")) {
-        let detour_pos = index(line, "detour: ");
-        if (detour_pos < 0)
-            continue;
-        let detour = trim(substr(line, detour_pos + 8));
-        let space = index(detour, " ");
-        if (space >= 0)
-            detour = substr(detour, 0, space);
-        if (detour == "")
+        let route = access_line_route(line);
+        let detour = as_string(route.outbound || "");
+        if (detour == "" || is_node_probe_inbound(route.inbound))
             continue;
         next++;
         index_by_tag[detour] = next;
@@ -2026,7 +2188,7 @@ function active_node_tag(section_name, list, strategy_name, detours) {
     detours = object_or_empty(detours);
     for (let node in list) {
         let tag = as_string(object_or_empty(node).tag || "");
-        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG)
+        if (tag == "" || tag == xray_constants.XRAY_URLTEST_TAG || tag_is_stopped(tag))
             continue;
         let seen = int(detours[tag] || 0);
         if (seen > best_i) {
@@ -2034,10 +2196,15 @@ function active_node_tag(section_name, list, strategy_name, detours) {
             best_i = seen;
         }
     }
+    if (strategy_name == "leastPing" || strategy_name == "leastLoad") {
+        if (best != "") {
+            remember_section_outbound(section_name, best);
+            return best;
+        }
+        return remembered_section_outbound(section_name, list);
+    }
     if (best != "")
         return best;
-    if (strategy_name == "leastPing" || strategy_name == "leastLoad")
-        return lowest_delay_tag(list);
     return as_string(urltest_chosen[section_name] || "");
 }
 
@@ -2081,6 +2248,16 @@ function nodes_with_latency() {
             if (active != null && int(active.delay || 0) > 0) {
                 tile.delay = int(active.delay || 0);
                 tile.probed = true;
+            } else if (active != null) {
+                tile.delay = 0;
+                tile.probed = active.probed == true;
+            } else if (strategy_name == "leastPing" || strategy_name == "leastLoad") {
+                let fastest = lowest_delay_tag(list);
+                let fastest_delay = fastest == "" ? 0 : int(delays[fastest] || 0);
+                if (fastest_delay > 0) {
+                    tile.delay = fastest_delay;
+                    tile.probed = true;
+                }
             } else if (strategy_name == "random" || strategy_name == "roundRobin") {
                 tile.delay = 0;
                 tile.probed = false;
@@ -2365,6 +2542,9 @@ function current_strategy_server(section_name, strategy_name) {
     }
     if (best != "")
         return best;
+    let remembered = remembered_section_outbound(section_name, list);
+    if (remembered != "")
+        return remembered;
     let fallback = lowest_delay_tag(list);
     if (fallback != "" && !tag_is_stopped(fallback))
         return fallback;
