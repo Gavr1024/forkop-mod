@@ -1,3 +1,4 @@
+# shellcheck shell=ash
 # Sourced by /sbin/sysupgrade after it chooses how to build the backup list.
 # Listing the folder in keep.d is not enough: that walk can skip files
 # inside /etc/forkop. Add each file when the backup list is built.

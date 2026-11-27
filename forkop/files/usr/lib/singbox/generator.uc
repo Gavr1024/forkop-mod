@@ -38,6 +38,50 @@ let write_json = common.write_json;
 let csv_to_json_array = common.csv_to_json_array;
 let write_json_file = common.write_json_file;
 let strip_internal_fields = common.strip_internal_fields;
+
+function forkop_run_dir() {
+    let value = getenv("FORKOP_RUNTIME_STATE_DIR");
+    if (value == null)
+        value = "";
+    value = replace("" + value, /^[ \t\r\n]+|[ \t\r\n]+$/g, "");
+    if (value != "")
+        return value;
+    return "/var/run/forkop";
+}
+
+function xray_ports_path() {
+    let value = getenv("XRAY_PORTS_FILE");
+    if (value == null)
+        value = "";
+    value = replace("" + value, /^[ \t\r\n]+|[ \t\r\n]+$/g, "");
+    if (value != "")
+        return value;
+    return forkop_run_dir() + "/xray-ports.json";
+}
+
+function xray_cascade_path() {
+    let value = getenv("XRAY_CASCADE_FILE");
+    if (value == null)
+        value = "";
+    value = replace("" + value, /^[ \t\r\n]+|[ \t\r\n]+$/g, "");
+    if (value != "")
+        return value;
+    return forkop_run_dir() + "/xray-cascade.json";
+}
+
+function xray_nodes_path() {
+    let value = getenv("XRAY_NODES_FILE");
+    if (value == null)
+        value = "";
+    value = replace("" + value, /^[ \t\r\n]+|[ \t\r\n]+$/g, "");
+    if (value != "")
+        return value;
+    return forkop_run_dir() + "/xray-nodes.json";
+}
+
+function openconnect_cascade_file() {
+    return forkop_run_dir() + "/openconnect-cascade.json";
+}
 let array_or_empty = common.array_or_empty;
 let object_or_empty = common.object_or_empty;
 let option = common.option;
@@ -3954,10 +3998,10 @@ function openconnect_detour_socks_port(section) {
     let name = trim(option(section, "outbound_detour_section", ""));
     if (name == "")
         return 0;
-    let cascade = openconnect_port_from_map("/var/run/forkop/openconnect-cascade.json", name);
+    let cascade = openconnect_port_from_map(openconnect_cascade_file(), name);
     if (cascade > 0 && openconnect_port_listening(cascade))
         return cascade;
-    let port = openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+    let port = openconnect_port_from_map(xray_ports_path(), name);
     if (port <= 0)
         return 0;
     let attempt = 0;
@@ -4784,7 +4828,7 @@ function cascade_hop_tag(config, taken, target_name) {
         return "";
     let target = openvpn_detour_section(target_name);
     if (target != null && connections.proxy_core(target) == "xray") {
-        let port = openconnect_port_from_map("/var/run/forkop/xray-ports.json", target_name);
+        let port = openconnect_port_from_map(xray_ports_path(), target_name);
         if (port <= 0)
             return null;
         if (type(config.__ovpn_via) != "object" || config.__ovpn_via == null)
@@ -5312,7 +5356,7 @@ function insert_route_rules_after_system(config, extra) {
 }
 
 function add_xray_cascade_inbounds(config) {
-    let cascade = object_or_empty(read_json_file("/var/run/forkop/xray-cascade.json"));
+    let cascade = object_or_empty(read_json_file(xray_cascade_path()));
     let extra = [];
     for (let name in cascade) {
         let port = int(cascade[name] || 0, 10);
@@ -5388,7 +5432,7 @@ function xray_clash_type(protocol, kind) {
 }
 
 function read_xray_section_nodes(section_name, fallback_port, fallback_name) {
-    let all = object_or_empty(read_json_file("/var/run/forkop/xray-nodes.json"));
+    let all = object_or_empty(read_json_file(xray_nodes_path()));
     let nodes = array_or_empty(all[as_string(section_name)]);
     if (length(nodes) > 0)
         return nodes;
@@ -5406,7 +5450,7 @@ function read_xray_section_nodes(section_name, fallback_port, fallback_name) {
 
 function add_xray_sidecar_outbound(config, section, taken) {
     let section_name = section[".name"];
-    let ports = object_or_empty(read_json_file("/var/run/forkop/xray-ports.json"));
+    let ports = object_or_empty(read_json_file(xray_ports_path()));
     if (type(ports) != "object")
         ports = {};
     let port = int(ports[section_name] || 0, 10);
@@ -7404,7 +7448,7 @@ function add_server_routes(config, servers, sections) {
 
 function write_openconnect_probe_ports(config) {
     let ports = type(config) == "object" ? object_or_empty(config.__oc_probe_ports) : {};
-    let dir = "/var/run/forkop";
+    let dir = forkop_run_dir();
     if (fs.stat(dir) == null)
         system("mkdir -p " + dir + " >/dev/null 2>&1");
     fs.writefile(dir + "/openconnect-probe.json", sprintf("%J\n", ports));
@@ -7755,7 +7799,7 @@ function generate_download_socks(section_name, output_path, listen_port, keep_ma
 }
 
 function openconnect_cascade_dir() {
-    return "/var/run/forkop/oc-cascade";
+    return forkop_run_dir() + "/oc-cascade";
 }
 
 function openconnect_tcp_listening(port) {
@@ -7842,8 +7886,8 @@ function stop_openconnect_cascade() {
             continue;
         system("kill " + pid + " >/dev/null 2>&1");
     }
-    system("mkdir -p /var/run/forkop " + openconnect_shell_quote(dir) + " >/dev/null 2>&1");
-    fs.writefile("/var/run/forkop/openconnect-cascade.json", "{}\n");
+    system("mkdir -p " + openconnect_shell_quote(forkop_run_dir()) + " " + openconnect_shell_quote(dir) + " >/dev/null 2>&1");
+    fs.writefile(openconnect_cascade_file(), "{}\n");
     try {
         fs.unlink(dir + "/pids");
     }
@@ -7908,7 +7952,7 @@ function prepare_openconnect_cascade() {
             push(pids, pid);
         openconnect_notice("OpenConnect cascade proxy for '" + name + "' is listening on port " + port + ".");
     }
-    if (fs.writefile("/var/run/forkop/openconnect-cascade.json", sprintf("%J\n", ports)) == null) {
+    if (fs.writefile(openconnect_cascade_file(), sprintf("%J\n", ports)) == null) {
         openconnect_log("OpenConnect cascade proxy ports could not be saved.");
         stop_openconnect_cascade();
         return 1;
@@ -7966,10 +8010,10 @@ function openconnect_endpoint_failed(log_text, tag_name) {
 function openconnect_proxy_port_for_detour(name) {
     if (trim(as_string(name)) == "")
         return 0;
-    let cascade = openconnect_port_from_map("/var/run/forkop/openconnect-cascade.json", name);
+    let cascade = openconnect_port_from_map(openconnect_cascade_file(), name);
     if (cascade > 0)
         return cascade;
-    return openconnect_port_from_map("/var/run/forkop/xray-ports.json", name);
+    return openconnect_port_from_map(xray_ports_path(), name);
 }
 
 function openconnect_singbox_config_path() {
@@ -7981,10 +8025,10 @@ function openconnect_singbox_config_path() {
 }
 
 function repair_openconnect_auth() {
-    system("mkdir -p /var/run/forkop >/dev/null 2>&1");
-    if (fs.stat("/var/run/forkop/oc-auth-repaired") != null)
+    system("mkdir -p " + openconnect_shell_quote(forkop_run_dir()) + " >/dev/null 2>&1");
+    if (fs.stat(forkop_run_dir() + "/oc-auth-repaired") != null)
         return 0;
-    fs.writefile("/var/run/forkop/oc-auth-repaired", "1\n");
+    fs.writefile(forkop_run_dir() + "/oc-auth-repaired", "1\n");
     if (system("command -v openconnect >/dev/null 2>&1") != 0) {
         openconnect_notice("OpenConnect helper package is not installed; sing-box will log in by itself.");
         return 0;

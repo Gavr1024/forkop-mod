@@ -461,6 +461,7 @@ ln -s "$FORKOP_LIB/core" "$runtime_lib/core"
 ln -s "$FORKOP_LIB/config" "$runtime_lib/config"
 ln -s "$FORKOP_LIB/subscription" "$runtime_lib/subscription"
 ln -s "$FORKOP_LIB/providers" "$runtime_lib/providers"
+ln -s "$FORKOP_LIB/routing" "$runtime_lib/routing"
 touch "$WORK_DIR/ciadpi-provider"
 cat >"$WORK_DIR/bad-byedpi-runtime-state.json" <<'JSON'
 {

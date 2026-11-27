@@ -1063,6 +1063,51 @@ function apply_saved_balancer_overrides() {
         log_message("Xray routing API switch failed while restoring the selected servers", "warn");
 }
 
+function file_size(path) {
+    let st = fs.stat(path);
+    if (st == null)
+        return 0;
+    let size = int(st.size || 0);
+    return size > 0 ? size : 0;
+}
+
+function read_last_state() {
+    let raw = read_json_object(xray_constants.XRAY_LAST_OUTBOUND_FILE);
+    if (type(raw.servers) == "object")
+        return { since: int(raw.since || 0), servers: raw.servers };
+    let servers = {};
+    for (let key in raw) {
+        let tag = as_string(raw[key] || "");
+        if (tag != "")
+            servers[as_string(key)] = tag;
+    }
+    return { since: 0, servers: servers };
+}
+
+function write_last_state(state) {
+    state = object_or_empty(state);
+    let path = xray_constants.XRAY_LAST_OUTBOUND_FILE;
+    let slash = rindex(path, "/");
+    let parent = slash > 0 ? substr(path, 0, slash) : "";
+    if (parent != "" && parent != "." && !ensure_dir(parent))
+        return false;
+    return write_file(path, sprintf("%J\n", {
+        since: int(state.since || 0),
+        servers: object_or_empty(state.servers)
+    })) != null;
+}
+
+function read_last_outbounds() {
+    return object_or_empty(read_last_state().servers);
+}
+
+function clear_last_outbounds() {
+    return write_last_state({
+        since: file_size(xray_constants.XRAY_ACCESS_LOG),
+        servers: {}
+    });
+}
+
 function start_runtime() {
     if (!xray_needed())
         return 0;
@@ -2073,51 +2118,6 @@ function access_line_outbound(line) {
 
 function is_node_probe_inbound(inbound) {
     return match(as_string(inbound), /^socks-in-[A-Za-z0-9_]+-[0-9]+$/) != null;
-}
-
-function file_size(path) {
-    let st = fs.stat(path);
-    if (st == null)
-        return 0;
-    let size = int(st.size || 0);
-    return size > 0 ? size : 0;
-}
-
-function read_last_state() {
-    let raw = read_json_object(xray_constants.XRAY_LAST_OUTBOUND_FILE);
-    if (type(raw.servers) == "object")
-        return { since: int(raw.since || 0), servers: raw.servers };
-    let servers = {};
-    for (let key in raw) {
-        let tag = as_string(raw[key] || "");
-        if (tag != "")
-            servers[as_string(key)] = tag;
-    }
-    return { since: 0, servers: servers };
-}
-
-function write_last_state(state) {
-    state = object_or_empty(state);
-    let path = xray_constants.XRAY_LAST_OUTBOUND_FILE;
-    let slash = rindex(path, "/");
-    let parent = slash > 0 ? substr(path, 0, slash) : "";
-    if (parent != "" && parent != "." && !ensure_dir(parent))
-        return false;
-    return write_file(path, sprintf("%J\n", {
-        since: int(state.since || 0),
-        servers: object_or_empty(state.servers)
-    })) != null;
-}
-
-function read_last_outbounds() {
-    return object_or_empty(read_last_state().servers);
-}
-
-function clear_last_outbounds() {
-    return write_last_state({
-        since: file_size(xray_constants.XRAY_ACCESS_LOG),
-        servers: {}
-    });
 }
 
 function remember_section_outbound(section_name, tag) {

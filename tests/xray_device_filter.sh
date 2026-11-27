@@ -139,8 +139,14 @@ forkop.jumpto.action=bypass
 forkop.jumpto.domain=forkop-jumpto.invalid
 EOF
 
-mkdir -p /var/run/forkop /etc/xray /tmp/forkop
+mkdir -p "$WORK_DIR/run"
 FORKOP_UCI_STATE_FILE="$WORK_DIR/state" \
+XRAY_CONFIG="$WORK_DIR/xray.json" \
+XRAY_PORTS_FILE="$WORK_DIR/ports.json" \
+XRAY_CASCADE_FILE="$WORK_DIR/run/cascade.json" \
+XRAY_NODES_FILE="$WORK_DIR/run/nodes.json" \
+XRAY_STATE_DIR="$WORK_DIR/run/xray" \
+FORKOP_RUNTIME_STATE_DIR="$WORK_DIR/run" \
   ucode -L "$LIB" "$GEN" generate-config "$WORK_DIR/xray.json" "$WORK_DIR/ports.json" \
   >"$WORK_DIR/stdout" 2>"$WORK_DIR/stderr" || {
     cat "$WORK_DIR/stderr" >&2

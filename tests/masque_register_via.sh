@@ -181,21 +181,10 @@ if (!found.tls || found.tls.server_name != "www.cloudflare.com")
     die("SNI was not written\n");
 ' "$WORK_DIR/http2.out.json" || fail "http2 sni"
 
-mkdir -p /var/run/forkop
-PORT_FILE=/var/run/forkop/xray-ports.json
-PORT_BACKUP=""
-if [ -f "$PORT_FILE" ]; then
-  PORT_BACKUP="$(mktemp)"
-  cp "$PORT_FILE" "$PORT_BACKUP"
-fi
-cleanup() {
-  rm -rf "$WORK_DIR"
-  if [ -n "$PORT_BACKUP" ]; then
-    mv "$PORT_BACKUP" "$PORT_FILE"
-  else
-    rm -f "$PORT_FILE"
-  fi
-}
+mkdir -p "$WORK_DIR/run"
+PORT_FILE="$WORK_DIR/run/xray-ports.json"
+export XRAY_PORTS_FILE="$PORT_FILE"
+export FORKOP_RUNTIME_STATE_DIR="$WORK_DIR/run"
 printf '%s\n' '{ "hop": 10808 }' >"$PORT_FILE"
 
 cat >"$WORK_DIR/xray.json" <<'JSON'

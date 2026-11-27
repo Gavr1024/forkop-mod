@@ -636,23 +636,13 @@ blob = entry("youtube", [domain(2, "youtube.com")]) + entry("russia-inside", [do
 blob += b"\x00" * (32768 - len(blob))
 open(sys.argv[1], "wb").write(blob)
 PY
-mkdir -p /usr/share/xray
-saved_allow=""
-if [ -f /usr/share/xray/allow-domains.dat ]; then
-  saved_allow="$WORK_DIR/allow-domains.saved"
-  cp /usr/share/xray/allow-domains.dat "$saved_allow"
-fi
-cp "$WORK_DIR/allow.dat" /usr/share/xray/allow-domains.dat
+export FORKOP_ALLOW_DOMAINS_DAT="$WORK_DIR/allow.dat"
 mixed="$(lookup inside.example)"
 printf '%s\n' "$mixed" | grep -Fq '"label": "Lists"' && fail "another code in the same dat must not count as this list: $mixed"
 printf '%s\n' "$mixed" | grep -Fq '"status": "none"' || fail "a site from another code must stay outside this list: $mixed"
 still="$(lookup www.youtube.com)"
 printf '%s\n' "$still" | grep -Fq '"label": "Lists"' || fail "the selected code must still match: $still"
-if [ -n "$saved_allow" ]; then
-  mv "$saved_allow" /usr/share/xray/allow-domains.dat
-else
-  rm -f /usr/share/xray/allow-domains.dat
-fi
+unset FORKOP_ALLOW_DOMAINS_DAT
 
 python3 - "$WORK_DIR/broken.dat" <<'PY'
 import sys

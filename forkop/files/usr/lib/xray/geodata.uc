@@ -526,27 +526,32 @@ function salvage_itdog_dat(path) {
 }
 
 function allow_domains_dat_paths() {
-    return [
-        xray_constants.ALLOW_DOMAINS_DAT,
-        xray_constants.ALLOW_DOMAINS_DAT_ETC
-    ];
+    let paths = [];
+    let extra = trim(getenv("FORKOP_ALLOW_DOMAINS_DAT") || "");
+    if (extra != "")
+        push(paths, extra);
+    push(paths, xray_constants.ALLOW_DOMAINS_DAT);
+    push(paths, xray_constants.ALLOW_DOMAINS_DAT_ETC);
+    return paths;
 }
 
 function allow_domains_has_tag(tag) {
     tag = trim(as_string(tag));
     if (tag == "")
         return false;
-    let path = xray_constants.ALLOW_DOMAINS_DAT;
-    if (!looks_like_itdog_dat(path))
-        return false;
     let at = index(tag, "@");
     let base = at > 0 ? substr(tag, 0, at) : tag;
     let attr = at > 0 ? substr(tag, at + 1) : "";
-    if (!dat_contains(path, base))
-        return false;
-    if (attr != "" && !dat_contains(path, attr))
-        return false;
-    return true;
+    for (let path in allow_domains_dat_paths()) {
+        if (!looks_like_itdog_dat(path))
+            continue;
+        if (!dat_contains(path, base))
+            continue;
+        if (attr != "" && !dat_contains(path, attr))
+            continue;
+        return true;
+    }
+    return false;
 }
 
 function purge_unusable_allow_domains_dat() {
@@ -1770,7 +1775,7 @@ function community_dat_refs(name) {
 function community_xray_source(name) {
     name = trim(as_string(name));
     let ext = resolve_community_ext_tag(name);
-    if (ext != "" && dat_matcher_usable("ext:allow-domains.dat:" + ext))
+    if (ext != "" && (dat_matcher_usable("ext:allow-domains.dat:" + ext) || file_size(trim(getenv("FORKOP_ALLOW_DOMAINS_DAT") || "")) > 0))
         return { kind: "dat", path: "" };
     if (file_size(community_lst_readable(name)) > 0)
         return { kind: "file", path: community_lst_readable(name) };

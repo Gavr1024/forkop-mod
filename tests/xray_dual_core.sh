@@ -286,7 +286,7 @@ require_contains "$FORKOP_LIB/subscription/parser.uc" 'query.ech' \
 
 require_contains "$LIFECYCLE_UC" 'xray_init_config()' \
   "lifecycle must generate xray config"
-require_contains "$LIFECYCLE_UC" 'module_success(XRAY_UC, [ "start-runtime" ])' \
+require_contains "$LIFECYCLE_UC" 'module_status_output(XRAY_UC, [ "start-runtime" ])' \
   "lifecycle must start xray as plane or sidecar"
 require_contains "$LIFECYCLE_UC" 'start sing-box sidecar' \
   "Xray plane still starts the sing-box sidecar when a section needs it"
